@@ -24,16 +24,16 @@
     </header>
 
     <!-- 导航标签页 (平滑物理滑块) -->
-    <div class="smooth-tabs" id="main-tabs" style="--tab-active-index: 0; --tab-count: 4;">
+    <div class="smooth-tabs" id="main-tabs" role="tablist" aria-label="设置分类" style="--tab-active-index: 0; --tab-count: 4;">
       <div class="tab-glider" aria-hidden="true"></div>
-      <button type="button" class="tab-btn active" data-tab="general" data-index="0">通用与翻译</button>
-      <button type="button" class="tab-btn" data-tab="packs" data-index="1">术语与场景</button>
-      <button type="button" class="tab-btn" data-tab="segmentation" data-index="2">断句引擎</button>
-      <button type="button" class="tab-btn" data-tab="style" data-index="3">样式排版</button>
+      <button type="button" role="tab" id="tabbtn-general" aria-controls="tab-general" aria-selected="true" tabindex="0" class="tab-btn active" data-tab="general" data-index="0">通用与翻译</button>
+      <button type="button" role="tab" id="tabbtn-packs" aria-controls="tab-packs" aria-selected="false" tabindex="-1" class="tab-btn" data-tab="packs" data-index="1">术语与场景</button>
+      <button type="button" role="tab" id="tabbtn-segmentation" aria-controls="tab-segmentation" aria-selected="false" tabindex="-1" class="tab-btn" data-tab="segmentation" data-index="2">断句引擎</button>
+      <button type="button" role="tab" id="tabbtn-style" aria-controls="tab-style" aria-selected="false" tabindex="-1" class="tab-btn" data-tab="style" data-index="3">样式排版</button>
     </div>
 
     <!-- 标签 1：通用与翻译 -->
-    <div class="tab-content active" id="tab-general">
+    <div class="tab-content active" id="tab-general" role="tabpanel" aria-labelledby="tabbtn-general" tabindex="0">
       <!-- 连通性提示条 -->
       <div id="network-alert" class="card network-card hidden">
         <div class="network-alert-content">
@@ -175,7 +175,7 @@
     </div>
 
     <!-- 标签 2：术语与场景（v0.2.9） -->
-    <div class="tab-content" id="tab-packs">
+    <div class="tab-content" id="tab-packs" role="tabpanel" aria-labelledby="tabbtn-packs" tabindex="0">
       <div class="card intro-card">
         <p class="intro-text">
           「翻译场景」决定注入给翻译 AI 的提示词风格；「术语库」保证专有名词译名统一。两者均可上传自定义包扩充。
@@ -247,7 +247,7 @@
     </div>
 
     <!-- 标签 3：智能断句参数 -->
-    <div class="tab-content" id="tab-segmentation">
+    <div class="tab-content" id="tab-segmentation" role="tabpanel" aria-labelledby="tabbtn-segmentation" tabindex="0">
       <div class="card intro-card">
         <p class="intro-text">
           YouTube 自动语音字幕通常没有标点、词组琐碎不断句。断句引擎结合声音停顿与语法规律重新归纳出自然长句。
@@ -332,7 +332,7 @@
     </div>
 
     <!-- 标签 4：样式排版 -->
-    <div class="tab-content" id="tab-style">
+    <div class="tab-content" id="tab-style" role="tabpanel" aria-labelledby="tabbtn-style" tabindex="0">
       <div class="form-group">
         <label>展示内容模式</label>
         <select id="display-mode" class="visually-hidden">
@@ -465,7 +465,14 @@
     </div>
 
     <footer class="popup-footer">
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.9</span>
+      <button type="button" class="btn-chip footer-advanced" id="btn-open-options" title="打开高级设置：术语库编辑、细粒度参数、字幕配色">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="3"/>
+          <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/>
+        </svg>
+        高级设置
+      </button>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.4.0</span>
     </footer>
   </div>
 

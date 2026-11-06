@@ -163,6 +163,11 @@ let currentSettings: ExtensionSettings = { ...DEFAULT_SETTINGS };
 // 初始化
 document.addEventListener('DOMContentLoaded', async () => {
   setupTabs();
+
+  // v0.4.0：跳转高级设置页
+  document.getElementById('btn-open-options')?.addEventListener('click', () => {
+    void chrome.runtime.openOptionsPage();
+  });
   setupSmoothSwitchers();
   await loadSettings();
   bindEvents();
@@ -202,26 +207,57 @@ function checkTranslationConnectivity() {
  */
 function setupTabs() {
   const tabsContainer = document.getElementById('main-tabs') as HTMLElement | null;
-  const tabBtns = document.querySelectorAll('.tab-btn');
+  const tabBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.tab-btn'));
   const tabContents = document.querySelectorAll('.tab-content');
 
-  tabBtns.forEach((btn, index) => {
-    btn.addEventListener('click', () => {
-      tabBtns.forEach((b) => b.classList.remove('active'));
-      tabContents.forEach((c) => c.classList.remove('active'));
+  /** 激活指定页签（同时同步 aria 状态与滑块位置） */
+  const activate = (index: number, moveFocus = false) => {
+    const btn = tabBtns[index];
+    if (!btn) return;
 
-      btn.classList.add('active');
-      if (tabsContainer) {
-        tabsContainer.style.setProperty('--tab-active-index', String(index));
-      }
-      const tabId = btn.getAttribute('data-tab');
-      const targetContent = document.getElementById(`tab-${tabId}`);
-      if (targetContent) {
-        targetContent.classList.add('active');
-      }
-      // 切换标签页时平滑重置滚动位置到顶部
-      window.scrollTo({ top: 0, behavior: 'instant' });
+    tabBtns.forEach((b, i) => {
+      const on = i === index;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', String(on));
+      b.tabIndex = on ? 0 : -1;
     });
+
+    tabContents.forEach((c) => c.classList.remove('active'));
+    if (tabsContainer) {
+      tabsContainer.style.setProperty('--tab-active-index', String(index));
+    }
+    const tabId = btn.getAttribute('data-tab');
+    const targetContent = document.getElementById(`tab-${tabId}`);
+    if (targetContent) {
+      targetContent.classList.add('active');
+    }
+    if (moveFocus) btn.focus();
+    // 切换标签页时平滑重置滚动位置到顶部
+    window.scrollTo({ top: 0, behavior: 'instant' });
+  };
+
+  tabBtns.forEach((btn, index) => {
+    btn.addEventListener('click', () => activate(index));
+  });
+
+  // v0.3.0：tablist 键盘导航（← → ↑ ↓ / Home / End），符合 ARIA APG
+  tabsContainer?.addEventListener('keydown', (e: KeyboardEvent) => {
+    const keys = ['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'];
+    if (!keys.includes(e.key)) return;
+
+    const current = tabBtns.findIndex((b) => b.classList.contains('active'));
+    let next = current < 0 ? 0 : current;
+    if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
+      next = (current - 1 + tabBtns.length) % tabBtns.length;
+    } else if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
+      next = (current + 1) % tabBtns.length;
+    } else if (e.key === 'Home') {
+      next = 0;
+    } else if (e.key === 'End') {
+      next = tabBtns.length - 1;
+    }
+    e.preventDefault();
+    activate(next, true);
   });
 }
 

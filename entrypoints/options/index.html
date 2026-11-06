@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>高级设置 · 字幕断句翻译器</title>
+    <meta name="manifest.open_in_tab" content="true" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="7" y="12" width="34" height="24" rx="5" />
+            <path d="M14 22h9M14 28h16M28 22h6" />
+          </svg>
+        </span>
+        <span class="brand-text">
+          <strong>字幕断句翻译器</strong>
+          <span class="brand-sub">高级设置<i id="app-version">v0.4.0</i></span>
+        </span>
+      </div>
+      <div class="topbar-actions">
+        <button type="button" class="btn btn-quiet" id="btn-reset-all">恢复默认</button>
+        <span class="save-chip" id="save-chip" data-state="saved"><i aria-hidden="true"></i><b>已保存</b></span>
+      </div>
+    </header>
+
+    <div class="shell">
+      <nav class="sidenav" id="sidenav" role="tablist" aria-orientation="vertical" aria-label="设置分区">
+        <div class="nav-marker" aria-hidden="true"></div>
+        <button type="button" role="tab" class="navitem active" data-pane="general" aria-selected="true" tabindex="0">
+          <span class="navitem-label">常规</span>
+          <span class="navitem-hint">开关 · 语言 · 场景</span>
+        </button>
+        <button type="button" role="tab" class="navitem" data-pane="service" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">服务与模型</span>
+          <span class="navitem-hint">Key · 端点 · 降级</span>
+        </button>
+        <button type="button" role="tab" class="navitem" data-pane="glossary" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">术语库</span>
+          <span class="navitem-hint">编辑 · 导入导出</span>
+        </button>
+        <button type="button" role="tab" class="navitem" data-pane="segment" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">断句引擎</span>
+          <span class="navitem-hint">策略 · 阈值</span>
+        </button>
+        <button type="button" role="tab" class="navitem" data-pane="appearance" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">字幕样式</span>
+          <span class="navitem-hint">字号 · 配色 · 位置</span>
+        </button>
+        <button type="button" role="tab" class="navitem" data-pane="performance" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">同步与缓存</span>
+          <span class="navitem-hint">偏移 · 清缓存</span>
+        </button>
+        <button type="button" role="tab" class="navitem" data-pane="about" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">关于</span>
+          <span class="navitem-hint">版本 · 说明</span>
+        </button>
+        <div class="nav-foot">
+          <button type="button" class="btn btn-quiet btn-block" id="btn-open-popup">打开快捷面板</button>
+        </div>
+      </nav>
+
+      <main class="panes" id="panes">
+        <!-- ─────────── 常规 ─────────── -->
+        <section class="pane active" id="pane-general" role="tabpanel" aria-labelledby="nav-general" tabindex="0">
+          <header class="pane-head">
+            <h1>常规</h1>
+            <p>决定插件是否工作、翻成什么语言、以及用哪套提示词理解当前视频。</p>
+          </header>
+
+          <div class="rows">
+            <div class="row row-hero">
+              <div class="row-text">
+                <span class="row-title">启用字幕翻译</span>
+                <span class="row-desc">关闭后浮层与请求全部停止，已翻译内容保留在缓存。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="启用字幕翻译">
+                  <input type="checkbox" data-setting="enabled" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">目标语言</span>
+                <span class="row-desc">切换后当前视频会按新语言重新翻译。</span>
+              </div>
+              <div class="row-control">
+                <select class="ctl ctl-select" data-setting="targetLang">
+                  <option value="zh-CN">简体中文</option>
+                  <option value="zh-TW">繁體中文</option>
+                  <option value="en">English</option>
+                  <option value="ja">日本語</option>
+                  <option value="ko">한국어</option>
+                  <option value="es">Español</option>
+                  <option value="ru">Русский</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">翻译服务</span>
+                <span class="row-desc">Google 免配置可直接用；大模型在同场景下译文更自然，但需要 Key。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-4" data-seg="service">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="service" data-value="google">Google 免费</button>
+                  <button type="button" data-setting="service" data-value="deepseek">DeepSeek</button>
+                  <button type="button" data-setting="service" data-value="openai">OpenAI</button>
+                  <button type="button" data-setting="service" data-value="gemini">Gemini</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">翻译场景</span>
+                <span class="row-desc">场景决定注入给模型的身份与语气。内容在「翻译场景包」中定义。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="scenario-grid" id="scenario-grid"></div>
+              </div>
+            </div>
+
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">推理深度</span>
+                <span class="row-desc">越深越能结合上下文纠错，但首屏更慢。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-3" data-seg="reasoningEffort">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="reasoningEffort" data-value="none">极速直出</button>
+                  <button type="button" data-setting="reasoningEffort" data-value="low">轻度推理</button>
+                  <button type="button" data-setting="reasoningEffort" data-value="high">深度思考</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── 服务与模型 ─────────── -->
+        <section class="pane" id="pane-service" role="tabpanel" aria-labelledby="nav-service" tabindex="0">
+          <header class="pane-head">
+            <h1>服务与模型</h1>
+            <p>自定义 OpenAI 兼容端点；Key 只保存在本机浏览器存储中。</p>
+          </header>
+
+          <div class="rows">
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">API Key</span>
+                <span class="row-desc">随服务切换使用同一份 Key，切换服务后请确认 Key 是否匹配。</span>
+              </div>
+              <div class="row-control">
+                <div class="input-with-btn">
+                  <input type="password" class="ctl ctl-text" data-setting="apiKey" placeholder="sk-..." autocomplete="off" spellcheck="false" />
+                  <button type="button" class="btn btn-icon" id="btn-toggle-key" title="显示 / 隐藏" aria-label="显示或隐藏 API Key">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">Base URL</span>
+                <span class="row-desc">留空使用官方端点；中转站填写到 <code>/v1</code> 为止。</span>
+              </div>
+              <div class="row-control">
+                <input type="text" class="ctl ctl-text ctl-wide" data-setting="apiBaseUrl" placeholder="https://api.deepseek.com/v1" spellcheck="false" />
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">模型名称</span>
+                <span class="row-desc">例如 <code>deepseek-chat</code>、<code>gpt-4o-mini</code>、<code>gemini-3.8-flash</code>。</span>
+              </div>
+              <div class="row-control">
+                <input type="text" class="ctl ctl-text ctl-wide" data-setting="modelName" placeholder="deepseek-chat" spellcheck="false" />
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">失败自动降级</span>
+                <span class="row-desc">大模型超时或报错时，本句改用 Google 免费翻译，避免整段字幕空白。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="失败自动降级">
+                  <input type="checkbox" data-setting="autoFallbackToGoogle" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">连通性测试</span>
+                <span class="row-desc" id="service-test-desc">发送一句短文本，测量首字节延迟。</span>
+              </div>
+              <div class="row-control">
+                <button type="button" class="btn btn-primary" id="btn-test-service">测试连接</button>
+                <span class="latency hidden" id="service-latency"></span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── 术语库 ─────────── -->
+        <section class="pane" id="pane-glossary" role="tabpanel" aria-labelledby="nav-glossary" tabindex="0">
+          <header class="pane-head">
+            <p class="pane-eyebrow">复杂配置</p>
+            <h1>术语库</h1>
+            <p>按包管理译名。左侧选包，右侧直接改条目；内置包只读，可另存为自定义副本再编辑。</p>
+          </header>
+
+          <div class="gloss-layout">
+            <aside class="pack-rail">
+              <div class="pack-rail-head">
+                <span>术语库包</span>
+                <span class="pill" id="pack-total">0</span>
+              </div>
+              <div class="pack-list" id="pack-list" role="listbox" aria-label="术语库包列表"></div>
+              <div class="pack-rail-foot">
+                <button type="button" class="btn btn-quiet btn-block" id="btn-import-pack">导入 JSON</button>
+                <input type="file" id="file-import" accept=".json,application/json" class="hidden" />
+              </div>
+            </aside>
+
+            <div class="gloss-editor">
+              <div class="editor-bar">
+                <input type="search" id="gloss-search" class="ctl ctl-text" placeholder="搜索日文 / 中文 / 英文" />
+                <select id="gloss-category" class="ctl ctl-select ctl-sm">
+                  <option value="all">全部分类</option>
+                  <option value="talent">主播</option>
+                  <option value="group">团体</option>
+                  <option value="game">游戏</option>
+                  <option value="song">歌曲</option>
+                  <option value="term">用语</option>
+                </select>
+                <button type="button" class="btn btn-primary" id="btn-add-entry">新增条目</button>
+                <button type="button" class="btn btn-quiet" id="btn-export-pack">导出</button>
+                <span class="editor-count" id="editor-count"></span>
+              </div>
+
+              <div class="readonly-banner hidden" id="readonly-banner">
+                这是内置术语库，条目只读。
+                <button type="button" class="link-btn" id="btn-clone-pack">另存为自定义副本</button>
+              </div>
+
+              <div class="table-wrap">
+                <table class="gloss-table">
+                  <thead>
+                    <tr>
+                      <th scope="col" class="col-ja">日文</th>
+                      <th scope="col" class="col-zh">中文</th>
+                      <th scope="col" class="col-en">英文</th>
+                      <th scope="col" class="col-cat">分类</th>
+                      <th scope="col" class="col-ops">操作</th>
+                    </tr>
+                  </thead>
+                  <tbody id="gloss-tbody"></tbody>
+                </table>
+                <div class="empty-state hidden" id="editor-empty">
+                  <p class="empty-title">这个包里还没有条目</p>
+                  <p class="empty-desc">点「新增条目」手工加一条，或用「导入 JSON」批量导入。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── 断句引擎 ─────────── -->
+        <section class="pane" id="pane-segment" role="tabpanel" aria-labelledby="nav-segment" tabindex="0">
+          <header class="pane-head">
+            <h1>断句引擎</h1>
+            <p>断句决定「一句话」的边界，也是翻译与显示的最小单位。数值越小切得越碎。</p>
+          </header>
+
+          <div class="rows">
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">语言策略</span>
+                <span class="row-desc">自动会按假名 / 谚文 / 汉字 / 拉丁字符比例判断，通常无需手动指定。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-5" data-seg="segmentationLanguage">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="segmentationLanguage" data-value="auto">自动</button>
+                  <button type="button" data-setting="segmentationLanguage" data-value="ja">日语</button>
+                  <button type="button" data-setting="segmentationLanguage" data-value="zh">中文</button>
+                  <button type="button" data-setting="segmentationLanguage" data-value="en">英语</button>
+                  <button type="button" data-setting="segmentationLanguage" data-value="generic">通用</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">停顿切分阈值</span>
+                <span class="row-desc">静音超过该值视为换气，倾向断句。真人语速快时建议调低。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="pauseThreshold" min="120" max="1200" step="10" />
+                  <output class="range-out" data-for="pauseThreshold"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">单句最大字数</span>
+                <span class="row-desc">中日韩按字计。超出即强制切断，优先落在标点或助词边界。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="maxCharsPerSentence" min="16" max="48" step="1" />
+                  <output class="range-out" data-for="maxCharsPerSentence"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">单句最大时长</span>
+                <span class="row-desc">防止一句字幕停留过久，观众读完还在屏上。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="maxDurationMs" min="4000" max="12000" step="250" />
+                  <output class="range-out" data-for="maxDurationMs"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">单句最大词数</span>
+                <span class="row-desc">仅对英语等拉丁语言生效，与字数上限互不影响。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="maxWordsPerSentence" min="8" max="28" step="1" />
+                  <output class="range-out" data-for="maxWordsPerSentence"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">智能标点修补</span>
+                <span class="row-desc">给无标点的 ASR 文本补首字母大写与句末标点，译文更易读。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="智能标点修补">
+                  <input type="checkbox" data-setting="autoPunctuation" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">短碎片合并</span>
+                <span class="row-desc">把「诶？」这类无标点碎片并进相邻句，减少一闪而过的断行。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="短碎片合并">
+                  <input type="checkbox" data-setting="mergeShortFragments" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── 字幕样式 ─────────── -->
+        <section class="pane" id="pane-appearance" role="tabpanel" aria-labelledby="nav-appearance" tabindex="0">
+          <header class="pane-head">
+            <h1>字幕样式</h1>
+            <p>改动即时反映在下方预览；预览用假数据渲染，不受当前视频影响。</p>
+          </header>
+
+          <div class="preview-stage" id="preview-stage">
+            <div class="preview-video" aria-hidden="true">
+              <span class="preview-time">00:42</span>
+              <span class="preview-bar"></span>
+            </div>
+            <div class="preview-sub" id="preview-sub">
+              <p class="preview-line-1" id="preview-orig">今日はね、ちょっとだけ遅くなっちゃった。</p>
+              <p class="preview-line-2" id="preview-trans">今天呢，稍微拖晚了一点点。</p>
+            </div>
+          </div>
+
+          <div class="rows">
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">显示方式</span>
+                <span class="row-desc">双语对照适合学习，纯译文更适合追剧。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-3" data-seg="displayMode">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="displayMode" data-value="bilingual">双语对照</button>
+                  <button type="button" data-setting="displayMode" data-value="translation_only">仅译文</button>
+                  <button type="button" data-setting="displayMode" data-value="original_only">仅原文</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">上下顺序</span>
+                <span class="row-desc">译文在上更贴近阅读习惯，原文在上更便于对照听辨。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-2" data-seg="layoutOrder">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="layoutOrder" data-value="translation_top">译文在上</button>
+                  <button type="button" data-setting="layoutOrder" data-value="original_top">原文在上</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">字号</span>
+                <span class="row-desc">全屏观看时 24–28px 通常最舒服。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="fontSize" min="14" max="48" step="1" />
+                  <output class="range-out" data-for="fontSize"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">背景不透明度</span>
+                <span class="row-desc">0 为完全透明，过高会挡住画面。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="bgOpacity" min="0" max="100" step="1" />
+                  <output class="range-out" data-for="bgOpacity"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">垂直位置</span>
+                <span class="row-desc">数值越大越靠画面底部；遮挡进度条时可上调。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="offsetY" min="50" max="94" step="1" />
+                  <output class="range-out" data-for="offsetY"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row row-colors">
+              <div class="row-text">
+                <span class="row-title">配色</span>
+                <span class="row-desc">背景、原文、译文三种颜色。深色背景下译文用高饱和色更清晰。</span>
+              </div>
+              <div class="row-control">
+                <label class="color-field"><span>背景</span><input type="color" data-setting="bgColor" /></label>
+                <label class="color-field"><span>原文</span><input type="color" data-setting="origColor" /></label>
+                <label class="color-field"><span>译文</span><input type="color" data-setting="transColor" /></label>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── 同步与缓存 ─────────── -->
+        <section class="pane" id="pane-performance" role="tabpanel" aria-labelledby="nav-performance" tabindex="0">
+          <header class="pane-head">
+            <h1>同步与缓存</h1>
+            <p>对齐音画、处理原生字幕重叠，以及清理本地缓存。</p>
+          </header>
+
+          <div class="rows">
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">时间轴偏移</span>
+                <span class="row-desc">字幕整体提前或延后。人声比字幕晚出现时调负值。</span>
+              </div>
+              <div class="row-control">
+                <div class="range-wrap">
+                  <input type="range" class="ctl ctl-range" data-setting="syncOffsetMs" min="-2000" max="2000" step="50" />
+                  <output class="range-out" data-for="syncOffsetMs"></output>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">隐藏原生自动字幕</span>
+                <span class="row-desc">避免 YouTube 自带字幕与本插件浮层上下重叠。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="隐藏原生自动字幕">
+                  <input type="checkbox" data-setting="autoHideNativeSubtitles" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">翻译缓存</span>
+                <span class="row-desc" id="cache-desc">已缓存的句子会直接复用，不再请求模型。</span>
+              </div>
+              <div class="row-control">
+                <button type="button" class="btn btn-quiet" id="btn-clear-cache">清空缓存</button>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">恢复出厂设置</span>
+                <span class="row-desc">重置全部设置项，术语库与自定义场景包会保留。</span>
+              </div>
+              <div class="row-control">
+                <button type="button" class="btn btn-danger" id="btn-reset-settings">恢复默认</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- ─────────── 关于 ─────────── -->
+        <section class="pane" id="pane-about" role="tabpanel" aria-labelledby="nav-about" tabindex="0">
+          <header class="pane-head">
+            <h1>关于</h1>
+            <p>这是一个本地运行的浏览器扩展，不收集任何观看数据。</p>
+          </header>
+
+          <div class="rows">
+            <div class="row">
+              <div class="row-text"><span class="row-title">版本</span><span class="row-desc">当前安装的构建版本。</span></div>
+              <div class="row-control"><span class="mono" id="about-version">—</span></div>
+            </div>
+            <div class="row">
+              <div class="row-text"><span class="row-title">翻译链路</span><span class="row-desc">字幕截获 → 断句 → 术语匹配 → 翻译 → 缓存 → 浮层渲染。</span></div>
+              <div class="row-control"><span class="mono">ASR → Segment → Translate → Render</span></div>
+            </div>
+            <div class="row">
+              <div class="row-text"><span class="row-title">隐私</span><span class="row-desc">字幕文本仅发送给你配置的翻译服务；Key 只存在浏览器本地存储。</span></div>
+              <div class="row-control"><span class="pill pill-ok">本地存储</span></div>
+            </div>
+            <div class="row">
+              <div class="row-text"><span class="row-title">快捷键</span><span class="row-desc">在视频页按 <kbd>Alt</kbd> + <kbd>T</kbd> 可快速开关浮层。</span></div>
+              <div class="row-control"><span class="mono">Alt + T</span></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

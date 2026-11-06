@@ -23,6 +23,11 @@ export interface GlossaryEntry {
   category: GlossaryCategory;
   source: string;
   sourceType: 'official' | 'wiki' | 'community';
+  /**
+   * v0.3.1：该词同时是高频日常词（如「修繕」= 修补房屋），单句出现不足以证明是游戏语境。
+   * 标记后仅当同批文本命中 ≥2 条术语时才注入，避免把日常句强行套上游戏译名。
+   */
+  needsContext?: boolean;
 }
 
 /** 术语库版本（参与缓存键，内容变化必须 bump） */
@@ -300,7 +305,9 @@ export function getGlossaryStats(): GlossaryStats {
 }
 
 /**
- * 在给定文本中匹配术语（日文原词子串匹配；长度 ≥2 才参与，避免单字误命中）。
+ * 在给定文本中匹配术语：多字子串命中；单字汉字需左右非汉字边界（避免「土曜日」「宝石」误命中）。
+ * needsContext 标记的高频日常词按**句子**判定语境（同句还有别的术语才算游戏语境），
+ * 不能按整批判定——否则「家を修繕する」会被同批其他句子的正常术语救活。
  * 返回按日文长度降序的条目，最多 limit 条，用于注入 prompt。
  */
 export function findGlossaryMatches(texts: string[], limit = 40, source: GlossaryEntry[] = GLOSSARY): GlossaryEntry[] {
@@ -310,14 +317,54 @@ export function findGlossaryMatches(texts: string[], limit = 40, source: Glossar
 
   for (const entry of source) {
     const key = entry.ja.trim();
-    if (key.length < 2) continue;
-    if (haystack.includes(key)) {
+    if (!key) continue;
+    if (containsTerm(haystack, key)) {
       matched.push(entry);
     }
   }
 
-  matched.sort((a, b) => b.ja.length - a.ja.length);
-  return matched.slice(0, Math.max(0, limit));
+  // 逐句统计命中数，用于给 needsContext 条目判定语境
+  const perTextCounts = texts.map(
+    (text) => source.filter((e) => e.ja.trim() && containsTerm(text, e.ja.trim())).length
+  );
+  const contextualTexts = texts.filter((_, i) => perTextCounts[i] >= 2);
+
+  const contextual = matched.filter((entry) => {
+    if (!entry.needsContext) return true;
+    const key = entry.ja.trim();
+    // 只需在「有语境」的句子中出现过即可
+    return contextualTexts.some((text) => containsTerm(text, key));
+  });
+
+  contextual.sort((a, b) => b.ja.length - a.ja.length);
+  return contextual.slice(0, Math.max(0, limit));
+}
+
+/** 单个汉字是否属于汉字区（不含假名，假名是日语助词，可作合法边界） */
+function isKanjiChar(ch: string): boolean {
+  return /[\u3400-\u4dbf\u4e00-\u9fff]/.test(ch);
+}
+
+/**
+ * 术语命中判断。
+ * - 多字术语：子串命中即可（长词优先由排序保证）；
+ * - 单字术语（土/石/砂/氷/弓/矢/盾/毒）：仅当左右邻接都不是汉字时才算命中，
+ *   避免「土曜日」「宝石」「砂漠」这类日常词被误判成方块名。
+ */
+function containsTerm(haystack: string, key: string): boolean {
+  if (key.length >= 2) {
+    return haystack.includes(key);
+  }
+  let index = haystack.indexOf(key);
+  while (index !== -1) {
+    const prev = index > 0 ? haystack[index - 1] : '';
+    const next = index + key.length < haystack.length ? haystack[index + key.length] : '';
+    if (!isKanjiChar(prev) && !isKanjiChar(next)) {
+      return true;
+    }
+    index = haystack.indexOf(key, index + 1);
+  }
+  return false;
 }
 
 /**

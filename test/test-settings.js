@@ -22,7 +22,15 @@ const dirty = sanitizeSettings({
 });
 
 assert.strictEqual(dirty.service, 'google', '非法 service 应回退 google');
-assert.strictEqual(dirty.scenario, 'general', '非法 scenario 应回退 general');
+// v0.2.9 起 scenario 支持自定义场景包 id：'unknown' 属合法 id 形式，应原样保留
+assert.strictEqual(dirty.scenario, 'unknown', '自定义场景 id 应保留（不再强制枚举）');
+// 真正非法的 id（含空格/符号）才回退到内置默认场景
+assert.strictEqual(
+  sanitizeSettings({ scenario: 'bad id!' }).scenario,
+  'vtuber',
+  '非法 scenario 应回退内置默认 vtuber'
+);
+assert.strictEqual(sanitizeSettings({}).scenario, 'vtuber', '缺省 scenario 应为 vtuber');
 assert.strictEqual(dirty.reasoningEffort, 'low', '非法 reasoning 应回退 low');
 assert.strictEqual(dirty.displayMode, 'bilingual', '非法 displayMode 应回退 bilingual');
 assert.strictEqual(dirty.layoutOrder, 'translation_top', '非法 layoutOrder 应回退默认');
@@ -41,5 +49,5 @@ assert.strictEqual(normal.fontSize, 22);
 assert.strictEqual(normal.bgColor, '#112233');
 assert.strictEqual(normal.enabled, false);
 
-console.log('✓ 非法枚举、越界数值、非法颜色、空语言均被正确清洗');
+console.log('✓ 非法枚举、越界数值、非法颜色、空语言、自定义场景 id 均被正确清洗');
 console.log('所有设置项校验测试通过！');

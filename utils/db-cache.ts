@@ -215,3 +215,30 @@ export async function setCachedSentencesBatch(
     console.warn('[DBCache] setCachedSentencesBatch error:', e);
   }
 }
+
+/**
+ * 清空句子翻译缓存（高级设置页使用）。
+ * 直接删除整个 IndexedDB，避免逐条遍历；页面上下文独立，不会影响内容脚本已有句柄。
+ */
+export async function clearSentenceCache(): Promise<boolean> {
+  try {
+    const existing = await new Promise<IDBDatabase | null>((resolve) => {
+      const req = indexedDB.open(DB_NAME);
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+    if (!existing) {
+      return true;
+    }
+    existing.close();
+    await new Promise<void>((resolve) => {
+      const req = indexedDB.deleteDatabase(DB_NAME);
+      req.onsuccess = () => resolve();
+      req.onerror = () => resolve();
+      req.onblocked = () => resolve();
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}

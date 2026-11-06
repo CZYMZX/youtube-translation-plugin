@@ -110,6 +110,268 @@ export const BUILTIN_SCENES: ScenePack[] = [
 
 /* ───────────────────────── 内置术语库 ───────────────────────── */
 
+/* ───────────────────── MC 术语库（v0.3.1 内置） ─────────────────────
+ * 数据来源：Minecraft Java Edition 1.21.4 官方语言文件
+ *   assets/minecraft/lang/{ja_jp,zh_cn,en_us}.json
+ *   （镜像：cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4）
+ * 生成方式：按官方本地化 key 精确取值，非人工转写，保证与游戏内译名逐字一致。
+ * 共 165 条：方块 44 · 物品 36 · 生物 54 · 机制 28 · 维度 3
+ * 数据日期：2026-11-05。
+ */
+const MC_TERMS: Array<[string, string, string]> = [
+  ['草ブロック', '草方块', 'Grass Block'],
+  ['土', '泥土', 'Dirt'],
+  ['石', '石头', 'Stone'],
+  ['丸石', '圆石', 'Cobblestone'],
+  ['オークの原木', '橡木原木', 'Oak Log'],
+  ['オークの板材', '橡木木板', 'Oak Planks'],
+  ['砂', '沙子', 'Sand'],
+  ['砂利', '沙砾', 'Gravel'],
+  ['石炭鉱石', '煤矿石', 'Coal Ore'],
+  ['鉄鉱石', '铁矿石', 'Iron Ore'],
+  ['銅鉱石', '铜矿石', 'Copper Ore'],
+  ['金鉱石', '金矿石', 'Gold Ore'],
+  ['ダイヤモンド鉱石', '钻石矿石', 'Diamond Ore'],
+  ['エメラルド鉱石', '绿宝石矿石', 'Emerald Ore'],
+  ['レッドストーン鉱石', '红石矿石', 'Redstone Ore'],
+  ['ラピスラズリ鉱石', '青金石矿石', 'Lapis Lazuli Ore'],
+  ['黒曜石', '黑曜石', 'Obsidian'],
+  ['ネザーラック', '下界岩', 'Netherrack'],
+  ['ソウルサンド', '灵魂沙', 'Soul Sand'],
+  ['グロウストーン', '荧石', 'Glowstone'],
+  ['エンドストーン', '末地石', 'End Stone'],
+  ['作業台', '工作台', 'Crafting Table'],
+  ['かまど', '熔炉', 'Furnace'],
+  ['チェスト', '箱子', 'Chest'],
+  ['エンダーチェスト', '末影箱', 'Ender Chest'],
+  ['松明', '火把', 'Torch'],
+  ['はしご', '梯子', 'Ladder'],
+  ['TNT', 'TNT', 'TNT'],
+  ['白色のベッド', '白色床', 'White Bed'],
+  ['エンチャントテーブル', '附魔台', 'Enchanting Table'],
+  ['醸造台', '酿造台', 'Brewing Stand'],
+  ['金床', '铁砧', 'Anvil'],
+  ['本棚', '书架', 'Bookshelf'],
+  ['ホッパー', '漏斗', 'Hopper'],
+  ['ピストン', '活塞', 'Piston'],
+  ['ディスペンサー', '发射器', 'Dispenser'],
+  ['ドロッパー', '投掷器', 'Dropper'],
+  ['レバー', '拉杆', 'Lever'],
+  ['ガラス', '玻璃', 'Glass'],
+  ['シュルカーボックス', '潜影盒', 'Shulker Box'],
+  ['ネザライトブロック', '下界合金块', 'Block of Netherite'],
+  ['レッドストーンブロック', '红石块', 'Block of Redstone'],
+  ['氷', '冰', 'Ice'],
+  ['雪ブロック', '雪块', 'Snow Block'],
+  ['レッドストーンダスト', '红石粉', 'Redstone Dust'],
+  ['ダイヤモンド', '钻石', 'Diamond'],
+  ['エメラルド', '绿宝石', 'Emerald'],
+  ['ラピスラズリ', '青金石', 'Lapis Lazuli'],
+  ['ネザークォーツ', '下界石英', 'Nether Quartz'],
+  ['石炭', '煤炭', 'Coal'],
+  ['木炭', '木炭', 'Charcoal'],
+  ['鉄インゴット', '铁锭', 'Iron Ingot'],
+  ['金インゴット', '金锭', 'Gold Ingot'],
+  ['銅インゴット', '铜锭', 'Copper Ingot'],
+  ['ネザライトインゴット', '下界合金锭', 'Netherite Ingot'],
+  ['ネザライトの欠片', '下界合金碎片', 'Netherite Scrap'],
+  ['エンダーパール', '末影珍珠', 'Ender Pearl'],
+  ['エンダーアイ', '末影之眼', 'Eye of Ender'],
+  ['ブレイズロッド', '烈焰棒', 'Blaze Rod'],
+  ['金のリンゴ', '金苹果', 'Golden Apple'],
+  ['エンチャントされた金のリンゴ', '附魔金苹果', 'Enchanted Golden Apple'],
+  ['エンチャントの本', '附魔书', 'Enchanted Book'],
+  ['名札', '命名牌', 'Name Tag'],
+  ['弓', '弓', 'Bow'],
+  ['矢', '箭', 'Arrow'],
+  ['ダイヤモンドの剣', '钻石剑', 'Diamond Sword'],
+  ['ダイヤモンドのツルハシ', '钻石镐', 'Diamond Pickaxe'],
+  ['盾', '盾牌', 'Shield'],
+  ['バケツ', '铁桶', 'Bucket'],
+  ['水入りバケツ', '水桶', 'Water Bucket'],
+  ['溶岩入りバケツ', '熔岩桶', 'Lava Bucket'],
+  ['コンパス', '指南针', 'Compass'],
+  ['時計', '时钟', 'Clock'],
+  ['白紙の地図', '空地图', 'Empty Map'],
+  ['釣竿', '钓鱼竿', 'Fishing Rod'],
+  ['パン', '面包', 'Bread'],
+  ['ステーキ', '牛排', 'Steak'],
+  ['ポーション', '药水', 'Potion'],
+  ['エリトラ', '鞘翅', 'Elytra'],
+  ['シュルカーの殻', '潜影壳', 'Shulker Shell'],
+  ['クリーパー', '苦力怕', 'Creeper'],
+  ['ゾンビ', '僵尸', 'Zombie'],
+  ['スケルトン', '骷髅', 'Skeleton'],
+  ['クモ', '蜘蛛', 'Spider'],
+  ['洞窟グモ', '洞穴蜘蛛', 'Cave Spider'],
+  ['エンダーマン', '末影人', 'Enderman'],
+  ['スライム', '史莱姆', 'Slime'],
+  ['ウィッチ', '女巫', 'Witch'],
+  ['村人', '村民', 'Villager'],
+  ['行商人', '流浪商人', 'Wandering Trader'],
+  ['アイアンゴーレム', '铁傀儡', 'Iron Golem'],
+  ['スノウゴーレム', '雪傀儡', 'Snow Golem'],
+  ['オオカミ', '狼', 'Wolf'],
+  ['ネコ', '猫', 'Cat'],
+  ['ヤマネコ', '豹猫', 'Ocelot'],
+  ['キツネ', '狐狸', 'Fox'],
+  ['パンダ', '熊猫', 'Panda'],
+  ['シロクマ', '北极熊', 'Polar Bear'],
+  ['ラマ', '羊驼', 'Llama'],
+  ['ミツバチ', '蜜蜂', 'Bee'],
+  ['イルカ', '海豚', 'Dolphin'],
+  ['カメ', '海龟', 'Turtle'],
+  ['ウーパールーパー', '美西螈', 'Axolotl'],
+  ['カエル', '青蛙', 'Frog'],
+  ['イカ', '鱿鱼', 'Squid'],
+  ['コウモリ', '蝙蝠', 'Bat'],
+  ['オウム', '鹦鹉', 'Parrot'],
+  ['ウサギ', '兔子', 'Rabbit'],
+  ['ニワトリ', '鸡', 'Chicken'],
+  ['ウシ', '牛', 'Cow'],
+  ['ブタ', '猪', 'Pig'],
+  ['ヒツジ', '绵羊', 'Sheep'],
+  ['ウマ', '马', 'Horse'],
+  ['エンダードラゴン', '末影龙', 'Ender Dragon'],
+  ['ウィザー', '凋灵', 'Wither'],
+  ['ガスト', '恶魂', 'Ghast'],
+  ['ブレイズ', '烈焰人', 'Blaze'],
+  ['ゾンビピグリン', '僵尸猪灵', 'Zombified Piglin'],
+  ['ピグリン', '猪灵', 'Piglin'],
+  ['ホグリン', '疣猪兽', 'Hoglin'],
+  ['ストライダー', '炽足兽', 'Strider'],
+  ['ウィザースケルトン', '凋灵骷髅', 'Wither Skeleton'],
+  ['ガーディアン', '守卫者', 'Guardian'],
+  ['エルダーガーディアン', '远古守卫者', 'Elder Guardian'],
+  ['シュルカー', '潜影贝', 'Shulker'],
+  ['ファントム', '幻翼', 'Phantom'],
+  ['ピリジャー', '掠夺者', 'Pillager'],
+  ['ヴィンディケーター', '卫道士', 'Vindicator'],
+  ['エヴォーカー', '唤魔者', 'Evoker'],
+  ['ラヴェジャー', '劫掠兽', 'Ravager'],
+  ['ヴェックス', '恼鬼', 'Vex'],
+  ['ウォーデン', '监守者', 'Warden'],
+  ['アレイ', '悦灵', 'Allay'],
+  ['商人のラマ', '行商羊驼', 'Trader Llama'],
+  ['移動速度上昇', '迅捷', 'Speed'],
+  ['移動速度低下', '缓慢', 'Slowness'],
+  ['採掘速度上昇', '急迫', 'Haste'],
+  ['攻撃力上昇', '力量', 'Strength'],
+  ['跳躍力上昇', '跳跃提升', 'Jump Boost'],
+  ['再生能力', '生命恢复', 'Regeneration'],
+  ['火炎耐性', '抗火', 'Fire Resistance'],
+  ['水中呼吸', '水下呼吸', 'Water Breathing'],
+  ['暗視', '夜视', 'Night Vision'],
+  ['毒', '中毒', 'Poison'],
+  ['弱体化', '虚弱', 'Weakness'],
+  ['空腹', '饥饿', 'Hunger'],
+  ['ダメージ増加', '锋利', 'Sharpness'],
+  ['効率強化', '效率', 'Efficiency'],
+  ['耐久力', '耐久', 'Unbreaking'],
+  ['ダメージ軽減', '保护', 'Protection'],
+  ['幸運', '时运', 'Fortune'],
+  ['シルクタッチ', '精准采集', 'Silk Touch'],
+  ['修繕', '经验修补', 'Mending'],
+  ['落下耐性', '摔落缓冲', 'Feather Falling'],
+  ['射撃ダメージ増加', '力量', 'Power'],
+  ['サバイバルモード', '生存模式', 'Survival Mode'],
+  ['クリエイティブモード', '创造模式', 'Creative Mode'],
+  ['ハードコアモード！', '极限模式！', 'Hardcore Mode!'],
+  ['スペクテイターモード', '旁观模式', 'Spectator Mode'],
+  ['最大体力', '最大生命值', 'Max Health'],
+  ['平原', '平原', 'Plains'],
+  ['砂漠', '沙漠', 'Desert'],
+  ['オーバーワールド', '主世界', 'Overworld'],
+  ['ネザー', '下界', 'Nether'],
+  ['ジ・エンド', '末地', 'The End']
+];
+
+/* ───────────────────── AI 术语库（v0.3.0 内置） ─────────────────────
+ * 来源：日文维基百科条目 + 中文维基对应条目（经 API 跨语言链接核对，28/35 有对应条目），
+ * 中文译名取业界通行译法；无语种链接的术语人工核定。
+ * 数据时间：2026-11-05。
+ */
+const AI_TERMS: Array<[string, string, string]> = [
+  ['人工知能', '人工智能', 'Artificial Intelligence'],
+  ['機械学習', '机器学习', 'Machine Learning'],
+  ['深層学習', '深度学习', 'Deep Learning'],
+  ['ニューラルネットワーク', '神经网络', 'Neural Network'],
+  ['大規模言語モデル', '大语言模型', 'Large Language Model'],
+  ['生成AI', '生成式 AI', 'Generative AI'],
+  ['自然言語処理', '自然语言处理', 'Natural Language Processing'],
+  ['教師あり学習', '监督学习', 'Supervised Learning'],
+  ['教師なし学習', '无监督学习', 'Unsupervised Learning'],
+  ['強化学習', '强化学习', 'Reinforcement Learning'],
+  ['ファインチューニング', '微调', 'Fine-tuning'],
+  ['プロンプト', '提示词', 'Prompt'],
+  ['プロンプトエンジニアリング', '提示词工程', 'Prompt Engineering'],
+  ['ハルシネーション', '幻觉', 'Hallucination'],
+  ['トークン', '词元', 'Token'],
+  ['埋め込み', '嵌入', 'Embedding'],
+  ['推論', '推理', 'Inference'],
+  ['事前学習', '预训练', 'Pre-training'],
+  ['データセット', '数据集', 'Dataset'],
+  ['ベンチマーク', '基准测试', 'Benchmark'],
+  ['マルチモーダル', '多模态', 'Multimodal'],
+  ['検索拡張生成', '检索增强生成', 'Retrieval-Augmented Generation'],
+  ['エージェント', '智能体', 'Agent'],
+  ['コンテキストウィンドウ', '上下文窗口', 'Context Window'],
+  ['量子化', '量化', 'Quantization'],
+  ['蒸留', '蒸馏', 'Distillation'],
+  ['注意機構', '注意力机制', 'Attention Mechanism'],
+  ['トランスフォーマー', 'Transformer', 'Transformer'],
+  ['過学習', '过拟合', 'Overfitting'],
+  ['転移学習', '迁移学习', 'Transfer Learning'],
+  ['敵対的生成ネットワーク', '生成对抗网络', 'GAN'],
+  ['音声認識', '语音识别', 'Speech Recognition'],
+  ['音声合成', '语音合成', 'Speech Synthesis'],
+  ['画像生成', '图像生成', 'Image Generation'],
+  ['光学文字認識', '光学字符识别', 'OCR']
+];
+
+/** 由元组表生成内置包条目 */
+function buildBuiltinEntries(
+  idPrefix: string,
+  category: GlossaryCategory,
+  terms: Array<[string, string, string]>,
+  source: string,
+  sourceType: 'official' | 'wiki' | 'community',
+  contextOnly: ReadonlyArray<string> = []
+): GlossaryEntry[] {
+  return terms.map(([ja, zh, en], i) => ({
+    id: `${idPrefix}-${i + 1}`,
+    ja,
+    zh,
+    en,
+    category,
+    source,
+    sourceType,
+    ...(contextOnly.includes(ja) ? { needsContext: true } : {})
+  }));
+}
+
+const MC_GLOSSARY_ENTRIES = buildBuiltinEntries(
+  'mc',
+  'game',
+  MC_TERMS,
+  // 官方语言文件（zh_cn / ja_jp / en_us 同源，1.21.4）
+  'https://cdn.jsdelivr.net/gh/InventivetalentDev/minecraft-assets@1.21.4/assets/minecraft/lang/zh_cn.json',
+  'official',
+  // 高频日常词但在 MC 语境下是专有译名，单句出现不注入
+  ['修繕', '幸運', '再生能力']
+);
+
+const AI_GLOSSARY_ENTRIES = buildBuiltinEntries(
+  'ai',
+  'term',
+  AI_TERMS,
+  'https://ja.wikipedia.org/wiki/大規模言語モデル',
+  'wiki',
+  // 跨领域同形词：トークン（认证令牌）/ 推論（逻辑推理）/ エージェント（代理人）
+  ['トークン', '推論', 'エージェント']
+);
+
+
 export const BUILTIN_GLOSSARY_PACKS: GlossaryPack[] = [
   {
     id: 'vtuber-hololive',
@@ -121,18 +383,19 @@ export const BUILTIN_GLOSSARY_PACKS: GlossaryPack[] = [
   {
     id: 'mc',
     name: 'MC 游戏术语库',
-    description: 'Minecraft 方块 / 生物 / 机制术语（待上传）',
+    description: `方块 44 · 物品 36 · 生物 54 · 机制 28 · 维度 3（共 ${MC_GLOSSARY_ENTRIES.length} 条 · 官方语言文件）`,
     builtIn: true,
-    entries: []
+    entries: MC_GLOSSARY_ENTRIES
   },
   {
     id: 'ai',
     name: 'AI 专用术语库',
-    description: 'AI / 大模型 / 编程术语（待上传）',
+    description: `机器学习 / 大模型 / 生成式 AI（共 ${AI_GLOSSARY_ENTRIES.length} 条）`,
     builtIn: true,
-    entries: []
+    entries: AI_GLOSSARY_ENTRIES
   }
 ];
+
 
 /** 默认启用的术语库包 */
 export const DEFAULT_GLOSSARY_PACKS = ['vtuber-hololive'];

@@ -35,7 +35,25 @@ console.log('--- 测试 1: 内置场景与术语库 ---');
   check('科普/音乐/游戏实况为占位（空提示词）', ['science', 'music', 'gaming'].every((id) => (BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '') === ''));
   check('内置术语库 3 个', BUILTIN_GLOSSARY_PACKS.length === 3);
   check('VTuber 术语库 146 条', BUILTIN_GLOSSARY_PACKS[0].entries.length === 146, String(BUILTIN_GLOSSARY_PACKS[0].entries.length));
-  check('MC / AI 术语库为空占位', BUILTIN_GLOSSARY_PACKS.slice(1).every((p) => p.entries.length === 0));
+  const mcPack = BUILTIN_GLOSSARY_PACKS.find((p) => p.id === 'mc');
+  const aiPack = BUILTIN_GLOSSARY_PACKS.find((p) => p.id === 'ai');
+  check('MC 术语库 >= 150 条', (mcPack?.entries.length || 0) >= 150, String(mcPack?.entries.length));
+  check('AI 术语库 >= 30 条', (aiPack?.entries.length || 0) >= 30, String(aiPack?.entries.length));
+  const mcEntries = mcPack?.entries || [];
+  check('MC 条目字段完整', mcEntries.every((e) => e.ja && e.zh && e.source.startsWith('http')));
+  check('MC 来源标注为官方语言文件', mcEntries.every((e) => e.sourceType === 'official' && e.source.includes('minecraft-assets')));
+  check('MC 条目 ja 无重复', new Set(mcEntries.map((e) => e.ja)).size === mcEntries.length);
+  check('MC 官方译名抽样（クリーパー→苦力怕）', mcEntries.find((e) => e.ja === 'クリーパー')?.zh === '苦力怕');
+  // v0.3.1 官方语言文件核对修正项
+  check('MC 修正项：ヒツジ→绵羊（非“羊”）', mcEntries.find((e) => e.ja === 'ヒツジ')?.zh === '绵羊');
+  check('MC 修正项：松明→火把（官方汉字写法）', mcEntries.find((e) => e.ja === '松明')?.zh === '火把');
+  check('MC 修正项：ジ・エンド→末地', mcEntries.find((e) => e.ja === 'ジ・エンド')?.zh === '末地');
+  check('MC 修正项：レッドストーンダスト→红石粉', mcEntries.find((e) => e.ja === 'レッドストーンダスト')?.zh === '红石粉');
+  check('MC 修正项：ダメージ増加→锋利（附魔）', mcEntries.find((e) => e.ja === 'ダメージ増加')?.zh === '锋利');
+  check('MC 无“羊/红石”等旧译名残留', !mcEntries.some((e) => e.zh === '羊'));
+  const aiEntries = aiPack?.entries || [];
+  check('AI 条目字段完整', aiEntries.every((e) => e.ja && e.zh && e.source.startsWith('http')));
+  check('AI 译名抽样（ハルシネーション→幻觉）', aiEntries.find((e) => e.ja === 'ハルシネーション')?.zh === '幻觉');
   check('默认启用 VTuber 术语库', DEFAULT_GLOSSARY_PACKS.join(',') === 'vtuber-hololive');
 }
 
@@ -128,6 +146,12 @@ console.log('--- 测试 4: 启用包合并与场景解析 ---');
 
   const none = collectGlossaryEntries([], custom);
   check('空启用列表回落默认包', none.length === 146);
+
+  const mcEnabled = collectGlossaryEntries(['mc'], custom);
+  check('仅启用 MC 包时条目 >= 60', mcEnabled.length >= 60, String(mcEnabled.length));
+  check('MC 包可匹配苦力怕', mcEnabled.some((e) => e.ja === 'クリーパー' && e.zh === '苦力怕'));
+  const aiEnabled = collectGlossaryEntries(['ai'], custom);
+  check('仅启用 AI 包时条目 >= 30', aiEnabled.length >= 30, String(aiEnabled.length));
 
   check('内置场景解析 vtuber', resolveScenePrompt('vtuber', custom).name === 'VTuber 直播');
   check('占位场景回落 general', resolveScenePrompt('science', custom).name === '通用日常');

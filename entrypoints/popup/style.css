@@ -15,33 +15,62 @@
  */
 
 :root {
-  --bg-primary: #0e0f12;
+  /* ── 表面与边框：中性铬层，色彩交给视频内容本身 ── */
+  --bg-primary: #0a0b0d;
+  --bg-elevated: #121317;
   --bg-secondary: rgba(255, 255, 255, 0.04);
   --bg-card: rgba(255, 255, 255, 0.045);
   --bg-card-hover: rgba(255, 255, 255, 0.075);
   --border-glass: rgba(255, 255, 255, 0.09);
   --border-glass-bright: rgba(255, 255, 255, 0.2);
   --border-glass-glow: rgba(255, 255, 255, 0.3);
-  
+
+  /* ── 唯一强调色为白；彩色只用于语义状态 ── */
   --accent: #ffffff;
   --accent-rgb: 255, 255, 255;
-  --accent-pink: #d4d4d8;
-  --accent-pink-rgb: 212, 212, 216;
-  --accent-gradient: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%);
   --accent-hover: #f4f4f5;
-  
-  --text-main: #ffffff;
+  --accent-gradient: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%);
+  --state-ok: #4ade80;
+  --state-warn: #fbbf24;
+  --state-error: #f87171;
+
+  /* ── 文字层级 ── */
+  --text-main: #fafafa;
+  --text-body: #d4d4d8;
   --text-muted: #a1a1aa;
   --text-dim: #71717a;
-  
-  --radius-lg: 14px;
-  --radius-md: 10px;
+
+  /* ── 圆角收敛为三档：卡片 12 / 控件 8 / 胶囊 999 ── */
+  --radius-lg: 12px;
+  --radius-md: 8px;
   --radius-sm: 6px;
   --radius-pill: 999px;
-  
-  /* 弹性吸附缓动曲线 (来自 smooth-option-switcher) */
-  --ease-elastic: cubic-bezier(0.34, 0.96, 0.6, 0.99);
-  --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* ── 动效时长阶梯（instant / fast / standard / slow） ── */
+  --dur-instant: 90ms;
+  --dur-fast: 160ms;
+  --dur-base: 300ms;
+  --dur-slow: 600ms;
+
+  /* ── 缓动词典 ── */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-out-circ: cubic-bezier(0, 0.55, 0.45, 1);
+  --ease-out-back: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-in-expo: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-elastic: cubic-bezier(0.34, 0.96, 0.6, 0.99); /* 兼容旧引用 */
+
+  /* ── 弹簧曲线（linear()，小控件免 JS 即可有过冲回弹） ── */
+  --spring-snappy: linear(0, 0.32 8%, 0.79 20%, 1.03 30%, 1.01 46%, 1);
+  --spring-soft: linear(0, 0.18 12%, 0.5 28%, 0.78 44%, 0.94 60%, 1.01 76%, 1);
+
+  /* ── 错峰间隔 ── */
+  --stagger-tight: 40ms;
+  --stagger-list: 75ms;
+
+  --transition-fast: 160ms var(--ease-out-expo);
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.35);
 }
 
 * {
@@ -176,7 +205,9 @@ body::-webkit-scrollbar-thumb:hover {
   box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  transition: var(--transition-fast);
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo),
+    box-shadow var(--dur-fast) var(--ease-out-expo);
   border-radius: var(--radius-pill);
 }
 
@@ -190,17 +221,24 @@ body::-webkit-scrollbar-thumb:hover {
   background: #ffffff;
   border-radius: 50%;
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.8);
-  transition: transform 0.3s var(--ease-elastic), background 0.2s ease;
+  transition: transform var(--dur-fast) var(--spring-snappy), background-color var(--dur-fast) var(--ease-out-expo);
 }
 
+/* 按下反馈用 scaleX（走合成层），不再动画 width 触发重排 */
 .switch:active .slider:before {
-  width: 20px;
+  transform: scaleX(1.14);
+  transform-origin: left center;
+}
+
+.switch:active input:checked + .slider:before {
+  transform: translateX(20px) scaleX(1.14);
+  transform-origin: right center;
 }
 
 input:checked + .slider {
   background: #ffffff;
   border-color: #ffffff;
-  box-shadow: 0 0 12px rgba(255, 255, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.9), 0 0 14px rgba(255, 255, 255, 0.22);
 }
 
 input:checked + .slider:before {
@@ -238,7 +276,8 @@ input:checked + .slider:before {
   -webkit-backdrop-filter: blur(10px);
   pointer-events: none;
   transform: translateX(calc(var(--tab-active-index, 0) * 100%));
-  transition: transform 0.38s var(--ease-elastic);
+  transition: transform var(--dur-base) var(--spring-soft);
+  will-change: transform;
   z-index: 1;
 }
 
@@ -254,7 +293,7 @@ input:checked + .slider:before {
   font-weight: 500;
   border-radius: var(--radius-pill);
   cursor: pointer;
-  transition: color 0.25s ease;
+  transition: color var(--dur-fast) var(--ease-out-expo), transform var(--dur-base) var(--spring-snappy);
   text-align: center;
 }
 
@@ -265,22 +304,44 @@ input:checked + .slider:before {
 .tab-btn.active {
   color: #ffffff;
   font-weight: 600;
+  transform: translateY(-0.5px);
+}
+
+.tab-btn:active {
+  transform: scale(0.97);
 }
 
 .tab-content {
   display: none;
   flex-direction: column;
   gap: 13px;
-  min-height: 380px;
-  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  min-height: 320px; /* 为最短页签保留高度地板，避免切换时预览块大幅跳动；同时不制造大片空档 */
 }
 
 .tab-content.active {
   display: flex;
+  animation: tabEnter var(--dur-base) var(--ease-out-expo) both;
 }
 
-@keyframes fadeIn {
-  from { opacity: 0; transform: translateY(4px); }
+/* 子项错峰入场：只在切换页签时播一次，不阻塞可读性（静止态即最终态） */
+.tab-content.active > * {
+  animation: itemEnter var(--dur-fast) var(--ease-out-expo) both;
+}
+
+.tab-content.active > *:nth-child(1) { animation-delay: 0ms; }
+.tab-content.active > *:nth-child(2) { animation-delay: 30ms; }
+.tab-content.active > *:nth-child(3) { animation-delay: 60ms; }
+.tab-content.active > *:nth-child(4) { animation-delay: 90ms; }
+.tab-content.active > *:nth-child(5) { animation-delay: 120ms; }
+.tab-content.active > *:nth-child(n+6) { animation-delay: 150ms; }
+
+@keyframes tabEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes itemEnter {
+  from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
 }
 
@@ -312,7 +373,7 @@ input:checked + .slider:before {
   border-radius: 7px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
   transform: translateX(calc(var(--active-index, 0) * 100%));
-  transition: transform 0.36s var(--ease-elastic);
+  transition: transform var(--dur-base) var(--spring-soft);
   pointer-events: none;
   z-index: 1;
 }
@@ -355,9 +416,8 @@ input:checked + .slider:before {
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-lg);
   padding: 12px 14px;
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
 }
 
 /* AI 配置折叠卡片 (Accordion) */
@@ -447,7 +507,7 @@ input:checked + .slider:before {
   border-top: 1px solid var(--border-glass);
   flex-direction: column;
   gap: 10px;
-  animation: fadeIn 0.2s ease;
+  animation: tabEnter var(--dur-fast) var(--ease-out-expo);
 }
 
 .ai-accordion-card.expanded .ai-accordion-body {
@@ -539,7 +599,7 @@ label {
   color: #ffffff;
   font-size: 12.5px;
   outline: none;
-  transition: all var(--transition-fast);
+  transition: background-color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo), box-shadow var(--dur-fast) var(--ease-out-expo);
 }
 
 .form-select:hover, .form-input:hover {
@@ -576,7 +636,7 @@ label {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: all var(--transition-fast);
+  transition: background-color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo), color var(--dur-fast) var(--ease-out-expo);
 }
 
 .btn-sm:hover, .btn-xs:hover {
@@ -725,7 +785,7 @@ label {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  transition: all var(--transition-fast);
+  transition: background-color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo), color var(--dur-fast) var(--ease-out-expo), transform var(--dur-instant) var(--ease-out-circ);
 }
 
 .btn-primary {
@@ -816,7 +876,10 @@ label {
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
-  transition: all 0.25s var(--ease-elastic);
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    color var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo),
+    box-shadow var(--dur-fast) var(--ease-out-expo);
 }
 
 .preview-ai {
@@ -858,9 +921,25 @@ label {
    12. 底部说明
    ========================================================================== */
 .popup-footer {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
   text-align: center;
-  padding-top: 6px;
+  padding-top: 10px;
   border-top: 1px solid var(--border-glass);
+}
+
+/* v0.4.0：跳转高级设置页的入口 */
+.footer-advanced {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--text-body);
+}
+
+.footer-advanced svg {
+  opacity: 0.8;
 }
 
 .tip-shortcut {
@@ -944,7 +1023,7 @@ label {
   padding: 5px 9px;
   border-radius: 999px;
   cursor: pointer;
-  transition: all var(--transition-fast);
+  transition: background-color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo), color var(--dur-fast) var(--ease-out-expo);
 }
 
 .glossary-chip:hover {
@@ -1230,7 +1309,7 @@ label {
   color: var(--text-sub);
   cursor: pointer;
   white-space: nowrap;
-  transition: all var(--transition-fast);
+  transition: background-color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo), color var(--dur-fast) var(--ease-out-expo), transform var(--dur-instant) var(--ease-out-circ);
 }
 
 .btn-chip:hover {
@@ -1243,4 +1322,189 @@ label {
   opacity: 0.45;
   cursor: default;
   background: rgba(255, 255, 255, 0.04);
+}
+
+/* ==========================================================================
+   v0.3.0 · UI 动效与视觉规范层
+   --------------------------------------------------------------------------
+   依据 motion-web 规范（motion-tokens / baseline-ui / components / design-slop）落地：
+   1. 时长分四级、缓动分五种、小控件用 linear() 弹簧曲线；
+   2. 只动 transform / opacity，过渡一律显式声明属性；
+   3. 类型层级：分区标题改 eyebrow 式（小字号 + 大字距 + 降级色）；
+   4. 圆角收敛 3 档，卡片去掉「表面+边框+阴影」三重叠加；
+   5. 无障碍：focus-visible 焦点环、reduced-motion 降级、点击目标加高。
+   本层为后置覆盖层，整段删除即可回退到 v0.2.9 的视觉表现。
+   ========================================================================== */
+
+/* ── 1. 类型层级：标题与正文之间做出跳跃 ── */
+.title-text h1 {
+  font-size: 15.5px;
+  font-weight: 600;
+  line-height: 1.15;
+  letter-spacing: -0.012em;
+}
+
+.title-text p {
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-dim);
+  letter-spacing: 0.01em;
+}
+
+/* 分区标题：eyebrow 式（字距拉开、颜色降级），比正文更“结构”而非更“响” */
+.section-head {
+  margin: 18px 0 8px;
+}
+
+.section-head:first-child {
+  margin-top: 2px;
+}
+
+.section-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+}
+
+/* ── 2. 表面：卡片只保留「表面 + 边框」，去掉阴影与过重模糊 ── */
+.card,
+.ai-accordion-card,
+.pack-card {
+  box-shadow: none;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+}
+
+.card {
+  background: rgba(255, 255, 255, 0.035);
+}
+
+/* 数值类徽章使用等宽数字，避免数字变化时宽度抖动（布局稳定性） */
+.badge,
+.latency-badge,
+#glossary-total-badge {
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* ── 3. 可点选卡片：hover 语义是「指向某一行」，不是统一的整体上浮 ── */
+.pack-card {
+  position: relative;
+  overflow: hidden;
+}
+
+.pack-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 12px;
+  bottom: 12px;
+  width: 2px;
+  border-radius: 2px;
+  background: #ffffff;
+  opacity: 0;
+  transform: scaleY(0.35);
+  transform-origin: center;
+  transition: opacity var(--dur-fast) var(--ease-out-expo),
+    transform var(--dur-base) var(--spring-snappy);
+  pointer-events: none;
+}
+
+.pack-card:hover::before,
+.pack-card.active::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
+.pack-card.active {
+  border-color: rgba(255, 255, 255, 0.34);
+}
+
+/* ── 4. 控件：滑块拇指弹性反馈；按钮按下只有 0.98 缩放（不做统一位移） ── */
+.slider-range::-webkit-slider-thumb {
+  transition: transform var(--dur-fast) var(--spring-snappy),
+    box-shadow var(--dur-fast) var(--ease-out-expo);
+}
+
+.slider-range:hover::-webkit-slider-thumb {
+  transform: scale(1.06);
+}
+
+.slider-range:active::-webkit-slider-thumb {
+  transform: scale(1.16);
+}
+
+.btn:active,
+.btn-chip:active,
+.btn-sm:active,
+.switcher-item:active {
+  transform: scale(0.98);
+}
+
+.switcher-item {
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    transform var(--dur-instant) var(--ease-out-circ);
+}
+
+/* 折叠箭头：改用 transform 过渡（原来是纯文本替换，无法过渡） */
+.ai-accordion-arrow {
+  transition: transform var(--dur-base) var(--spring-snappy);
+}
+
+/* ── 5. 无障碍：焦点环 ── */
+:where(button, input, select, textarea, summary, a, [tabindex]):focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.78);
+  outline-offset: 2px;
+}
+
+:where(button, input, select, textarea, summary, a, [tabindex]):focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* 键盘焦点在页签上时给出更明确的指示（页签是自绘控件） */
+.tab-btn:focus-visible {
+  outline-offset: -2px;
+  outline-color: rgba(255, 255, 255, 0.9);
+}
+
+/* 点击目标加高：弹窗为桌面鼠标场景，取 32px（非移动端 44px 下限） */
+.form-check {
+  min-height: 32px;
+  align-items: center;
+}
+
+.pack-toggle {
+  min-height: 30px;
+}
+
+.switcher-item {
+  min-height: 30px;
+}
+
+/* ── 6. 动效降级：尊重系统「减少动态效果」 ── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* 入场动画在降级模式下直接呈现最终态，避免停在 from 关键帧上 */
+  .tab-content.active,
+  .tab-content.active > * {
+    animation: none !important;
+    opacity: 1 !important;
+    transform: none !important;
+  }
+
+  .tab-glider,
+  .switcher-glider {
+    transition: none !important;
+  }
 }
