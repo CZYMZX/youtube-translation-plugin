@@ -84,7 +84,7 @@
 | 26 | `String.fromCharCode` 解码 astral 实体错误 | 改 `String.fromCodePoint`；新增 `😀` 用例                                      |
 | 27 | 日文标点前多空格（`うふ 。`）                     | `shouldInsertSpace()` 处理 CJK 标点/括号；实测输出 `うふ。`                            |
 | 28 | `host_permissions` 含 `http://*/*`    | **部分完成**：移除明文 HTTP；保留 `https://*/*` 以支持自定义 OpenAI 兼容端点（README 已注明）       |
-| 29 | CHANGELOG 与实现漂移                      | CHANGELOG 新增 0.2.4；README 更正 v1.2.1 的 `loadModule`/同源 fetch 描述           |
+| 29 | CHANGELOG 与实现漂移                      | CHANGELOG 新增 0.2.4；README 更正 v0.2.1 的 `loadModule`/同源 fetch 描述           |
 | 30 | 广告期 `videoData.video_id` 触发切视频清缓存    | bridge 广播 `isAd`；内容脚本广告期忽略；新增“播放中自动重新探测（最多 2 次）”修复广告后无字幕                 |
 
 ---
