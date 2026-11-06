@@ -8,7 +8,7 @@
  * - 上传规范见 docs/PACK-UPLOAD-SPEC.md（弹窗内也有摘要）。
  */
 import type { GlossaryEntry, GlossaryCategory } from './glossary';
-import { GLOSSARY } from './glossary';
+import { GLOSSARY, hashGlossaryContent, GLOSSARY_TAG_SCHEME, GLOSSARY_MATCHER_REVISION } from './glossary';
 
 export interface GlossaryPack {
   id: string;
@@ -34,7 +34,14 @@ export const CUSTOM_SCENE_KEY = 'yt_sub_custom_scene_packs';
 /** 上传包格式版本 */
 export const PACK_FORMAT_VERSION = 1;
 
-/* ───────────────────────── 内置翻译场景 ───────────────────────── */
+/* ───────────────────────── 内置翻译场景 ─────────────────────────
+ * 场景包只管「这类视频该怎么译」：风格、行业用语、人称 / 敬语 / 方言 / 填充词。
+ * 三类跨场景通用的约束**不在这里**，已上移到 utils/translator.ts 的公共层与选项层，
+ * 否则用户上传的自定义场景包拿不到、场景包之间还会各写一份：
+ *   - 禁用 AI 腔 / 不增补原文没有的信息 → translator.ts#COMMON_RULES（所有场景继承）
+ *   - 专名是否括注原文 → translator.ts#buildAnnotationRule（设置项 glossaryAnnotation）
+ *   - ASR 同音误转的纠错授权 → translator.ts#buildAsrRule（设置项 asrCorrection）
+ */
 
 const VTUBER_SCENE_PROMPT = `你是一位精通 VTuber（虚拟主播）文化和 ACG 流行语的资深双语翻译字幕君（熟肉切片官/烤肉 Man）。
 当前翻译场景是【VTuber 虚拟主播直播/切片】，请严格遵照以下行业翻译准则：
@@ -55,15 +62,18 @@ const VTUBER_SCENE_PROMPT = `你是一位精通 VTuber（虚拟主播）文化�
 5. 一人称按角色性格固定：俺/僕→“我”，あたし→“人家”或“我”，わし→“我”（只有明确老年角色才用“老夫”）。
 6. 敬语分层：对 SC / 观众道谢保留礼貌但口语化（“谢谢老板的 SC！”），不要译成客服体。
 7. 关西弁等方言轻口语化处理（捏 / 咧 / 嘛），不加方言注释。
-8. 纯填充词（あの / その / えーっと）最多保留一个；情绪性感叹（えぇっ!?）保留。
-9. 允许按上下文修正明显同音误转的 ASR 文本（如「パパって」实为「ぱぱっと」），但不得改写事实。`;
+8. 纯填充词（あの / その / えーっと）最多保留一个；情绪性感叹（えぇっ!?）保留。`;
 
 const GENERAL_SCENE_PROMPT = `你是一位精通视频双语字幕翻译的资深专家。
 当前翻译场景是【通用日常视频与访谈】，要求：
 1. 语言地道自然，符合影视与日常口语化表达习惯，简练通顺。
 2. 保持上下文连贯，准确处理前后句的代词指代与隐喻。
-3. 访谈类内容保留说话人的礼貌层级（です・ます 体对应适度礼貌的中文，不滥用“您”）。
-4. 数字与单位本地化（3 日に 1 回 → “每三天一次”），专有名词保留原文或通用译名，不加括注。`;
+3. 按说话方式自适应分层（只依据本批句子自身的线索判断，不额外推测视频题材）：
+   - 访谈 / 对谈：主持人与受访者交替发言、句末多为です・ます → 访谈类内容保留说话人的礼貌层级（です・ます 体对应适度礼貌的中文，不滥用“您”），问句译得像人开口说话，不像采访稿。
+   - 讲解 / 科普 / 教程：句子偏长、术语与数字单位密集、感叹很少 → 书面化但可读，术语用通用译名，逻辑关系照原文，不自行加“因为”“所以”。
+   - 日常闲聊 / vlog：句子短、常体（だ・よ・じゃん）、口癖与语气词多 → 口语化，可用语气词与短句，但不加原文没有的情绪与网络热词。
+   同一批内保持同一层级，不逐句在书面语与口语之间来回跳。
+4. 数字与单位本地化（3 日に 1 回 → “每三天一次”），专有名词统一用通用译名，具体书写格式按本 prompt 的专名条款执行。`;
 
 export const BUILTIN_SCENES: ScenePack[] = [
   {
@@ -405,6 +415,47 @@ export const BUILTIN_GLOSSARY_PACKS: GlossaryPack[] = [
 
 /** 默认启用的术语库包 */
 export const DEFAULT_GLOSSARY_PACKS = ['vtuber-hololive'];
+
+/* ───────────────────── 术语库缓存指纹（v0.4.1） ─────────────────────
+ * 旧做法：三包共用一个手工 bump 的 GLOSSARY_VERSION，自定义包只记 `id:条目数`。
+ * 后果：「条数不变、只改译名」的修正（术语维护最常见的形态）不会让旧译文失效。
+ * 现做法：每个包各自按**条目内容**生成指纹，聚合进同一个 tag；见 buildGlossaryTag()。
+ */
+
+/** 单个术语库包的内容指纹（纯内容 hash，不含包 id / 包名 / 描述） */
+export function glossaryPackFingerprint(pack: GlossaryPack): string {
+  return hashGlossaryContent(pack.entries);
+}
+
+/** 内置包内容指纹表：包 id → 内容 hash（模块加载时算一次） */
+export const BUILTIN_GLOSSARY_FINGERPRINTS: Record<string, string> = Object.fromEntries(
+  BUILTIN_GLOSSARY_PACKS.map((pack) => [pack.id, glossaryPackFingerprint(pack)])
+);
+
+/**
+ * 术语库缓存标签（参与翻译缓存键，translator.getGlossaryTag 的唯一实现）
+ *
+ * 格式：`{scheme}.{matcherRev}|{启用包id(排序)}|{启用内置包 id:内容hash(包序)}|{启用自定义包 id:内容hash(排序)}`
+ * - 内置包指纹：内容 hash（改译名不改条数 → 变）
+ * - 自定义包指纹：`id:内容hash`（旧版是 `id:条目数`，改译名不改条数 → 不变 → 旧译文残留）
+ * - 只统计**已启用**的包：禁用的包内容再变也不影响注入结果，不该烧缓存
+ * - matcherRev：只改匹配/门控规则、数据没动时靠它失效，必须手工 bump
+ */
+export function buildGlossaryTag(enabledPackIds: string[] | undefined, custom: CustomPacks): string {
+  const enabled = (enabledPackIds && enabledPackIds.length > 0 ? enabledPackIds : DEFAULT_GLOSSARY_PACKS)
+    .slice()
+    .sort();
+  const enabledSet = new Set(enabled);
+  const builtinFp = BUILTIN_GLOSSARY_PACKS.filter((pack) => enabledSet.has(pack.id))
+    .map((pack) => `${pack.id}:${BUILTIN_GLOSSARY_FINGERPRINTS[pack.id]}`)
+    .join(',');
+  const customFp = (custom?.glossaries || [])
+    .filter((pack) => pack && enabledSet.has(pack.id))
+    .map((pack) => `${pack.id}:${glossaryPackFingerprint(pack)}`)
+    .sort()
+    .join(',');
+  return `${GLOSSARY_TAG_SCHEME}.${GLOSSARY_MATCHER_REVISION}|${enabled.join(',')}|${builtinFp}|${customFp}`;
+}
 
 /* ───────────────────────── 自定义包：读写 ───────────────────────── */
 

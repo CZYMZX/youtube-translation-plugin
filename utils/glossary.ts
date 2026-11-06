@@ -7,7 +7,8 @@
  * - community：VTuber 直播业界通用说法（无单一定义页，按社区通行译法整理）
  *
  * 数据核对时间：2026-11-04。
- * 术语库版本号参与翻译缓存键：内容更新时 bump，旧缓存自动失效。
+ * 缓存键：术语内容指纹（GLOSSARY_CONTENT_HASH / hashGlossaryContent）参与翻译缓存键，
+ * 「条数不变、只改译名」的修正同样会让旧译文失效；不再依赖人工 bump 版本号。
  */
 
 export type GlossaryCategory = 'talent' | 'group' | 'game' | 'song' | 'term';
@@ -25,18 +26,30 @@ export interface GlossaryEntry {
   sourceType: 'official' | 'wiki' | 'community';
   /**
    * v0.3.1：该词同时是高频日常词（如「修繕」= 修补房屋），单句出现不足以证明是游戏语境。
-   * 标记后仅当**同一句**内命中 ≥2 条术语时才注入——逐句判定，绝不按整批（按整批会被
-   * 同批其他句子的正常术语「救活」，导致「この家、修繕しないとな」仍被塞进游戏译名）。
+   * 标记后仅当**同一句**内还命中 ≥1 条**普通术语**时才注入——逐句判定，绝不按整批（按整批
+   * 会被同批其他句子的正常术语「救活」，导致「この家、修繕しないとな」仍被塞进游戏译名）。
+   *
+   * v0.4.2：语境证据只数**非门控**术语，门控词彼此不能互证。旧实现把门控词自己也数进
+   * 「同句命中数」，门槛又恰好是 2，于是两个门控词同句出现就互相救活：
+   * 「幸運なことに、この家を修繕しないとな」→ 幸運+修繕（两句都需要语境，却互相作证）。
    */
   needsContext?: boolean;
 }
 
 /**
- * 术语库版本（参与翻译缓存键，见 utils/translator.ts `getGlossaryTag`）
- * 三包（VTuber 146 / MC 165 / AI 35）**共用**此版本号：任一包术语内容有变动都必须 bump，
- * 否则「条数不变、译名变了」的修正不会让旧译文失效。
+ * 术语库缓存键的「结构版本」与「匹配逻辑修订号」（v0.4.1）
+ *
+ * 为什么还需要两个手工号：内容 hash 只能覆盖**数据**。如果只改匹配/门控规则
+ * （如单字边界、needsContext 逐句判定），数据一字未动，可同一句话的注入结果已经变了，
+ * 这时靠内容 hash 是察觉不到的——必须由人显式 bump `GLOSSARY_MATCHER_REVISION`。
+ * `GLOSSARY_TAG_SCHEME` 只在「指纹算法 / 标签拼装格式」变化时改（例如从单 hash 换成双 hash）。
+ *
+ * 修订历史：
+ * - 1：needsContext 逐句判定（同句命中 ≥2 条即注入）
+ * - 2：（v0.4.2）语境证据只数非门控术语，门槛 ≥1 条普通术语；两个门控词不再互相救活
  */
-export const GLOSSARY_VERSION = '2026-11-04.1';
+export const GLOSSARY_TAG_SCHEME = 'g1';
+export const GLOSSARY_MATCHER_REVISION = 2;
 
 const OFFICIAL_TALENTS = 'https://hololive.hololivepro.com/talents/';
 const ZH_WIKI = 'https://zh.wikipedia.org/wiki/Hololive';
@@ -290,6 +303,48 @@ function buildEntries(): GlossaryEntry[] {
 
 export const GLOSSARY: GlossaryEntry[] = buildEntries();
 
+/**
+ * 术语内容指纹（参与翻译缓存键）
+ *
+ * 只喂「会改变译文」的字段：`ja`（决定能否命中原文）、`zh`（决定注入的译名）、
+ * `category`（决定 prompt 里的分类标签）、`needsContext`（决定门控是否注入）。
+ * 这四项任一变动，同一句话的注入结果就可能不同，必须让旧译文失效。
+ *
+ * 刻意不喂的字段：`en` / `source` / `sourceType` / `id` —— 它们只用于溯源与检索，
+ * 既不进 prompt 也不参与匹配，修一个失效 URL 或补一条罗马字不该烧掉全库缓存。
+ *
+ * 判定「按内容」而不是「按条数」：术语维护最常见的形态是条数不变、只改译名，
+ * 按条数算指纹会让这类修正静默失效，用户继续看到旧译名。
+ *
+ * 用 djb2 + FNV-1a 两条独立 32 位散列拼成指纹，降低单 32 位碰撞概率；
+ * 字段间插入 \u0001 分隔符、条目间 \u0002，避免 `ja='ab',zh='c'` 与 `ja='a',zh='bc'` 撞成同一串。
+ */
+export function hashGlossaryContent(entries: readonly GlossaryEntry[]): string {
+  let djb2 = 5381;
+  let fnv = 0x811c9dc5;
+  const feed = (text: string) => {
+    for (let i = 0; i < text.length; i++) {
+      const code = text.charCodeAt(i);
+      djb2 = ((djb2 << 5) + djb2 + code) >>> 0;
+      fnv = Math.imul(fnv ^ code, 0x01000193) >>> 0;
+    }
+  };
+  for (const entry of entries) {
+    feed(entry.ja);
+    feed('\u0001');
+    feed(entry.zh);
+    feed('\u0001');
+    feed(entry.category);
+    feed('\u0001');
+    feed(entry.needsContext ? '1' : '0');
+    feed('\u0002');
+  }
+  return `${djb2.toString(36)}-${fnv.toString(36)}`;
+}
+
+/** VTuber / hololive 包（GLOSSARY）的内容指纹；MC / AI 两包的指纹在 utils/packs.ts 生成 */
+export const GLOSSARY_CONTENT_HASH = hashGlossaryContent(GLOSSARY);
+
 export const GLOSSARY_CATEGORY_LABELS: Record<GlossaryCategory, string> = {
   talent: '主播',
   group: '团体',
@@ -311,8 +366,10 @@ export function getGlossaryStats(): GlossaryStats {
 
 /**
  * 在给定文本中匹配术语：多字子串命中；单字汉字需左右非汉字边界（避免「土曜日」「宝石」误命中）。
- * needsContext 标记的高频日常词按**句子**判定语境（同句还有别的术语才算游戏语境），
- * 不能按整批判定——否则「家を修繕する」会被同批其他句子的正常术语救活。
+ * needsContext 标记的高频日常词按**句子**判定语境：同一句里还必须命中 ≥1 条**普通术语**
+ * （非门控）才算语境成立。逐句判定，不能按整批——否则「家を修繕する」会被同批其他句子的
+ * 正常术语救活；门控词也不互为证据——否则「幸運」+「修繕」、`トークン`+`推論` 这类
+ * 「两个都需要语境」的句子会互相救活。
  * 返回按日文长度降序的条目，最多 limit 条，用于注入 prompt。
  */
 export function findGlossaryMatches(texts: string[], limit = 40, source: GlossaryEntry[] = GLOSSARY): GlossaryEntry[] {
@@ -328,17 +385,16 @@ export function findGlossaryMatches(texts: string[], limit = 40, source: Glossar
     }
   }
 
-  // 逐句统计命中数，用于给 needsContext 条目判定语境
-  const perTextCounts = texts.map(
-    (text) => source.filter((e) => e.ja.trim() && containsTerm(text, e.ja.trim())).length
-  );
-  const contextualTexts = texts.filter((_, i) => perTextCounts[i] >= 2);
+  // 逐句判断「这一句有没有普通术语」，作为门控词的语境证据来源。
+  // 刻意排除 needsContext 词：它们自己都还等着被判语境，不能反过来给别人作证。
+  const plainEntries = source.filter((e) => !e.needsContext && e.ja.trim());
+  const hasPlainTerm = texts.map((text) => plainEntries.some((e) => containsTerm(text, e.ja.trim())));
 
   const contextual = matched.filter((entry) => {
     if (!entry.needsContext) return true;
     const key = entry.ja.trim();
-    // 只需在「有语境」的句子中出现过即可
-    return contextualTexts.some((text) => containsTerm(text, key));
+    // 必须与「≥1 条普通术语」出现在同一句，而不是同批任意一句
+    return texts.some((text, i) => hasPlainTerm[i] && containsTerm(text, key));
   });
 
   contextual.sort((a, b) => b.ja.length - a.ja.length);
