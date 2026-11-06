@@ -486,7 +486,8 @@ export class SubtitleOverlay {
 
     const from = Math.max(0, lastStarted - 1);
     const to = Math.min(arr.length - 1, lastStarted + 2);
-    for (let i = from; i <= to; i++) {
+    // v0.2.6：重叠/宽限窗口内优先选择"最近开始"的句子，避免上一句在下一句开始后仍抢占显示
+    for (let i = to; i >= from; i--) {
       const s = arr[i];
       if (time >= s.start && time <= s.end + 1500) return s;
     }

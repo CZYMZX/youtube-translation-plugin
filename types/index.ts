@@ -88,10 +88,13 @@ export interface ExtensionSettings {
 
   // 断句参数
   pauseThreshold: number; // 停顿切分阈值，默认 450 (ms)
-  maxWordsPerSentence: number; // 单句最大单词数，默认 16
+  maxWordsPerSentence: number; // 单句最大单词数（拉丁词语言），默认 16
   minWordsPerSentence: number; // 单句最小单词数，默认 3
   maxDurationMs: number; // 单句最大持续时间，默认 6500 (ms)
   autoPunctuation: boolean; // 是否智能补齐大小写和标点
+  segmentationLanguage: 'auto' | 'ja' | 'zh' | 'en' | 'generic'; // 断句语言策略，默认 auto 自动检测
+  maxCharsPerSentence: number; // CJK 单句最大字数（中日韩），默认 28
+  mergeShortFragments: boolean; // 无终止标点的短碎片是否并入相邻句，默认 true
   
   // UI 样式与排版
   displayMode: 'bilingual' | 'translation_only' | 'original_only';
@@ -125,6 +128,9 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   minWordsPerSentence: 3,
   maxDurationMs: 6500,
   autoPunctuation: true,
+  segmentationLanguage: 'auto',
+  maxCharsPerSentence: 28,
+  mergeShortFragments: true,
   displayMode: 'bilingual',
   layoutOrder: 'translation_top', // 默认上译下原
   fontSize: 20,

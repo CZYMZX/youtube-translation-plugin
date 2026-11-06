@@ -8,6 +8,7 @@ const VALID_SCENARIOS = ['general', 'vtuber'] as const;
 const VALID_REASONING = ['none', 'low', 'high'] as const;
 const VALID_DISPLAY_MODES = ['bilingual', 'translation_only', 'original_only'] as const;
 const VALID_LAYOUTS = ['translation_top', 'original_top'] as const;
+const VALID_SEGMENTATION_LANGS = ['auto', 'ja', 'zh', 'en', 'generic'] as const;
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value);
@@ -35,6 +36,10 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.maxWordsPerSentence = clampNumber(merged.maxWordsPerSentence, 4, 60, 16);
   merged.minWordsPerSentence = clampNumber(merged.minWordsPerSentence, 1, 20, 3);
   merged.maxDurationMs = clampNumber(merged.maxDurationMs, 1500, 20000, 6500);
+  if (!VALID_SEGMENTATION_LANGS.includes(merged.segmentationLanguage as any)) {
+    merged.segmentationLanguage = 'auto';
+  }
+  merged.maxCharsPerSentence = clampNumber(merged.maxCharsPerSentence, 12, 80, 28);
   merged.fontSize = clampNumber(merged.fontSize, 12, 48, 20);
   merged.bgOpacity = clampNumber(merged.bgOpacity, 0, 100, 75);
   merged.offsetY = clampNumber(merged.offsetY, 30, 94, 82);
@@ -57,6 +62,7 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.enabled = merged.enabled !== false;
   merged.autoHideNativeSubtitles = merged.autoHideNativeSubtitles !== false;
   merged.autoPunctuation = merged.autoPunctuation !== false;
+  merged.mergeShortFragments = merged.mergeShortFragments !== false;
   merged.autoFallbackToGoogle = merged.autoFallbackToGoogle !== false;
 
   return merged;

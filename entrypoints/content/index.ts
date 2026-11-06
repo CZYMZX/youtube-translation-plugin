@@ -20,7 +20,7 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.2.5]%c Content-script active (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.2.6]%c Content-script active (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -110,6 +110,11 @@ export default defineContentScript({
         const prevReasoning = settings?.reasoningEffort;
         const prevPause = settings?.pauseThreshold;
         const prevMaxWords = settings?.maxWordsPerSentence;
+        const prevMaxChars = settings?.maxCharsPerSentence;
+        const prevMaxDuration = settings?.maxDurationMs;
+        const prevSegLang = settings?.segmentationLanguage;
+        const prevMergeFragments = settings?.mergeShortFragments;
+        const prevAutoPunct = settings?.autoPunctuation;
         settings = message.settings;
 
         updateNativeSubtitleVisibility();
@@ -125,7 +130,13 @@ export default defineContentScript({
 
         if (
           lastCaptionData &&
-          (prevPause !== settings.pauseThreshold || prevMaxWords !== settings.maxWordsPerSentence)
+          (prevPause !== settings.pauseThreshold ||
+            prevMaxWords !== settings.maxWordsPerSentence ||
+            prevMaxChars !== settings.maxCharsPerSentence ||
+            prevMaxDuration !== settings.maxDurationMs ||
+            prevSegLang !== settings.segmentationLanguage ||
+            prevMergeFragments !== settings.mergeShortFragments ||
+            prevAutoPunct !== settings.autoPunctuation)
         ) {
           reSegmentAndReload(lastCaptionData);
         } else if (

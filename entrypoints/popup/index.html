@@ -205,6 +205,30 @@
       </div>
 
       <div class="form-group">
+        <label>断句语言策略</label>
+        <select id="segmentation-language" class="visually-hidden">
+          <option value="auto">自动检测 (推荐)</option>
+          <option value="ja">日语语法规则</option>
+          <option value="zh">中文标点规则</option>
+          <option value="en">英语标点规则</option>
+          <option value="generic">通用 (标点+停顿)</option>
+        </select>
+        <div class="smooth-switcher" data-target="segmentation-language" data-count="5" style="--count: 5; --active-index: 0;">
+          <div class="switcher-glider" aria-hidden="true"></div>
+          <button type="button" class="switcher-item active" data-value="auto">自动</button>
+          <button type="button" class="switcher-item" data-value="ja">日语</button>
+          <button type="button" class="switcher-item" data-value="zh">中文</button>
+          <button type="button" class="switcher-item" data-value="en">英语</button>
+          <button type="button" class="switcher-item" data-value="generic">通用</button>
+        </div>
+        <div class="range-marks">
+          <span>日语用助词语法</span>
+          <span>中日韩按字数</span>
+          <span>英语按标点空格</span>
+        </div>
+      </div>
+
+      <div class="form-group">
         <div class="label-with-value">
           <label for="pause-threshold">停顿断句敏感度 (静音空隙)</label>
           <span id="pause-threshold-val" class="badge">450 ms</span>
@@ -219,15 +243,41 @@
 
       <div class="form-group">
         <div class="label-with-value">
-          <label for="max-words">单句最大单词数</label>
+          <label for="max-words">单句最大单词数 (英语等)</label>
           <span id="max-words-val" class="badge">16 词</span>
         </div>
         <input type="range" id="max-words" min="8" max="28" step="1" value="16" class="slider-range">
       </div>
 
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="max-chars">单句最大字数 (中日韩)</label>
+          <span id="max-chars-val" class="badge">28 字</span>
+        </div>
+        <input type="range" id="max-chars" min="16" max="48" step="1" value="28" class="slider-range">
+      </div>
+
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="max-duration">单句最大时长</label>
+          <span id="max-duration-val" class="badge">6.5 秒</span>
+        </div>
+        <input type="range" id="max-duration" min="4000" max="12000" step="500" value="6500" class="slider-range">
+        <div class="range-marks">
+          <span>紧凑 (更短)</span>
+          <span>适中 (推荐)</span>
+          <span>宽松 (更长)</span>
+        </div>
+      </div>
+
       <div class="form-check">
         <input type="checkbox" id="auto-punctuation">
         <label for="auto-punctuation">智能首字母大写与末尾标点修补 (. / ?)</label>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="merge-fragments" checked>
+        <label for="merge-fragments">短碎片自动合并 (无标点碎句并入相邻句)</label>
       </div>
     </div>
 
@@ -365,7 +415,7 @@
     </div>
 
     <footer class="popup-footer">
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.5</span>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.6</span>
     </footer>
   </div>
 

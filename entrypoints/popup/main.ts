@@ -98,6 +98,12 @@ const pauseThresholdRange = document.getElementById('pause-threshold') as HTMLIn
 const pauseThresholdVal = document.getElementById('pause-threshold-val') as HTMLElement;
 const maxWordsRange = document.getElementById('max-words') as HTMLInputElement;
 const maxWordsVal = document.getElementById('max-words-val') as HTMLElement;
+const maxCharsRange = document.getElementById('max-chars') as HTMLInputElement;
+const maxCharsVal = document.getElementById('max-chars-val') as HTMLElement;
+const maxDurationRange = document.getElementById('max-duration') as HTMLInputElement;
+const maxDurationVal = document.getElementById('max-duration-val') as HTMLElement;
+const segmentationLanguageSelect = document.getElementById('segmentation-language') as HTMLSelectElement;
+const mergeFragmentsCheck = document.getElementById('merge-fragments') as HTMLInputElement;
 const autoPunctuationCheck = document.getElementById('auto-punctuation') as HTMLInputElement;
 
 // 样式排版与颜色
@@ -372,6 +378,25 @@ function populateForm() {
   maxWordsRange.value = String(currentSettings.maxWordsPerSentence);
   maxWordsVal.textContent = `${currentSettings.maxWordsPerSentence} 词`;
 
+  if (maxCharsRange) {
+    maxCharsRange.value = String(currentSettings.maxCharsPerSentence ?? 28);
+    maxCharsVal.textContent = `${currentSettings.maxCharsPerSentence ?? 28} 字`;
+  }
+
+  if (maxDurationRange) {
+    const dur = currentSettings.maxDurationMs ?? 6500;
+    maxDurationRange.value = String(dur);
+    maxDurationVal.textContent = `${(dur / 1000).toFixed(1)} 秒`;
+  }
+
+  if (segmentationLanguageSelect) {
+    segmentationLanguageSelect.value = currentSettings.segmentationLanguage || 'auto';
+  }
+
+  if (mergeFragmentsCheck) {
+    mergeFragmentsCheck.checked = currentSettings.mergeShortFragments !== false;
+  }
+
   autoPunctuationCheck.checked = currentSettings.autoPunctuation;
 
   displayModeSelect.value = currentSettings.displayMode;
@@ -543,8 +568,13 @@ function persistSettings(immediate = false) {
     pauseThreshold: parseInt(pauseThresholdRange.value, 10),
     maxWordsPerSentence: parseInt(maxWordsRange.value, 10),
     minWordsPerSentence: currentSettings.minWordsPerSentence,
-    maxDurationMs: currentSettings.maxDurationMs,
+    maxDurationMs: maxDurationRange ? parseInt(maxDurationRange.value, 10) : currentSettings.maxDurationMs,
     autoPunctuation: autoPunctuationCheck.checked,
+    segmentationLanguage: segmentationLanguageSelect
+      ? (segmentationLanguageSelect.value as any)
+      : currentSettings.segmentationLanguage || 'auto',
+    maxCharsPerSentence: maxCharsRange ? parseInt(maxCharsRange.value, 10) : currentSettings.maxCharsPerSentence ?? 28,
+    mergeShortFragments: mergeFragmentsCheck ? mergeFragmentsCheck.checked : true,
     displayMode: displayModeSelect.value as any,
     layoutOrder: layoutOrderSelect.value as any,
     transColor: transColorInput.value,
@@ -658,6 +688,28 @@ function bindEvents() {
     maxWordsVal.textContent = `${maxWordsRange.value} 词`;
     persistSettings();
   });
+
+  if (maxCharsRange) {
+    maxCharsRange.addEventListener('input', () => {
+      maxCharsVal.textContent = `${maxCharsRange.value} 字`;
+      persistSettings();
+    });
+  }
+
+  if (maxDurationRange) {
+    maxDurationRange.addEventListener('input', () => {
+      maxDurationVal.textContent = `${(parseInt(maxDurationRange.value, 10) / 1000).toFixed(1)} 秒`;
+      persistSettings();
+    });
+  }
+
+  if (segmentationLanguageSelect) {
+    segmentationLanguageSelect.addEventListener('change', () => persistSettings(true));
+  }
+
+  if (mergeFragmentsCheck) {
+    mergeFragmentsCheck.addEventListener('change', () => persistSettings(true));
+  }
 
   autoPunctuationCheck.addEventListener('change', () => persistSettings(true));
 

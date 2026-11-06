@@ -66,9 +66,10 @@ export class TranslationQueue {
     }
 
     // 合成句尾可能被延长，回看/前看少量邻居确认命中
+    // v0.2.6：重叠窗口内优先选择"最近开始"的句子，与浮层显示判定保持一致
     const from = Math.max(0, lastStarted - 2);
     const to = Math.min(arr.length - 1, lastStarted + 2);
-    for (let i = from; i <= to; i++) {
+    for (let i = to; i >= from; i--) {
       if (time >= arr[i].start && time <= arr[i].end + 2000) return i;
     }
     return lastStarted;
