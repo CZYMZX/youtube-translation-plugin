@@ -1,5 +1,23 @@
+import assert from 'node:assert/strict';
 import { extractCaptionTokens, segmentCaptionTokens } from '../utils/segmenter.ts';
 import { DEFAULT_SETTINGS } from '../types/index.ts';
+
+// 断言口径（v0.4.1 起）：本文件所有用例都走 check()，失败项在末尾用 node:assert 抛错，
+// 进程以非零码退出，npm test 会真的变红。
+// 刻意不用 console.assert —— 它在 Node 里失败只打印一行、不改变退出码，
+// 会让「npm test 全绿」变成假绿（历史教训见 README「质量红线」）。
+let passed = 0;
+const failedItems = [];
+function check(name, cond, detail) {
+  if (cond) {
+    passed++;
+    console.log(`  ✓ ${name}`);
+  } else {
+    const msg = `${name}${detail ? ' => ' + detail : ''}`;
+    failedItems.push(msg);
+    console.error(`  ✗ ${msg}`);
+  }
+}
 
 // 构造一个模拟 YouTube 自动字幕 (JSON3)
 const mockJson3 = {
@@ -49,7 +67,7 @@ const mockJson3 = {
 console.log('--- 测试 1: 提取词级 Token ---');
 const tokens = extractCaptionTokens(mockJson3);
 console.log(`成功提取 Token 数量: ${tokens.length}`);
-console.assert(tokens.length === 17, `预期 17 个 token，实际: ${tokens.length}`);
+check('Token 数量应为 17', tokens.length === 17, `预期 17 个 token，实际: ${tokens.length}`);
 
 console.log('\n--- 测试 2: 智能断句与标点重组 ---');
 const sentences = segmentCaptionTokens(tokens, DEFAULT_SETTINGS);
@@ -60,18 +78,30 @@ sentences.forEach((s) => {
 });
 
 // 验证第 1 句末尾补标点且首字母大写
-console.assert(sentences.length >= 2, '应该成功分出多句');
-console.assert(sentences[0].text.startsWith('Hello'), '第 1 句应该首字母大写');
-console.assert(sentences[0].text.endsWith('.'), '第 1 句陈述句应该自动补句号');
+const firstText = sentences[0]?.text || '';
+check('应该成功分出多句', sentences.length >= 2, `实际 ${sentences.length} 句`);
+check('第 1 句应该首字母大写', firstText.startsWith('Hello'), firstText);
+check('第 1 句陈述句应该自动补句号', firstText.endsWith('.'), firstText);
 
 // 验证疑问句是否能补问号
+// 原来这段在 if (questionSent) 里，句子没分出来时整条断言会被静默跳过（也是一种假绿），
+// 现在把「疑问句被识别成独立句」本身也变成断言。
 const questionSent = sentences.find(s => s.text.toLowerCase().includes('why is this'));
-if (questionSent) {
-  console.assert(questionSent.text.endsWith('?'), '疑问句应该自动补问号，实际: ' + questionSent.text);
+check('疑问句应被识别为独立句', Boolean(questionSent), '未找到包含「why is this」的句子');
+check(
+  '疑问句应该自动补问号',
+  Boolean(questionSent) && questionSent.text.endsWith('?'),
+  questionSent ? '实际: ' + questionSent.text : '句子缺失'
+);
+if (questionSent && questionSent.text.endsWith('?')) {
   console.log('✓ 疑问句自动补问号测试通过: ' + questionSent.text);
 }
 
-// 注意：本文件用 console.assert —— 断言失败只打印、进程仍以 EXIT=0 退出。
-// 所以这句话只能说「执行完毕」，不能说「通过」；要看上方有没有 ASSERT 失败行
-// （判定纪律见 README「质量红线」与 docs 任务六：console.assert 文件不能拿退出码当结论）。
-console.log('\n用例执行完毕（本文件用 console.assert：失败不改变退出码，请核对上方输出）');
+// 汇总 + 收口：有失败项就抛 AssertionError，让进程以非零码退出（不再只是打印一行）。
+console.log(`\n汇总: ${passed} 通过, ${failedItems.length} 失败`);
+assert.equal(
+  failedItems.length,
+  0,
+  `断句用例有 ${failedItems.length} 项失败：\n` + failedItems.map((m) => '  ✗ ' + m).join('\n')
+);
+console.log('断句用例全部通过（node:assert 收口：失败会抛错并以非零码退出）');
