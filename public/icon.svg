@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <!-- YouTube 质感渐变红 -->
+    <linearGradient id="yt-red-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FF0033"/>
+      <stop offset="100%" stop-color="#CC0028"/>
+    </linearGradient>
+    <filter id="yt-shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#88001B" flood-opacity="0.4"/>
+    </filter>
+  </defs>
+
+  <!-- YouTube 标志性大圆角矩形背景 -->
+  <rect x="8" y="16" width="112" height="96" rx="28" fill="url(#yt-red-grad)" filter="url(#yt-shadow)"/>
+  <rect x="8.5" y="16.5" width="111" height="95" rx="27.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="1.5"/>
+
+  <!-- 左侧：经典视频播放三角 (圆润处理) -->
+  <path d="M 32 46 C 32 42.5 35.8 40.3 39 42.1 L 56 52 C 59 53.7 59 58.3 56 60 L 39 69.9 C 35.8 71.7 32 69.5 32 66 Z" fill="#FFFFFF"/>
+
+  <!-- 右侧：智能双语字幕转换区域 (代表原文字幕 A 转换为 译文字幕 文) -->
+  <!-- 上层字幕卡片 (英文 A) -->
+  <g>
+    <rect x="68" y="38" width="44" height="23" rx="6" fill="#FFFFFF" fill-opacity="0.22"/>
+    <!-- 字母 A -->
+    <path d="M 82 43.5 L 75 57 L 78.5 57 L 79.8 53.5 L 84.2 53.5 L 85.5 57 L 89 57 Z M 82.3 47.5 L 83.5 51.2 L 80.8 51.2 Z" fill="#FFFFFF"/>
+    <!-- 伴随字幕音波/短横 -->
+    <rect x="92" y="48.5" width="13" height="3" rx="1.5" fill="#FFFFFF" fill-opacity="0.8"/>
+  </g>
+
+  <!-- 中间微型转换箭头/动态连接点 -->
+  <path d="M 88 62 L 91 65 L 85 65 Z" fill="#FFFFFF" opacity="0.9"/>
+  <path d="M 76 65 L 73 62 L 79 62 Z" fill="#FFFFFF" opacity="0.9"/>
+
+  <!-- 下层字幕卡片 (中文字幕 文) -->
+  <g>
+    <rect x="68" y="67" width="44" height="23" rx="6" fill="#FFFFFF"/>
+    <!-- “文” 字 (以红色强调，突显重构出来的通顺目标译文) -->
+    <!-- 点 -->
+    <circle cx="80" cy="72" r="1.5" fill="#CC0028"/>
+    <!-- 横 -->
+    <rect x="73" y="75" width="14" height="2.5" rx="1.25" fill="#CC0028"/>
+    <!-- 撇捺 -->
+    <path d="M 79 77.5 C 79 80 77.5 83 74 85 C 73.2 85.5 74.2 86.2 75 85.8 C 78.5 84 80.5 80.8 81 77.5 Z" fill="#CC0028"/>
+    <path d="M 76.5 79 C 78 81 80.5 84 84.5 85.5 C 85.2 85.8 85.8 85 85 84.5 C 81.5 83 79.5 80.5 78 79 Z" fill="#CC0028"/>
+    <!-- 伴随字幕横杠 -->
+    <rect x="90" y="77" width="15" height="3" rx="1.5" fill="#CC0028" fill-opacity="0.7"/>
+  </g>
+</svg>

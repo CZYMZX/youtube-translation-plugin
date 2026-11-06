@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>YouTube 字幕断句翻译设置</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div class="popup-container">
+    <!-- 头部区域 (Glass Header) -->
+    <header class="popup-header">
+      <div class="header-title">
+        <img src="/icon-48.png" class="header-logo-icon" width="28" height="28" alt="logo">
+        <div class="title-text">
+          <h1>YouTube 智能字幕</h1>
+          <p>ASR 断句拆分 · 语义标点 · 双语翻译</p>
+        </div>
+      </div>
+      <label class="switch" title="全局开启/关闭智能字幕">
+        <input type="checkbox" id="enabled-toggle">
+        <span class="slider round"></span>
+      </label>
+    </header>
+
+    <!-- 导航标签页 (平滑物理滑块) -->
+    <div class="smooth-tabs" id="main-tabs" style="--tab-active-index: 0;">
+      <div class="tab-glider" aria-hidden="true"></div>
+      <button type="button" class="tab-btn active" data-tab="general" data-index="0">通用与翻译</button>
+      <button type="button" class="tab-btn" data-tab="segmentation" data-index="1">断句引擎</button>
+      <button type="button" class="tab-btn" data-tab="style" data-index="2">样式排版</button>
+    </div>
+
+    <!-- 标签 1：通用与翻译 -->
+    <div class="tab-content active" id="tab-general">
+      <!-- 连通性提示条 -->
+      <div id="network-alert" class="card network-card hidden">
+        <div class="network-alert-content">
+          <span class="alert-icon">
+            <svg width="15" height="15" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="24" cy="24" r="20"/>
+              <path d="M24 19v13m0-20v2"/>
+            </svg>
+          </span>
+          <span class="alert-text" id="network-alert-text">检测到当前网络无法直连 Google 免费翻译，建议切换为 DeepSeek 或 Gemini。</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="target-lang">目标翻译语言</label>
+        <select id="target-lang" class="form-select">
+          <option value="zh-CN">简体中文 (Chinese Simplified)</option>
+          <option value="zh-TW">繁体中文 (Chinese Traditional)</option>
+          <option value="en">英语 (English)</option>
+          <option value="ja">日语 (Japanese)</option>
+          <option value="ko">韩语 (Korean)</option>
+          <option value="fr">法语 (French)</option>
+          <option value="de">德语 (German)</option>
+          <option value="es">西班牙语 (Spanish)</option>
+          <option value="ru">俄语 (Russian)</option>
+        </select>
+      </div>
+
+      <!-- 翻译场景 (平滑选项切换器) -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label>
+            <svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">
+              <rect x="6" y="8" width="36" height="32" rx="4"/>
+              <path d="M6 18h36M18 18v22M30 18v22"/>
+            </svg>
+            翻译场景
+          </label>
+          <span class="badge badge-accent" id="scenario-badge">二次元熟肉</span>
+        </div>
+        <select id="scenario-select" class="visually-hidden">
+          <option value="vtuber">VTuber 虚拟主播直播</option>
+          <option value="general">通用日常与科技访谈</option>
+        </select>
+        <div class="smooth-switcher" data-target="scenario-select" data-count="2" style="--count: 2; --active-index: 0;">
+          <div class="switcher-glider" aria-hidden="true"></div>
+          <button type="button" class="switcher-item active" data-value="vtuber">VTuber 直播</button>
+          <button type="button" class="switcher-item" data-value="general">通用日常</button>
+        </div>
+      </div>
+
+      <!-- 模型推理程度 (3段平滑选项切换器) -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label>
+            <svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">
+              <path d="M16 14a8 8 0 0 0-8 8c0 4.4 3.6 8 8 8v6a4 4 0 0 0 4 4h4a4 4 0 0 0 4-4v-6c4.4 0 8-3.6 8-8a8 8 0 0 0-8-8"/>
+            </svg>
+            模型推理思考深度
+          </label>
+          <span class="badge" id="reasoning-badge">轻度推理</span>
+        </div>
+        <select id="reasoning-select" class="visually-hidden">
+          <option value="none">极速直出 (None)</option>
+          <option value="low">轻度推理 (Low)</option>
+          <option value="high">深度推理 (High)</option>
+        </select>
+        <div class="smooth-switcher" data-target="reasoning-select" data-count="3" style="--count: 3; --active-index: 1;">
+          <div class="switcher-glider" aria-hidden="true"></div>
+          <button type="button" class="switcher-item" data-value="none">极速直出</button>
+          <button type="button" class="switcher-item active" data-value="low">轻度推理</button>
+          <button type="button" class="switcher-item" data-value="high">深度思考</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="service-select">翻译服务引擎</label>
+        <select id="service-select" class="form-select">
+          <option value="google">Google 免费翻译 (无需 Key，免配置)</option>
+          <option value="deepseek">DeepSeek API (大模型智能语境)</option>
+          <option value="openai">OpenAI API (GPT-4o-mini 等)</option>
+          <option value="gemini">Google Gemini API</option>
+        </select>
+      </div>
+
+      <!-- AI 配置扩展区域 (折叠手风琴卡片) -->
+      <div id="ai-config-section" class="card ai-accordion-card hidden">
+        <button type="button" id="ai-accordion-header" class="ai-accordion-header" title="点击展开/收起 API Key 与大模型参数配置">
+          <div class="ai-accordion-left">
+            <span class="ai-accordion-icon">
+              <svg width="15" height="15" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M24 4l4 12 12 4-12 4-4 12-4-12-12-4 12-4z"/>
+              </svg>
+            </span>
+            <div class="ai-accordion-text">
+              <span class="ai-accordion-title">API 与模型详细参数</span>
+              <span class="ai-accordion-desc" id="ai-accordion-desc">点击展开配置 API Key 及端点</span>
+            </div>
+          </div>
+          <div class="ai-accordion-right">
+            <span class="badge" id="ai-config-status-badge">未配置</span>
+            <span class="ai-accordion-arrow">▸</span>
+          </div>
+        </button>
+
+        <div class="ai-accordion-body" id="ai-accordion-body">
+          <div class="form-group">
+            <label for="api-key">API Key</label>
+            <div class="input-with-button">
+              <input type="password" id="api-key" class="form-input" placeholder="填入 API Key">
+              <button type="button" id="btn-toggle-key" class="btn-sm" title="显示/隐藏 Key">
+                <svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M24 11C14 11 6 24 6 24s8 13 18 13 18-13 18-13-8-13-18-13z"/>
+                  <circle cx="24" cy="24" r="6"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label for="api-base-url">Base URL (可选中转端点)</label>
+            <input type="text" id="api-base-url" class="form-input" placeholder="如 https://api.deepseek.com/v1">
+          </div>
+
+          <div class="form-group">
+            <div class="label-with-button">
+              <label for="model-select">模型名称与选择</label>
+              <button type="button" id="btn-fetch-models" class="btn-xs" title="通过当前 API Key 和 Base URL 获取服务商可用模型列表">
+                <svg width="12" height="12" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="margin-right:3px;">
+                  <path d="M42 8v12h-12M6 40V28h12"/>
+                  <path d="M38.6 17.4A18 18 0 1 0 42 28"/>
+                </svg>
+                获取模型列表
+              </button>
+            </div>
+            <select id="model-select" class="form-select" style="margin-bottom: 6px;">
+              <option value="">-- 请选择模型或点击右上角获取 --</option>
+            </select>
+            <input type="text" id="model-name" class="form-input" placeholder="如 deepseek-chat、gemini-3.8-flash 或 gpt-4o-mini">
+            <div id="fetch-models-status" class="sub-status-msg"></div>
+          </div>
+
+          <div class="test-row-container">
+            <div class="btn-row test-btn-row">
+              <button type="button" id="btn-test-api" class="btn btn-secondary">测试连接与延迟</button>
+              <span id="test-latency-badge" class="latency-badge hidden"></span>
+            </div>
+            <div id="test-status" class="status-msg"></div>
+          </div>
+
+          <div class="form-check" style="margin-top: 10px; padding-top: 6px; border-top: 1px solid rgba(255, 255, 255, 0.08);">
+            <input type="checkbox" id="auto-fallback-toggle">
+            <label for="auto-fallback-toggle">大模型异常时自动平滑降级至 Google 免费翻译</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="auto-hide-native">
+        <label for="auto-hide-native">自动隐藏 YouTube 原生自动字幕（防止重叠）</label>
+      </div>
+    </div>
+
+    <!-- 标签 2：智能断句参数 -->
+    <div class="tab-content" id="tab-segmentation">
+      <div class="card intro-card">
+        <p class="intro-text">
+          YouTube 自动语音字幕通常没有标点、词组琐碎不断句。断句引擎结合声音停顿与语法规律重新归纳出自然长句。
+        </p>
+      </div>
+
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="pause-threshold">停顿断句敏感度 (静音空隙)</label>
+          <span id="pause-threshold-val" class="badge">450 ms</span>
+        </div>
+        <input type="range" id="pause-threshold" min="250" max="850" step="25" value="450" class="slider-range">
+        <div class="range-marks">
+          <span>灵敏切分 (更短)</span>
+          <span>适中 (推荐)</span>
+          <span>宽松 (更长)</span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="max-words">单句最大单词数</label>
+          <span id="max-words-val" class="badge">16 词</span>
+        </div>
+        <input type="range" id="max-words" min="8" max="28" step="1" value="16" class="slider-range">
+      </div>
+
+      <div class="form-check">
+        <input type="checkbox" id="auto-punctuation">
+        <label for="auto-punctuation">智能首字母大写与末尾标点修补 (. / ?)</label>
+      </div>
+    </div>
+
+    <!-- 标签 3：样式排版 -->
+    <div class="tab-content" id="tab-style">
+      <div class="form-group">
+        <label>展示内容模式</label>
+        <select id="display-mode" class="visually-hidden">
+          <option value="bilingual">双语对照 (原文 + 译文)</option>
+          <option value="translation_only">仅显示翻译</option>
+          <option value="original_only">仅显示断句后原文</option>
+        </select>
+        <div class="smooth-switcher" data-target="display-mode" data-count="3" style="--count: 3; --active-index: 0;">
+          <div class="switcher-glider" aria-hidden="true"></div>
+          <button type="button" class="switcher-item active" data-value="bilingual">双语对照</button>
+          <button type="button" class="switcher-item" data-value="translation_only">仅译文</button>
+          <button type="button" class="switcher-item" data-value="original_only">仅原文</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>上下排列顺序</label>
+        <select id="layout-order" class="visually-hidden">
+          <option value="original_top">原文在上，译文在下</option>
+          <option value="translation_top">译文在上，原文在下</option>
+        </select>
+        <div class="smooth-switcher" data-target="layout-order" data-count="2" style="--count: 2; --active-index: 0;">
+          <div class="switcher-glider" aria-hidden="true"></div>
+          <button type="button" class="switcher-item active" data-value="original_top">原文在上</button>
+          <button type="button" class="switcher-item" data-value="translation_top">译文在上</button>
+        </div>
+      </div>
+
+      <!-- 译文颜色 -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="trans-color-input">
+            <svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">
+              <path d="M24 4C12.95 4 4 12.95 4 24c0 6.6 3.2 12.4 8.2 16 1.4 1 3.2.4 3.6-0.2.4-1.6.4-3.2 1.4-4.4 1.4-1.6 3.8-1.6 5.8-1.4 5.8.6 11-3.6 11.8-9.4.9-6.4-3.5-12.4-9.8-13.6z"/>
+            </svg>
+            译文字体颜色
+          </label>
+          <input type="color" id="trans-color-input" class="color-picker-input" value="#38bdf8">
+        </div>
+        <div class="color-dot-row" data-target="transColor">
+          <span class="color-preset-dot" style="background:#fb7185; color:#fb7185;" data-color="#fb7185" title="樱花粉 (VTuber推荐)"></span>
+          <span class="color-preset-dot" style="background:#38bdf8; color:#38bdf8;" data-color="#38bdf8" title="天蓝色"></span>
+          <span class="color-preset-dot" style="background:#facc15; color:#facc15;" data-color="#facc15" title="明艳黄"></span>
+          <span class="color-preset-dot" style="background:#4ade80; color:#4ade80;" data-color="#4ade80" title="青草绿"></span>
+          <span class="color-preset-dot" style="background:#ffffff; color:#ffffff;" data-color="#ffffff" title="纯白"></span>
+        </div>
+      </div>
+
+      <!-- 原文颜色 -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="orig-color-input">原文字体颜色</label>
+          <input type="color" id="orig-color-input" class="color-picker-input" value="#e2e8f0">
+        </div>
+        <div class="color-dot-row" data-target="origColor">
+          <span class="color-preset-dot" style="background:#e2e8f0; color:#e2e8f0;" data-color="#e2e8f0" title="柔和白"></span>
+          <span class="color-preset-dot" style="background:#fef08a; color:#fef08a;" data-color="#fef08a" title="淡浅黄"></span>
+          <span class="color-preset-dot" style="background:#a5f3fc; color:#a5f3fc;" data-color="#a5f3fc" title="浅天蓝"></span>
+          <span class="color-preset-dot" style="background:#94a3b8; color:#94a3b8;" data-color="#94a3b8" title="素雅灰"></span>
+        </div>
+      </div>
+
+      <!-- AI 深度标识颜色 -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="ai-color-input">
+            <svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">
+              <path d="M24.0002 4L41.3207 34H6.67969L24.0002 4Z"/>
+              <path d="M24.0002 44L41.3207 14H6.67969L24.0002 44Z"/>
+            </svg>
+            AI 深度标识颜色
+          </label>
+          <input type="color" id="ai-color-input" class="color-picker-input" value="#fbbf24">
+        </div>
+        <div class="color-dot-row" data-target="aiIconColor">
+          <span class="color-preset-dot" style="background:#fbbf24; color:#fbbf24;" data-color="#fbbf24" title="琥珀金 (默认)"></span>
+          <span class="color-preset-dot" style="background:#38bdf8; color:#38bdf8;" data-color="#38bdf8" title="天蓝色"></span>
+          <span class="color-preset-dot" style="background:#fb7185; color:#fb7185;" data-color="#fb7185" title="樱花粉"></span>
+          <span class="color-preset-dot" style="background:#4ade80; color:#4ade80;" data-color="#4ade80" title="青草绿"></span>
+          <span class="color-preset-dot" style="background:#c084fc; color:#c084fc;" data-color="#c084fc" title="梦幻紫"></span>
+          <span class="color-preset-dot" style="background:#ffffff; color:#ffffff;" data-color="#ffffff" title="纯白"></span>
+        </div>
+      </div>
+
+      <!-- 背景颜色 -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="bg-color-input">字幕背景颜色</label>
+          <input type="color" id="bg-color-input" class="color-picker-input" value="#0f172a">
+        </div>
+        <div class="color-dot-row" data-target="bgColor">
+          <span class="color-preset-dot" style="background:#0f172a; color:#0f172a;" data-color="#0f172a" title="深空蓝黑"></span>
+          <span class="color-preset-dot" style="background:#000000; color:#000000;" data-color="#000000" title="纯黑"></span>
+          <span class="color-preset-dot" style="background:#1e1b4b; color:#1e1b4b;" data-color="#1e1b4b" title="暗夜紫"></span>
+          <span class="color-preset-dot" style="background:#4c0519; color:#4c0519;" data-color="#4c0519" title="暗酒红"></span>
+          <span class="color-preset-dot checkerboard-dot" data-color="#00000000" title="纯透明无底色"></span>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="font-size">字幕字体大小</label>
+          <span id="font-size-val" class="badge">20 px</span>
+        </div>
+        <input type="range" id="font-size" min="14" max="36" step="1" value="20" class="slider-range">
+      </div>
+
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="bg-opacity">背景黑底不透明度</label>
+          <span id="bg-opacity-val" class="badge">75%</span>
+        </div>
+        <input type="range" id="bg-opacity" min="0" max="100" step="5" value="75" class="slider-range">
+      </div>
+    </div>
+
+    <!-- 底部预览区域 (毛玻璃卡片) -->
+    <div class="preview-section">
+      <div class="preview-header">效果实时预览</div>
+      <div id="preview-box" class="preview-box">
+        <div id="preview-ai" class="preview-ai" title="AI 深度精翻标识预览">
+          <svg width="12" height="12" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M24.0002 4L41.3207 34H6.67969L24.0002 4Z"/>
+            <path d="M24.0002 44L41.3207 14H6.67969L24.0002 44Z"/>
+          </svg>
+        </div>
+        <div id="preview-orig" class="preview-orig">So today we're going to build a browser extension.</div>
+        <div id="preview-trans" class="preview-trans">所以今天我们来构建一个浏览器扩展。</div>
+      </div>
+    </div>
+
+    <footer class="popup-footer">
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.3</span>
+    </footer>
+  </div>
+
+  <script type="module" src="./main.ts"></script>
+</body>
+</html>

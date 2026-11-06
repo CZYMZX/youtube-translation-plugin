@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <!-- 左气泡渐变 (活力青蓝) -->
+    <linearGradient id="bubble-blue" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0284C7"/>
+      <stop offset="100%" stop-color="#0369A1"/>
+    </linearGradient>
+    <!-- 右气泡渐变 (活力珊瑚红/粉) -->
+    <linearGradient id="bubble-coral" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F43F5E"/>
+      <stop offset="100%" stop-color="#E11D48"/>
+    </linearGradient>
+    <filter id="bubble-shadow" x="-10%" y="-10%" width="125%" height="125%">
+      <feDropShadow dx="0" dy="3" stdDeviation="5" flood-color="#0F172A" flood-opacity="0.25"/>
+    </filter>
+  </defs>
+
+  <!-- 浅色/深色自适应外围底板 (柔和暗黑底色，确保各系统栏中均醒目) -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="#0F172A"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#334155" stroke-width="1.5"/>
+
+  <!-- 左上气泡 (蓝色) -->
+  <g filter="url(#bubble-shadow)">
+    <!-- 气泡形状 (圆角矩形 + 底部右侧尖角) -->
+    <path d="M 24 28 C 24 22 28 18 35 18 L 69 18 C 76 18 80 22 80 28 L 80 54 C 80 60 76 64 69 64 L 46 64 L 32 74 L 35 64 L 35 64 C 28 64 24 60 24 54 Z" fill="url(#bubble-blue)"/>
+    <!-- 气泡内 “A” -->
+    <path d="M 52 28 L 41 54 L 47 54 L 49.3 47.5 L 56.7 47.5 L 59 54 L 65 54 Z M 53 35 L 55.4 43 L 50.6 43 Z" fill="#FFFFFF"/>
+  </g>
+
+  <!-- 右下气泡 (珊瑚粉红，在前景) -->
+  <g filter="url(#bubble-shadow)">
+    <!-- 气泡形状 (圆角矩形 + 底部左侧尖角) -->
+    <path d="M 48 56 C 48 50 52 46 59 46 L 93 46 C 100 46 104 50 104 56 L 104 82 C 104 88 100 92 93 92 L 93 102 L 79 92 L 59 92 C 52 92 48 88 48 82 Z" fill="url(#bubble-coral)"/>
+    
+    <!-- 气泡内 “文” -->
+    <!-- 点 -->
+    <path d="M 76 53 C 77.5 53 79 54.5 79 56 C 79 58 76.5 60 74.5 60 C 73 60 72.5 59 73 57 C 73.8 54.5 75 53 76 53 Z" fill="#FFFFFF"/>
+    <!-- 横 -->
+    <rect x="61" y="62" width="30" height="5.5" rx="2.75" fill="#FFFFFF"/>
+    <!-- 撇捺 -->
+    <path d="M 72.5 67 C 72.5 73.5 69.5 80 62.5 84 C 61 85 63 86.5 64.5 85.5 C 71.5 81.5 75.5 75 76.5 67 Z" fill="#FFFFFF"/>
+    <path d="M 67.5 70 C 70.8 74 76 80 84.5 83.5 C 86 84.5 87 82.8 85.5 82 C 78 78.5 73.5 73 70.5 70 Z" fill="#FFFFFF"/>
+  </g>
+</svg>

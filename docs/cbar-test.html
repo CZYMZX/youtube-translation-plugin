@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>播放器控制栏图标尺寸对比</title>
+  <style>
+    body {
+      background: #0f0f0f;
+      color: #f1f5f9;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      padding: 40px;
+    }
+    h2 { margin-bottom: 8px; }
+    p { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+    .cbar-simulator {
+      background: rgba(0, 0, 0, 0.85);
+      backdrop-filter: blur(8px);
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 0 16px;
+      border-radius: 12px;
+      height: 48px;
+      border: 1px solid #27272a;
+    }
+    .ytp-mock-btn {
+      width: 44px;
+      height: 48px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+    /* 模拟沉浸式翻译粉色图标 (左侧) */
+    .immersive-mock {
+      width: 32px;
+      height: 26px;
+      background: linear-gradient(135deg, #e11d48, #fb7185);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      font-weight: bold;
+      color: white;
+    }
+    /* 模拟原生字幕图标 (右侧) */
+    .cc-mock {
+      width: 26px;
+      height: 20px;
+      border: 2px solid #ffffff;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 11px;
+      font-weight: bold;
+      color: white;
+    }
+    /* 模拟设置齿轮图标 */
+    .gear-mock {
+      width: 24px;
+      height: 24px;
+    }
+  </style>
+</head>
+<body>
+  <h2>播放器控制栏对齐效果模拟</h2>
+  <p>红框内为新方案三图标，高度与左侧沉浸式翻译（26px）及右侧 YouTube 字幕 CC（20px）严格水平居中对齐：</p>
+
+  <div class="cbar-simulator">
+    <!-- 模拟沉浸式翻译 (左侧) -->
+    <div class="ytp-mock-btn" title="左侧第三方翻译插件">
+      <div class="immersive-mock">✨A</div>
+    </div>
+
+    <!-- 我们的新方案三图标 (中间) -->
+    <div class="ytp-mock-btn" title="本插件快捷图标 (32px × 25px)">
+      <div style="width: 32px; height: 25px; border-radius: 6px; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+        <svg viewBox="0 0 128 100" style="width: 32px; height: 25px; display: block;" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="cbar-yt-red" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="#FF0033"/>
+              <stop offset="100%" stop-color="#CC0028"/>
+            </linearGradient>
+          </defs>
+          <rect x="3" y="3" width="122" height="94" rx="24" fill="url(#cbar-yt-red)"/>
+          <rect x="4.5" y="4.5" width="119" height="91" rx="22.5" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="2.5"/>
+          <path d="M 28 32 C 28 27.5 32.5 24.8 36.5 27.2 L 58 40 C 61.5 42 61.5 47 58 49 L 36.5 61.8 C 32.5 64.2 28 61.5 28 57 Z" fill="#FFFFFF"/>
+          <rect x="66" y="22" width="50" height="25" rx="6" fill="#FFFFFF" fill-opacity="0.25"/>
+          <path d="M 80 27.5 L 73 41.5 L 76.5 41.5 L 77.8 38 L 82.2 38 L 83.5 41.5 L 87 41.5 Z M 80 31.5 L 81.5 35.5 L 78.5 35.5 Z" fill="#FFFFFF"/>
+          <rect x="90" y="32.5" width="18" height="4" rx="2" fill="#FFFFFF" fill-opacity="0.85"/>
+          <path d="M 87 48.5 L 90 51.5 L 84 51.5 Z" fill="#FFFFFF" opacity="0.95"/>
+          <path d="M 74 51.5 L 71 48.5 L 77 48.5 Z" fill="#FFFFFF" opacity="0.95"/>
+          <rect x="66" y="53" width="50" height="25" rx="6" fill="#FFFFFF"/>
+          <circle cx="78" cy="58" r="2" fill="#CC0028"/>
+          <rect x="71" y="61.5" width="14" height="3" rx="1.5" fill="#CC0028"/>
+          <path d="M 77 64 C 77 67 75.5 70 72 72.5 C 71.2 73 72.2 73.8 73 73.4 C 76.5 71.5 78.5 68 79 64 Z" fill="#CC0028"/>
+          <path d="M 74.5 66 C 76 68.5 78.5 72 82.5 73.5 C 83.2 73.8 83.8 73 83 72.5 C 79.5 71 77.5 68 76 66 Z" fill="#CC0028"/>
+          <rect x="88" y="64" width="18" height="4" rx="2" fill="#CC0028" fill-opacity="0.75"/>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 模拟原生字幕 (右侧) -->
+    <div class="ytp-mock-btn" title="YouTube 原生字幕按钮">
+      <div class="cc-mock">CC</div>
+    </div>
+
+    <!-- 模拟设置齿轮 (右侧) -->
+    <div class="ytp-mock-btn" title="YouTube 原生设置按钮">
+      <svg class="gear-mock" viewBox="0 0 24 24" fill="#ffffff">
+        <path d="M12 15.5A3.5 3.5 0 0 1 8.5 12 3.5 3.5 0 0 1 12 8.5a3.5 3.5 0 0 1 3.5 3.5 3.5 3.5 0 0 1-3.5 3.5m7.43-2.53c.04-.32.07-.64.07-.97 0-.33-.03-.66-.07-1l2.11-1.63c.19-.15.24-.42.12-.64l-2-3.46c-.12-.22-.39-.31-.61-.22l-2.49 1c-.52-.39-1.06-.73-1.69-.98l-.37-2.65A.506.506 0 0 0 13.5 2h-4c-.25 0-.46.18-.5.42l-.37 2.65c-.63.25-1.17.59-1.69.98l-2.49-1c-.22-.09-.49 0-.61.22l-2 3.46c-.13.22-.07.49.12.64L4.57 11c-.04.34-.07.67-.07 1 0 .33.03.65.07.97l-2.11 1.66c-.19.15-.25.42-.12.64l2 3.46c.12.22.39.3.61.22l2.49-1.01c.52.4 1.06.74 1.69.99l.37 2.65c.04.24.25.42.5.42h4c.25 0 .46-.18.5-.42l.37-2.65c.63-.26 1.17-.59 1.69-.99l2.49 1.01c.22.08.49 0 .61-.22l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.66Z"/>
+      </svg>
+    </div>
+  </div>
+</body>
+</html>

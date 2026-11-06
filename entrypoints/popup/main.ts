@@ -1,0 +1,881 @@
+/**
+ * ============================================================================
+ * YouTube 智能字幕断句翻译器 - 扩展弹出设置面板 (Popup Main Controller)
+ * 当前版本: v0.1.0 (跨会话统一基准版)
+ *
+ * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
+ * 1. 翻译服务引擎参数折叠规范：当选择大模型服务（DeepSeek、OpenAI、Gemini）时，
+ *    API Key、Base URL、模型拉取与测试按钮必须收拢在手风琴折叠卡片 (#ai-config-section) 内，
+ *    默认收起，并通过 Badge（已就绪/未配置）与当前模型名显示概览，严禁改回默认完全展开。
+ * 2. 标签页切换防抖与稳定视口：切换标签时调用 window.scrollTo({ top: 0, behavior: 'instant' })，
+ *    配合 style.css 中的 scrollbar-gutter: stable 与 overflow-y: scroll 彻底根除晃动。
+ * 3. 实时响应与去抖同步：persistSettings() 支持防抖与立即写入，实时同步到 chrome.runtime 与本地存储。
+ * ============================================================================
+ */
+
+import { DEFAULT_SETTINGS, type ExtensionSettings } from '../../types';
+import {
+  ICON_PREVIEW_OPEN,
+  ICON_PREVIEW_CLOSE,
+  ICON_REFRESH,
+  ICON_HOURGLASS,
+  ICON_CHECK,
+  ICON_ALERT
+} from '../../utils/icons';
+
+function hexToRgba(hex: string, opacity: number): string {
+  if (!hex || hex === 'transparent' || hex === '#00000000') return 'transparent';
+  let c = hex.replace('#', '');
+  if (c.length === 3) c = c.split('').map((x) => x + x).join('');
+  const num = parseInt(c, 16);
+  if (isNaN(num)) return `rgba(15, 23, 42, ${opacity / 100})`;
+  const r = (num >> 16) & 255;
+  const g = (num >> 8) & 255;
+  const b = num & 255;
+  return `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+}
+
+// DOM 元素引用
+const enabledToggle = document.getElementById('enabled-toggle') as HTMLInputElement;
+const targetLangSelect = document.getElementById('target-lang') as HTMLSelectElement;
+const serviceSelect = document.getElementById('service-select') as HTMLSelectElement;
+
+// 场景与推理
+const scenarioSelect = document.getElementById('scenario-select') as HTMLSelectElement;
+const scenarioBadge = document.getElementById('scenario-badge') as HTMLElement;
+const reasoningSelect = document.getElementById('reasoning-select') as HTMLSelectElement;
+const reasoningBadge = document.getElementById('reasoning-badge') as HTMLElement;
+
+const aiConfigSection = document.getElementById('ai-config-section') as HTMLElement;
+const aiAccordionHeader = document.getElementById('ai-accordion-header') as HTMLButtonElement | null;
+const aiAccordionDesc = document.getElementById('ai-accordion-desc') as HTMLElement | null;
+const aiConfigStatusBadge = document.getElementById('ai-config-status-badge') as HTMLElement | null;
+const apiKeyInput = document.getElementById('api-key') as HTMLInputElement;
+const btnToggleKey = document.getElementById('btn-toggle-key') as HTMLButtonElement;
+const apiBaseUrlInput = document.getElementById('api-base-url') as HTMLInputElement;
+const modelNameInput = document.getElementById('model-name') as HTMLInputElement;
+const modelSelect = document.getElementById('model-select') as HTMLSelectElement;
+const btnFetchModels = document.getElementById('btn-fetch-models') as HTMLButtonElement;
+const fetchModelsStatus = document.getElementById('fetch-models-status') as HTMLElement;
+const btnTestApi = document.getElementById('btn-test-api') as HTMLButtonElement;
+const testStatus = document.getElementById('test-status') as HTMLElement;
+
+const autoHideNativeCheck = document.getElementById('auto-hide-native') as HTMLInputElement;
+const autoFallbackToggle = document.getElementById('auto-fallback-toggle') as HTMLInputElement;
+
+// 断句参数
+const pauseThresholdRange = document.getElementById('pause-threshold') as HTMLInputElement;
+const pauseThresholdVal = document.getElementById('pause-threshold-val') as HTMLElement;
+const maxWordsRange = document.getElementById('max-words') as HTMLInputElement;
+const maxWordsVal = document.getElementById('max-words-val') as HTMLElement;
+const autoPunctuationCheck = document.getElementById('auto-punctuation') as HTMLInputElement;
+
+// 样式排版与颜色
+const displayModeSelect = document.getElementById('display-mode') as HTMLSelectElement;
+const layoutOrderSelect = document.getElementById('layout-order') as HTMLSelectElement;
+const transColorInput = document.getElementById('trans-color-input') as HTMLInputElement;
+const origColorInput = document.getElementById('orig-color-input') as HTMLInputElement;
+const bgColorInput = document.getElementById('bg-color-input') as HTMLInputElement;
+const aiColorInput = document.getElementById('ai-color-input') as HTMLInputElement;
+const fontSizeRange = document.getElementById('font-size') as HTMLInputElement;
+const fontSizeVal = document.getElementById('font-size-val') as HTMLElement;
+const bgOpacityRange = document.getElementById('bg-opacity') as HTMLInputElement;
+const bgOpacityVal = document.getElementById('bg-opacity-val') as HTMLElement;
+
+// 预览元素
+const previewBox = document.getElementById('preview-box') as HTMLElement;
+const previewOrig = document.getElementById('preview-orig') as HTMLElement;
+const previewTrans = document.getElementById('preview-trans') as HTMLElement;
+const previewAi = document.getElementById('preview-ai') as HTMLElement;
+
+const networkAlert = document.getElementById('network-alert') as HTMLElement;
+const networkAlertText = document.getElementById('network-alert-text') as HTMLElement;
+
+let currentSettings: ExtensionSettings = { ...DEFAULT_SETTINGS };
+
+// 初始化
+document.addEventListener('DOMContentLoaded', async () => {
+  setupTabs();
+  setupSmoothSwitchers();
+  await loadSettings();
+  bindEvents();
+  updatePreview();
+  checkTranslationConnectivity();
+});
+
+/**
+ * 检测当前网络是否支持 Google 翻译
+ */
+function checkTranslationConnectivity() {
+  if (currentSettings.service === 'google') {
+    chrome.runtime.sendMessage({ type: 'CHECK_GOOGLE_TRANSLATE_CONNECTION' }, (res) => {
+      if (res && res.canConnect === false) {
+        if (networkAlert) {
+          networkAlert.classList.remove('hidden');
+          if (networkAlertText) {
+            networkAlertText.textContent = '当前网络无法直连 Google 免费翻译接口，建议开启科学代理或在下方切换为 DeepSeek / Gemini / OpenAI 翻译。';
+          }
+        }
+      } else {
+        if (networkAlert) {
+          networkAlert.classList.add('hidden');
+        }
+      }
+    });
+  } else {
+    if (networkAlert) {
+      networkAlert.classList.add('hidden');
+    }
+  }
+}
+
+/**
+ * 标签页切换逻辑 (带弹性吸附滑块)
+ */
+function setupTabs() {
+  const tabsContainer = document.getElementById('main-tabs') as HTMLElement | null;
+  const tabBtns = document.querySelectorAll('.tab-btn');
+  const tabContents = document.querySelectorAll('.tab-content');
+
+  tabBtns.forEach((btn, index) => {
+    btn.addEventListener('click', () => {
+      tabBtns.forEach((b) => b.classList.remove('active'));
+      tabContents.forEach((c) => c.classList.remove('active'));
+
+      btn.classList.add('active');
+      if (tabsContainer) {
+        tabsContainer.style.setProperty('--tab-active-index', String(index));
+      }
+      const tabId = btn.getAttribute('data-tab');
+      const targetContent = document.getElementById(`tab-${tabId}`);
+      if (targetContent) {
+        targetContent.classList.add('active');
+      }
+      // 切换标签页时平滑重置滚动位置到顶部
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    });
+  });
+}
+
+/**
+ * 设置平滑选项切换器 (Smooth Option Switcher)
+ */
+function setupSmoothSwitchers() {
+  const switchers = document.querySelectorAll('.smooth-switcher');
+  switchers.forEach((switcher) => {
+    const targetId = switcher.getAttribute('data-target');
+    const items = switcher.querySelectorAll('.switcher-item');
+    const count = switcher.getAttribute('data-count') || String(items.length);
+    (switcher as HTMLElement).style.setProperty('--count', count);
+
+    items.forEach((item, index) => {
+      item.addEventListener('click', () => {
+        items.forEach((it) => it.classList.remove('active'));
+        item.classList.add('active');
+        (switcher as HTMLElement).style.setProperty('--active-index', String(index));
+
+        if (targetId) {
+          const targetSelect = document.getElementById(targetId) as HTMLSelectElement | null;
+          const val = item.getAttribute('data-value');
+          if (targetSelect && val) {
+            targetSelect.value = val;
+            targetSelect.dispatchEvent(new Event('change'));
+          }
+        }
+      });
+    });
+  });
+}
+
+/**
+ * 根据 select 当前值同步平滑切换器的滑块位置
+ */
+function syncSmoothSwitchers() {
+  const switchers = document.querySelectorAll('.smooth-switcher');
+  switchers.forEach((switcher) => {
+    const targetId = switcher.getAttribute('data-target');
+    if (!targetId) return;
+    const targetSelect = document.getElementById(targetId) as HTMLSelectElement | null;
+    if (!targetSelect) return;
+    const currentVal = targetSelect.value;
+    const items = Array.from(switcher.querySelectorAll('.switcher-item'));
+    const count = switcher.getAttribute('data-count') || String(items.length);
+    (switcher as HTMLElement).style.setProperty('--count', count);
+
+    const matchedIndex = items.findIndex((it) => it.getAttribute('data-value') === currentVal);
+    if (matchedIndex !== -1) {
+      items.forEach((it) => it.classList.remove('active'));
+      items[matchedIndex].classList.add('active');
+      (switcher as HTMLElement).style.setProperty('--active-index', String(matchedIndex));
+    }
+  });
+}
+
+/**
+ * 从 Background 或 Storage 加载设置
+ */
+async function loadSettings() {
+  return new Promise<void>((resolve) => {
+    chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (res) => {
+      if (res && res.success && res.settings) {
+        currentSettings = { ...DEFAULT_SETTINGS, ...res.settings };
+      }
+      populateForm();
+      resolve();
+    });
+  });
+}
+
+/**
+ * 各服务商默认/推荐模型预设
+ */
+const PRESET_MODELS: Record<string, Array<{ id: string; name?: string }>> = {
+  deepseek: [
+    { id: 'deepseek-chat', name: 'DeepSeek-V3 / Chat (推荐)' },
+    { id: 'deepseek-reasoner', name: 'DeepSeek-R1 / Reasoner (深度推理)' }
+  ],
+  openai: [
+    { id: 'gpt-4o-mini', name: 'GPT-4o mini (快速轻巧)' },
+    { id: 'gpt-4o', name: 'GPT-4o (旗舰全能)' },
+    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Antigravity推荐)' },
+    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite (极速低延迟)' },
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (高质)' }
+  ],
+  gemini: [
+    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (快速推荐)' },
+    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (深度分析)' },
+    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash (实验版)' }
+  ]
+};
+
+/**
+ * 渲染模型下拉选项
+ */
+function renderModelOptions(models: Array<{ id: string; name?: string }>, selectedModel?: string) {
+  if (!modelSelect) return;
+  modelSelect.innerHTML = '';
+
+  const defaultOpt = document.createElement('option');
+  defaultOpt.value = '';
+  defaultOpt.textContent = `-- 可选模型列表 (${models.length} 个) --`;
+  modelSelect.appendChild(defaultOpt);
+
+  let matched = false;
+  const currentVal = selectedModel !== undefined ? selectedModel : modelNameInput.value.trim();
+
+  models.forEach((m) => {
+    const opt = document.createElement('option');
+    opt.value = m.id;
+    opt.textContent = m.name && m.name !== m.id ? `${m.name} [${m.id}]` : m.id;
+    if (m.id === currentVal) {
+      opt.selected = true;
+      matched = true;
+    }
+    modelSelect.appendChild(opt);
+  });
+
+  // 若当前设定的模型不在返回列表里，保留作为单独选项
+  if (currentVal && !matched) {
+    const customOpt = document.createElement('option');
+    customOpt.value = currentVal;
+    customOpt.textContent = `当前设置: ${currentVal}`;
+    customOpt.selected = true;
+    modelSelect.appendChild(customOpt);
+  }
+
+  const manualOpt = document.createElement('option');
+  manualOpt.value = '__custom__';
+  manualOpt.textContent = '手动输入其它自定义模型...';
+  modelSelect.appendChild(manualOpt);
+}
+
+/**
+ * 加载当前服务商的模型选项（优先读取缓存，否则读取预设）
+ */
+function loadModelOptionsForCurrentService(selectedModel?: string) {
+  const service = serviceSelect.value;
+  if (service === 'google') return;
+
+  chrome.storage.local.get([`cached_models_${service}`], (result) => {
+    const cached = result[`cached_models_${service}`];
+    if (Array.isArray(cached) && cached.length > 0) {
+      renderModelOptions(cached, selectedModel);
+    } else {
+      renderModelOptions(PRESET_MODELS[service] || [], selectedModel);
+    }
+  });
+}
+
+/**
+ * 将配置填入表单控件
+ */
+function populateForm() {
+  enabledToggle.checked = currentSettings.enabled;
+  targetLangSelect.value = currentSettings.targetLang;
+  serviceSelect.value = currentSettings.service;
+
+  scenarioSelect.value = currentSettings.scenario || 'vtuber';
+  updateScenarioBadge();
+
+  reasoningSelect.value = currentSettings.reasoningEffort || 'low';
+  updateReasoningBadge();
+
+  apiKeyInput.value = currentSettings.apiKey || '';
+  apiBaseUrlInput.value = currentSettings.apiBaseUrl || '';
+  modelNameInput.value = currentSettings.modelName || '';
+  loadModelOptionsForCurrentService(currentSettings.modelName || '');
+  autoHideNativeCheck.checked = currentSettings.autoHideNativeSubtitles;
+  if (autoFallbackToggle) {
+    autoFallbackToggle.checked = currentSettings.autoFallbackToGoogle !== false;
+  }
+
+  pauseThresholdRange.value = String(currentSettings.pauseThreshold);
+  pauseThresholdVal.textContent = `${currentSettings.pauseThreshold} ms`;
+
+  maxWordsRange.value = String(currentSettings.maxWordsPerSentence);
+  maxWordsVal.textContent = `${currentSettings.maxWordsPerSentence} 词`;
+
+  autoPunctuationCheck.checked = currentSettings.autoPunctuation;
+
+  displayModeSelect.value = currentSettings.displayMode;
+  layoutOrderSelect.value = currentSettings.layoutOrder;
+
+  transColorInput.value = currentSettings.transColor || '#38bdf8';
+  origColorInput.value = currentSettings.origColor || '#e2e8f0';
+  bgColorInput.value = currentSettings.bgColor || '#0f172a';
+  if (aiColorInput) aiColorInput.value = currentSettings.aiIconColor || '#fbbf24';
+
+  fontSizeRange.value = String(currentSettings.fontSize);
+  fontSizeVal.textContent = `${currentSettings.fontSize} px`;
+
+  bgOpacityRange.value = String(currentSettings.bgOpacity);
+  bgOpacityVal.textContent = `${currentSettings.bgOpacity}%`;
+
+  toggleAiSectionVisibility();
+  syncSmoothSwitchers();
+  updateColorDotActiveStates();
+}
+
+/**
+ * 更新颜色预设圆点的高亮选中态
+ */
+function updateColorDotActiveStates() {
+  const dots = document.querySelectorAll('.color-preset-dot');
+  dots.forEach((dot) => {
+    const targetType = dot.parentElement?.getAttribute('data-target');
+    const color = dot.getAttribute('data-color')?.toLowerCase();
+    if (!targetType || !color) return;
+
+    let currentColor = '';
+    if (targetType === 'transColor') currentColor = currentSettings.transColor.toLowerCase();
+    else if (targetType === 'origColor') currentColor = currentSettings.origColor.toLowerCase();
+    else if (targetType === 'bgColor') currentColor = currentSettings.bgColor.toLowerCase();
+    else if (targetType === 'aiIconColor') currentColor = (currentSettings.aiIconColor || '#fbbf24').toLowerCase();
+
+    if (currentColor === color) {
+      dot.classList.add('active');
+    } else {
+      dot.classList.remove('active');
+    }
+  });
+}
+
+function updateScenarioBadge() {
+  if (!scenarioBadge) return;
+  if (scenarioSelect.value === 'vtuber') {
+    scenarioBadge.textContent = '二次元熟肉';
+    scenarioBadge.className = 'badge badge-accent';
+  } else {
+    scenarioBadge.textContent = '通用口语';
+    scenarioBadge.className = 'badge';
+  }
+}
+
+function updateReasoningBadge() {
+  if (!reasoningBadge) return;
+  const val = reasoningSelect.value;
+  if (val === 'high') {
+    reasoningBadge.textContent = '深度推理';
+    reasoningBadge.className = 'badge badge-accent';
+  } else if (val === 'low') {
+    reasoningBadge.textContent = '轻度推理';
+    reasoningBadge.className = 'badge';
+  } else {
+    reasoningBadge.textContent = '极速模式';
+    reasoningBadge.className = 'badge';
+  }
+}
+
+/**
+ * 切换 AI 配置选项卡显示与隐藏
+ */
+function toggleAiSectionVisibility() {
+  const service = serviceSelect.value;
+  if (service === 'google') {
+    aiConfigSection.classList.add('hidden');
+  } else {
+    aiConfigSection.classList.remove('hidden');
+
+    if (service === 'deepseek') {
+      apiBaseUrlInput.placeholder = 'https://api.deepseek.com/v1';
+      modelNameInput.placeholder = 'deepseek-chat';
+    } else if (service === 'openai') {
+      apiBaseUrlInput.placeholder = 'https://api.openai.com/v1';
+      modelNameInput.placeholder = 'gpt-4o-mini';
+    } else if (service === 'gemini') {
+      apiBaseUrlInput.placeholder = '（Gemini 使用官方 SDK 端点）';
+      modelNameInput.placeholder = 'gemini-1.5-flash';
+    }
+    updateAiAccordionState();
+  }
+}
+
+/**
+ * 【v0.1.0 改动注释：动态刷新 AI 配置手风琴卡片状态徽标与描述】
+ * 当折叠收起时，用户无需点开卡片即可快速获知当前引擎参数状态：
+ * 1. 是否已填入 API Key（徽标显示「已就绪」/「未配置」）；
+ * 2. 当前生效的目标模型名称（如「当前模型: gemini-3.5-flash-lite」）。
+ */
+function updateAiAccordionState() {
+  const service = serviceSelect.value;
+  if (service === 'google') return;
+
+  const hasKey = !!apiKeyInput.value.trim();
+  const model = modelNameInput.value.trim();
+
+  if (aiConfigStatusBadge) {
+    if (hasKey) {
+      aiConfigStatusBadge.textContent = '已就绪';
+      aiConfigStatusBadge.className = 'badge badge-accent';
+    } else {
+      aiConfigStatusBadge.textContent = '未配置';
+      aiConfigStatusBadge.className = 'badge';
+    }
+  }
+
+  if (aiAccordionDesc) {
+    if (model) {
+      aiAccordionDesc.textContent = `当前模型: ${model}`;
+    } else {
+      aiAccordionDesc.textContent = '点击展开配置 Key 与模型参数';
+    }
+  }
+}
+
+/**
+ * 实时同步保存配置
+ */
+let saveTimer: any = null;
+function persistSettings(immediate = false) {
+  currentSettings = {
+    enabled: enabledToggle.checked,
+    targetLang: targetLangSelect.value,
+    service: serviceSelect.value as any,
+    scenario: scenarioSelect.value as any,
+    reasoningEffort: reasoningSelect.value as any,
+    apiKey: apiKeyInput.value.trim(),
+    apiBaseUrl: apiBaseUrlInput.value.trim(),
+    modelName: modelNameInput.value.trim(),
+    autoHideNativeSubtitles: autoHideNativeCheck.checked,
+    autoFallbackToGoogle: autoFallbackToggle ? autoFallbackToggle.checked : true,
+    pauseThreshold: parseInt(pauseThresholdRange.value, 10),
+    maxWordsPerSentence: parseInt(maxWordsRange.value, 10),
+    minWordsPerSentence: currentSettings.minWordsPerSentence,
+    maxDurationMs: currentSettings.maxDurationMs,
+    autoPunctuation: autoPunctuationCheck.checked,
+    displayMode: displayModeSelect.value as any,
+    layoutOrder: layoutOrderSelect.value as any,
+    transColor: transColorInput.value,
+    origColor: origColorInput.value,
+    bgColor: bgColorInput.value,
+    aiIconColor: aiColorInput ? aiColorInput.value : currentSettings.aiIconColor || '#fbbf24',
+    fontSize: parseInt(fontSizeRange.value, 10),
+    bgOpacity: parseInt(bgOpacityRange.value, 10),
+    offsetY: currentSettings.offsetY,
+    syncOffsetMs: currentSettings.syncOffsetMs || 0
+  };
+
+  updateScenarioBadge();
+  updateReasoningBadge();
+  updateAiAccordionState();
+  updatePreview();
+
+  const doSave = () => {
+    chrome.runtime.sendMessage({
+      type: 'SAVE_SETTINGS',
+      payload: currentSettings
+    });
+  };
+
+  if (immediate) {
+    clearTimeout(saveTimer);
+    doSave();
+  } else {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(doSave, 250);
+  }
+}
+
+/**
+ * 绑定所有控件事件
+ */
+function bindEvents() {
+  enabledToggle.addEventListener('change', () => persistSettings(true));
+  targetLangSelect.addEventListener('change', () => persistSettings(true));
+  if (autoFallbackToggle) {
+    autoFallbackToggle.addEventListener('change', () => persistSettings(true));
+  }
+
+  scenarioSelect.addEventListener('change', () => persistSettings(true));
+  reasoningSelect.addEventListener('change', () => persistSettings(true));
+
+  serviceSelect.addEventListener('change', () => {
+    toggleAiSectionVisibility();
+    loadModelOptionsForCurrentService();
+    if (fetchModelsStatus) {
+      fetchModelsStatus.textContent = '';
+      fetchModelsStatus.className = 'sub-status-msg';
+    }
+    persistSettings(true);
+    checkTranslationConnectivity();
+  });
+
+  if (aiAccordionHeader) {
+    aiAccordionHeader.addEventListener('click', (e) => {
+      e.preventDefault();
+      aiConfigSection.classList.toggle('expanded');
+    });
+  }
+
+  apiKeyInput.addEventListener('input', () => persistSettings());
+  apiBaseUrlInput.addEventListener('input', () => persistSettings());
+
+  if (modelSelect) {
+    modelSelect.addEventListener('change', () => {
+      const val = modelSelect.value;
+      if (val === '__custom__') {
+        modelNameInput.focus();
+        modelNameInput.select();
+      } else if (val) {
+        modelNameInput.value = val;
+        persistSettings(true);
+      }
+    });
+  }
+
+  modelNameInput.addEventListener('input', () => {
+    const val = modelNameInput.value.trim();
+    let found = false;
+    for (let i = 0; i < modelSelect.options.length; i++) {
+      if (modelSelect.options[i].value === val) {
+        modelSelect.selectedIndex = i;
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      modelSelect.value = '__custom__';
+    }
+    persistSettings();
+  });
+
+  if (btnFetchModels) {
+    btnFetchModels.addEventListener('click', () => fetchModelsFromApi());
+  }
+
+  autoHideNativeCheck.addEventListener('change', () => persistSettings(true));
+
+  // 断句
+  pauseThresholdRange.addEventListener('input', () => {
+    pauseThresholdVal.textContent = `${pauseThresholdRange.value} ms`;
+    persistSettings();
+  });
+
+  maxWordsRange.addEventListener('input', () => {
+    maxWordsVal.textContent = `${maxWordsRange.value} 词`;
+    persistSettings();
+  });
+
+  autoPunctuationCheck.addEventListener('change', () => persistSettings(true));
+
+  // 样式与颜色
+  displayModeSelect.addEventListener('change', () => persistSettings(true));
+  layoutOrderSelect.addEventListener('change', () => persistSettings(true));
+
+  transColorInput.addEventListener('input', () => persistSettings());
+  origColorInput.addEventListener('input', () => persistSettings());
+  bgColorInput.addEventListener('input', () => persistSettings());
+  aiColorInput?.addEventListener('input', () => persistSettings());
+
+  // 快捷色块点击
+  const colorPresetDots = document.querySelectorAll('.color-preset-dot');
+  colorPresetDots.forEach((dot) => {
+    dot.addEventListener('click', () => {
+      const targetType = dot.parentElement?.getAttribute('data-target');
+      const color = dot.getAttribute('data-color');
+      if (!targetType || !color) return;
+
+      if (targetType === 'transColor') {
+        transColorInput.value = color;
+        persistSettings(true);
+      } else if (targetType === 'origColor') {
+        origColorInput.value = color;
+        persistSettings(true);
+      } else if (targetType === 'bgColor') {
+        if (color !== '#00000000') bgColorInput.value = color;
+        currentSettings.bgColor = color;
+        persistSettings(true);
+      } else if (targetType === 'aiIconColor') {
+        if (aiColorInput) aiColorInput.value = color;
+        currentSettings.aiIconColor = color;
+        persistSettings(true);
+      }
+      updateColorDotActiveStates();
+    });
+  });
+
+  fontSizeRange.addEventListener('input', () => {
+    fontSizeVal.textContent = `${fontSizeRange.value} px`;
+    persistSettings();
+  });
+
+  bgOpacityRange.addEventListener('input', () => {
+    bgOpacityVal.textContent = `${bgOpacityRange.value}%`;
+    persistSettings();
+  });
+
+  btnToggleKey.addEventListener('click', () => {
+    if (apiKeyInput.type === 'password') {
+      apiKeyInput.type = 'text';
+      btnToggleKey.innerHTML = `<span style="display:inline-flex;width:14px;height:14px;align-items:center;">${ICON_PREVIEW_CLOSE}</span>`;
+    } else {
+      apiKeyInput.type = 'password';
+      btnToggleKey.innerHTML = `<span style="display:inline-flex;width:14px;height:14px;align-items:center;">${ICON_PREVIEW_OPEN}</span>`;
+    }
+  });
+
+  btnTestApi.addEventListener('click', handleTestApi);
+}
+
+/**
+ * 从 API 接口获取可用模型列表
+ */
+async function fetchModelsFromApi() {
+  const service = serviceSelect.value;
+  const apiKey = apiKeyInput.value.trim();
+  const apiBaseUrl = apiBaseUrlInput.value.trim();
+
+  if (!apiKey && service !== 'google') {
+    if (fetchModelsStatus) {
+      fetchModelsStatus.className = 'sub-status-msg error';
+      fetchModelsStatus.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;margin-right:4px;vertical-align:-1px;">${ICON_ALERT}</span>请先在上方填入 API Key 再点击获取模型`;
+    }
+    apiKeyInput.focus();
+    return;
+  }
+
+  if (btnFetchModels) {
+    btnFetchModels.disabled = true;
+    btnFetchModels.innerHTML = `<span class="hourglass-flip-anim" style="display:inline-flex;width:12px;height:12px;margin-right:4px;">${ICON_HOURGLASS}</span>拉取中...`;
+  }
+  if (fetchModelsStatus) {
+    fetchModelsStatus.className = 'sub-status-msg loading';
+    fetchModelsStatus.textContent = '正在通过接口获取可用模型列表...';
+  }
+
+  const querySettings: ExtensionSettings = {
+    ...currentSettings,
+    service: service as any,
+    apiKey,
+    apiBaseUrl
+  };
+
+  chrome.runtime.sendMessage(
+    {
+      type: 'FETCH_MODELS',
+      payload: { settings: querySettings }
+    },
+    (res) => {
+      if (btnFetchModels) {
+        btnFetchModels.disabled = false;
+        btnFetchModels.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;align-items:center;margin-right:3px;">${ICON_REFRESH}</span>从 API 获取模型`;
+      }
+
+      if (res && res.success && Array.isArray(res.models) && res.models.length > 0) {
+        if (fetchModelsStatus) {
+          fetchModelsStatus.className = 'sub-status-msg success';
+          fetchModelsStatus.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;margin-right:4px;vertical-align:-1px;">${ICON_CHECK}</span>成功获取到 ${res.models.length} 个可用模型！`;
+        }
+
+        // 缓存到 local storage
+        chrome.storage.local.set({ [`cached_models_${service}`]: res.models });
+
+        // 重新渲染下拉列表
+        renderModelOptions(res.models, modelNameInput.value.trim());
+
+        // 如果目前未指定模型名称，自动推荐选中第一个
+        if (!modelNameInput.value.trim()) {
+          const first = res.models[0].id;
+          modelSelect.value = first;
+          modelNameInput.value = first;
+          persistSettings(true);
+        }
+      } else {
+        if (fetchModelsStatus) {
+          fetchModelsStatus.className = 'sub-status-msg error';
+          fetchModelsStatus.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;margin-right:4px;vertical-align:-1px;">${ICON_ALERT}</span>获取失败: ${res?.error || '接口未返回模型列表'}`;
+        }
+      }
+    }
+  );
+}
+
+/**
+ * 测试连接翻译服务与响应延迟
+ */
+async function handleTestApi() {
+  const latencyBadge = document.getElementById('test-latency-badge') as HTMLElement;
+  testStatus.className = 'status-msg';
+  testStatus.textContent = '正在发起请求并测试往返延迟...';
+  if (latencyBadge) {
+    latencyBadge.className = 'latency-badge hidden';
+    latencyBadge.textContent = '';
+  }
+  btnTestApi.disabled = true;
+  btnTestApi.textContent = '测试中...';
+
+  persistSettings(true);
+
+  const testSample = currentSettings.scenario === 'vtuber'
+    ? ["Wait, chat, did you see that?! That was totally yabai www!"]
+    : ["Hello! We are testing YouTube subtitle translation."];
+
+  const startTime = performance.now();
+
+  chrome.runtime.sendMessage(
+    {
+      type: 'TRANSLATE_BATCH',
+      payload: {
+        texts: testSample,
+        targetLang: currentSettings.targetLang,
+        settings: currentSettings,
+        noFallback: true,   // 关键：测试连接严禁自动回退到谷歌翻译！必须真实验证当前端点
+        bypassCache: true   // 关键：测试连接必须跳过缓存，进行真实的网络端点探测！
+      }
+    },
+    (res) => {
+      const latencyMs = Math.round(performance.now() - startTime);
+      btnTestApi.disabled = false;
+      btnTestApi.textContent = '测试连接与延迟';
+
+      if (latencyBadge) {
+        latencyBadge.classList.remove('hidden');
+        latencyBadge.textContent = `${latencyMs} ms`;
+        if (latencyMs < 600) {
+          latencyBadge.className = 'latency-badge latency-fast';
+          latencyBadge.title = `响应耗时: ${latencyMs}ms (极速，字幕秒级跟随)`;
+        } else if (latencyMs < 1800) {
+          latencyBadge.className = 'latency-badge latency-medium';
+          latencyBadge.title = `响应耗时: ${latencyMs}ms (良好，滑动窗口预取无卡顿)`;
+        } else {
+          latencyBadge.className = 'latency-badge latency-slow';
+          latencyBadge.title = `响应耗时: ${latencyMs}ms (较慢，大模型深度推理或中转网络延迟)`;
+        }
+      }
+
+      if (res && res.success && res.translations && res.translations.length > 0) {
+        testStatus.className = 'status-msg success';
+        let serviceLabel = 'Google 翻译';
+        if (currentSettings.service === 'openai') {
+          serviceLabel = `OpenAI代理 [${currentSettings.modelName?.trim() || 'gpt-4o-mini'}]`;
+        } else if (currentSettings.service === 'deepseek') {
+          serviceLabel = `DeepSeek [${currentSettings.modelName?.trim() || 'deepseek-chat'}]`;
+        } else if (currentSettings.service === 'gemini') {
+          serviceLabel = `Gemini [${currentSettings.modelName?.trim() || 'gemini-1.5-flash'}]`;
+        }
+        testStatus.innerHTML = `<span style="display:inline-flex;width:13px;height:13px;margin-right:4px;vertical-align:-1.5px;color:#ffffff;">${ICON_CHECK}</span>连通正常 (${serviceLabel}) · 耗时 ${latencyMs}ms：<br/><span style="opacity:0.85;">"${res.translations[0]}"</span>`;
+      } else {
+        testStatus.className = 'status-msg error';
+        if (latencyBadge) {
+          latencyBadge.className = 'latency-badge latency-error';
+          latencyBadge.textContent = `异常 (${latencyMs}ms)`;
+        }
+        testStatus.innerHTML = `<span style="display:inline-flex;width:13px;height:13px;margin-right:4px;vertical-align:-1.5px;color:#ef4444;">${ICON_ALERT}</span>连接失败 (耗时 ${latencyMs}ms)：${res?.error || '请求未响应'}`;
+      }
+    }
+  );
+}
+
+/**
+ * 实时更新预览效果
+ */
+function updatePreview() {
+  const {
+    fontSize,
+    bgOpacity,
+    displayMode,
+    layoutOrder,
+    scenario,
+    reasoningEffort,
+    bgColor = '#0f172a',
+    origColor = '#e2e8f0',
+    transColor = '#38bdf8',
+    aiIconColor = '#fbbf24'
+  } = currentSettings;
+
+  previewBox.style.backgroundColor = hexToRgba(bgColor, bgOpacity);
+  if (previewAi) {
+    previewAi.style.color = aiIconColor;
+  }
+
+  previewOrig.style.textShadow = '0 0 2px #000, 0 0 4px #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 5px rgba(0,0,0,0.9)';
+  previewTrans.style.textShadow = '0 0 2px #000, 0 0 4px #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000, 0 2px 5px rgba(0,0,0,0.9)';
+
+  previewOrig.style.color = origColor;
+  previewTrans.style.color = transColor;
+
+  if (layoutOrder === 'translation_top') {
+    previewTrans.style.fontSize = `${fontSize}px`;
+    previewTrans.style.fontWeight = '600';
+    previewOrig.style.fontSize = `${Math.round(fontSize * 0.8)}px`;
+    previewOrig.style.fontWeight = '500';
+    previewOrig.style.opacity = '0.92';
+  } else {
+    previewOrig.style.fontSize = `${fontSize}px`;
+    previewOrig.style.fontWeight = '600';
+    previewTrans.style.fontSize = `${Math.round(fontSize * 0.88)}px`;
+    previewTrans.style.fontWeight = '500';
+    previewOrig.style.opacity = '1';
+  }
+
+  if (scenario === 'vtuber') {
+    previewOrig.textContent = 'Wait, chat, did you see that?! That was totally yabai www!';
+    if (reasoningEffort === 'high') {
+      previewTrans.textContent = '等等弹幕区的大家，刚才你们看到了吗？！这也太牙白了吧笑死www！';
+    } else if (reasoningEffort === 'low') {
+      previewTrans.textContent = '等等观众们，看到了吗？！这真的太糟了草www！';
+    } else {
+      previewTrans.textContent = '等等聊天室，你们看见那个了吗？太糟糕了哈哈哈！';
+    }
+  } else {
+    previewOrig.textContent = "So today we're going to build a browser extension.";
+    previewTrans.textContent = '所以今天我们来构建一个浏览器扩展。';
+  }
+
+  if (displayMode === 'translation_only') {
+    previewOrig.style.display = 'none';
+    previewTrans.style.display = 'block';
+  } else if (displayMode === 'original_only') {
+    previewOrig.style.display = 'block';
+    previewTrans.style.display = 'none';
+  } else {
+    previewOrig.style.display = 'block';
+    previewTrans.style.display = 'block';
+  }
+
+  if (layoutOrder === 'translation_top') {
+    previewBox.style.flexDirection = 'column-reverse';
+  } else {
+    previewBox.style.flexDirection = 'column';
+  }
+}

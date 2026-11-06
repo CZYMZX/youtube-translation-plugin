@@ -1,0 +1,913 @@
+/**
+ * ============================================================================
+ * YouTube 智能字幕断句翻译器 - 扩展弹窗全局样式 (Popup Stylesheet)
+ * 当前版本: v0.1.0 (跨会话统一基准版)
+ *
+ * 【v0.1.0 关键样式准则（跨会话统一守则）】：
+ * 1. 绝对消除 Tab 切换时的左右位移（Scrollbar Layout Shift）：
+ *    - 在 html 与 body 上强制注入 scrollbar-gutter: stable;
+ *    - 强制 body 保持 overflow-y: scroll;（常驻 5px 细滚动条槽位）；
+ *    - 无论当前 Tab 内容长度如何，右侧可用内容宽度永远分毫不变，彻底消除跳跃。
+ * 2. 纯净黑白毛玻璃规范：
+ *    - 移除早期测试残留的彩色主题，主面板一律使用黑白毛玻璃与半透明边框；
+ *    - 保留字母/颜色自定调节能力。
+ * ============================================================================
+ */
+
+:root {
+  --bg-primary: #0e0f12;
+  --bg-secondary: rgba(255, 255, 255, 0.04);
+  --bg-card: rgba(255, 255, 255, 0.045);
+  --bg-card-hover: rgba(255, 255, 255, 0.075);
+  --border-glass: rgba(255, 255, 255, 0.09);
+  --border-glass-bright: rgba(255, 255, 255, 0.2);
+  --border-glass-glow: rgba(255, 255, 255, 0.3);
+  
+  --accent: #ffffff;
+  --accent-rgb: 255, 255, 255;
+  --accent-pink: #d4d4d8;
+  --accent-pink-rgb: 212, 212, 216;
+  --accent-gradient: linear-gradient(135deg, #ffffff 0%, #a1a1aa 100%);
+  --accent-hover: #f4f4f5;
+  
+  --text-main: #ffffff;
+  --text-muted: #a1a1aa;
+  --text-dim: #71717a;
+  
+  --radius-lg: 14px;
+  --radius-md: 10px;
+  --radius-sm: 6px;
+  --radius-pill: 999px;
+  
+  /* 弹性吸附缓动曲线 (来自 smooth-option-switcher) */
+  --ease-elastic: cubic-bezier(0.34, 0.96, 0.6, 0.99);
+  --transition-fast: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  width: 380px;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+html {
+  background-color: var(--bg-primary);
+}
+
+body {
+  min-height: 480px;
+  overflow-y: scroll;
+  background-color: var(--bg-primary);
+  /* 极致纯净黑白微弱环境光晕，为毛玻璃折射提供深邃黑白层次 */
+  background-image: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.07) 0%, transparent 65%);
+  background-attachment: fixed;
+  color: var(--text-main);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 统一精致极简滚动条 (同时作用于 html 与 body，槽位永远恒定，彻底消除切换Tab时的左右抖动) */
+html::-webkit-scrollbar,
+body::-webkit-scrollbar {
+  width: 5px;
+}
+
+html::-webkit-scrollbar-track,
+body::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+html::-webkit-scrollbar-thumb,
+body::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.16);
+  border-radius: 999px;
+}
+
+html::-webkit-scrollbar-thumb:hover,
+body::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.32);
+}
+
+.popup-container {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 16px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  position: relative;
+}
+
+/* ==========================================================================
+   1. 头部区域 (Glass Header)
+   ========================================================================== */
+.popup-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border-glass);
+  position: relative;
+}
+
+.header-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.header-logo-icon {
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: transform var(--transition-fast);
+}
+
+.header-logo-icon:hover {
+  transform: scale(1.06);
+}
+
+.title-text h1 {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  color: #ffffff;
+  display: inline-block;
+  line-height: 1.2;
+}
+
+.title-text p {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+/* ==========================================================================
+   2. 磨砂质感开关 Toggle (Jelly Glass Switch)
+   ========================================================================== */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid var(--border-glass);
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  transition: var(--transition-fast);
+  border-radius: var(--radius-pill);
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 18px;
+  width: 18px;
+  left: 2px;
+  bottom: 2px;
+  background: #ffffff;
+  border-radius: 50%;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4), inset 0 1px 1px rgba(255, 255, 255, 0.8);
+  transition: transform 0.3s var(--ease-elastic), background 0.2s ease;
+}
+
+.switch:active .slider:before {
+  width: 20px;
+}
+
+input:checked + .slider {
+  background: #ffffff;
+  border-color: #ffffff;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.3);
+}
+
+input:checked + .slider:before {
+  transform: translateX(20px);
+  background: #121214;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+}
+
+/* ==========================================================================
+   3. 平滑物理弹性滑动指示器 Tabs (Smooth Option Switcher 风格)
+   ========================================================================== */
+.smooth-tabs {
+  position: relative;
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-pill);
+  padding: 3px;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.smooth-tabs .tab-glider {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / 3);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: none;
+  transform: translateX(calc(var(--tab-active-index, 0) * 100%));
+  transition: transform 0.38s var(--ease-elastic);
+  z-index: 1;
+}
+
+.tab-btn {
+  flex: 1;
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 7px 0;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: color 0.25s ease;
+  text-align: center;
+}
+
+.tab-btn:hover {
+  color: #ffffff;
+}
+
+.tab-btn.active {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+.tab-content {
+  display: none;
+  flex-direction: column;
+  gap: 13px;
+  min-height: 380px;
+  animation: fadeIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tab-content.active {
+  display: flex;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ==========================================================================
+   4. 通用平滑分段选项切换器 (Smooth Option Switcher / Segmented Control)
+   ========================================================================== */
+.smooth-switcher {
+  position: relative;
+  display: flex;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 3px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  user-select: none;
+  overflow: hidden;
+}
+
+.smooth-switcher .switcher-glider {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--count, 2));
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  border-radius: 7px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  transform: translateX(calc(var(--active-index, 0) * 100%));
+  transition: transform 0.36s var(--ease-elastic);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.switcher-item {
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+  z-index: 2;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 7px 4px;
+  font-size: 12px;
+  font-weight: 500;
+  border-radius: 7px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: color 0.2s ease;
+  white-space: nowrap;
+}
+
+.switcher-item:hover {
+  color: #ffffff;
+}
+
+.switcher-item.active {
+  color: #ffffff;
+  font-weight: 600;
+}
+
+/* ==========================================================================
+   5. 卡片 Card & 提示条
+   ========================================================================== */
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+}
+
+/* AI 配置折叠卡片 (Accordion) */
+.ai-accordion-card {
+  padding: 0 !important;
+  overflow: hidden;
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.ai-accordion-card.expanded {
+  border-color: var(--border-glass-bright);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.ai-accordion-header {
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 9px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  color: var(--text-main);
+  text-align: left;
+  transition: background var(--transition-fast);
+}
+
+.ai-accordion-header:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.ai-accordion-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ai-accordion-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.ai-accordion-text {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.ai-accordion-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.ai-accordion-desc {
+  font-size: 10.5px;
+  color: var(--text-dim);
+}
+
+.ai-accordion-right {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ai-accordion-arrow {
+  font-size: 11px;
+  color: var(--text-dim);
+  transition: transform 0.25s var(--ease-elastic);
+  display: inline-block;
+}
+
+.ai-accordion-card.expanded .ai-accordion-arrow {
+  transform: rotate(90deg);
+  color: #ffffff;
+}
+
+.ai-accordion-body {
+  display: none;
+  padding: 8px 12px 12px 12px;
+  border-top: 1px solid var(--border-glass);
+  flex-direction: column;
+  gap: 10px;
+  animation: fadeIn 0.2s ease;
+}
+
+.ai-accordion-card.expanded .ai-accordion-body {
+  display: flex;
+}
+
+.network-card {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.18);
+  padding: 10px 12px;
+}
+
+.network-alert-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.alert-icon {
+  display: inline-flex;
+  align-items: center;
+  color: #ffffff;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.alert-text {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.intro-card {
+  padding: 10px 12px;
+}
+
+.intro-text {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+/* ==========================================================================
+   6. 表单组与控件 (Form Groups & Controls)
+   ========================================================================== */
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.label-with-value, .label-with-button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-muted);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-weight: 500;
+}
+
+.badge-accent {
+  background: rgba(255, 255, 255, 0.12);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+}
+
+.form-select, .form-input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  color: #ffffff;
+  font-size: 12.5px;
+  outline: none;
+  transition: all var(--transition-fast);
+}
+
+.form-select:hover, .form-input:hover {
+  border-color: var(--border-glass-bright);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.form-select:focus, .form-input:focus {
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.08);
+}
+
+.form-select option {
+  background: #18181b;
+  color: #ffffff;
+}
+
+.input-with-button {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.input-with-button input {
+  padding-right: 36px;
+}
+
+.btn-sm, .btn-xs {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-glass);
+  color: var(--text-muted);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.btn-sm:hover, .btn-xs:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  border-color: var(--border-glass-bright);
+}
+
+.btn-sm {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 24px;
+  height: 24px;
+}
+
+.btn-xs {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+/* ==========================================================================
+   7. 范围滑块 (Sliders)
+   ========================================================================== */
+.slider-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.12);
+  outline: none;
+}
+
+.slider-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ffffff;
+  cursor: pointer;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  border: 2px solid #18181b;
+  transition: transform var(--transition-fast);
+}
+
+.slider-range::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.range-marks {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+/* ==========================================================================
+   8. 调色盘与颜色预设 (Color Pickers)
+   ========================================================================== */
+.color-picker-input {
+  -webkit-appearance: none;
+  border: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  cursor: pointer;
+  background: transparent;
+}
+
+.color-picker-input::-webkit-color-swatch-wrapper {
+  padding: 0;
+}
+
+.color-picker-input::-webkit-color-swatch {
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+}
+
+.color-dot-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.color-preset-dot {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: pointer;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  transition: transform var(--transition-fast), border-color var(--transition-fast);
+}
+
+.color-preset-dot:hover {
+  transform: scale(1.18);
+  border-color: #ffffff;
+}
+
+.checkerboard-dot {
+  background-image: linear-gradient(45deg, #444 25%, transparent 25%), 
+                    linear-gradient(-45deg, #444 25%, transparent 25%), 
+                    linear-gradient(45deg, transparent 75%, #444 75%), 
+                    linear-gradient(-45deg, transparent 75%, #444 75%);
+  background-size: 6px 6px;
+  background-position: 0 0, 0 3px, 3px -3px, -3px 0px;
+  background-color: #222;
+}
+
+/* ==========================================================================
+   9. 复选框 Checkbox
+   ========================================================================== */
+.form-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+
+.form-check input[type="checkbox"] {
+  accent-color: #ffffff;
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.form-check label {
+  cursor: pointer;
+  font-size: 12px;
+}
+
+/* ==========================================================================
+   10. 按钮 Button & 测试行
+   ========================================================================== */
+.btn {
+  padding: 8px 14px;
+  border-radius: var(--radius-md);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: all var(--transition-fast);
+}
+
+.btn-primary {
+  background: #ffffff;
+  color: #121214;
+  border: none;
+  font-weight: 600;
+  box-shadow: 0 3px 10px rgba(255, 255, 255, 0.2);
+}
+
+.btn-primary:hover {
+  background: #f4f4f5;
+  transform: translateY(-1px);
+  box-shadow: 0 5px 16px rgba(255, 255, 255, 0.3);
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  border: 1px solid var(--border-glass-bright);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.test-row-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.test-btn-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.latency-badge {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.08);
+  color: #ffffff;
+  border: 1px solid var(--border-glass);
+}
+
+.status-msg, .sub-status-msg {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+/* ==========================================================================
+   11. 效果实时预览 (Preview)
+   ========================================================================== */
+.preview-section {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  position: relative;
+  overflow: hidden;
+}
+
+.preview-header {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.preview-box {
+  position: relative;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 10px 22px 10px 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: all 0.25s var(--ease-elastic);
+}
+
+.preview-ai {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  width: 14px;
+  height: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fbbf24;
+  pointer-events: none;
+  filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
+}
+
+.preview-ai svg {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.preview-orig {
+  font-weight: 500;
+  color: #e2e8f0;
+  line-height: 1.35;
+  margin-bottom: 3px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.85);
+}
+
+.preview-trans {
+  font-weight: 600;
+  color: var(--accent);
+  line-height: 1.4;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.85);
+}
+
+/* ==========================================================================
+   12. 底部说明
+   ========================================================================== */
+.popup-footer {
+  text-align: center;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-glass);
+}
+
+.tip-shortcut {
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.4;
+}
+
+.hidden {
+  display: none !important;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
+/* 【v0.1.0 矢量沙漏专属物理旋转动画（转180°停一会再转180°）】 */
+@keyframes hourglassFlip {
+  0% {
+    transform: rotate(0deg);
+  }
+  25% {
+    transform: rotate(180deg);
+  }
+  50% {
+    transform: rotate(180deg);
+  }
+  75% {
+    transform: rotate(360deg);
+  }
+  100% {
+    transform: rotate(360deg);
+  }
+}
+
+.hourglass-flip-anim {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  animation: hourglassFlip 2.4s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  transform-origin: center center;
+  will-change: transform;
+}

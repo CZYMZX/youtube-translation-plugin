@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <defs>
+    <linearGradient id="card-grad-back" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8B5CF6"/>
+      <stop offset="100%" stop-color="#6D28D9"/>
+    </linearGradient>
+    <linearGradient id="card-grad-front" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#0284C7"/>
+    </linearGradient>
+    <filter id="card-shadow" x="-15%" y="-15%" width="130%" height="130%">
+      <feDropShadow dx="2" dy="5" stdDeviation="6" flood-color="#030712" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- 背景：清爽微弧深色底板 -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="#111827"/>
+  <rect x="8.5" y="8.5" width="111" height="111" rx="27.5" fill="none" stroke="#1F2937" stroke-width="1.5"/>
+
+  <!-- 后层卡片 (文 - 紫色卡片) -->
+  <g filter="url(#card-shadow)" transform="rotate(7 78 62)">
+    <rect x="52" y="30" width="54" height="64" rx="14" fill="url(#card-grad-back)"/>
+    <rect x="52.7" y="30.7" width="52.6" height="62.6" rx="13.3" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="1.4"/>
+    <!-- “文” 字 -->
+    <g fill="#FFFFFF" transform="translate(14, 5)">
+      <!-- 点 -->
+      <circle cx="65" cy="42" r="2.2"/>
+      <!-- 横 -->
+      <rect x="54" y="47" width="22" height="4" rx="2"/>
+      <!-- 撇捺 -->
+      <path d="M 64 51 C 64 57 61 62 55 65.5 C 53.8 66.2 55.5 67.5 56.5 66.8 C 63 63.5 66.5 57.5 67 51 Z"/>
+      <path d="M 60 53.5 C 63 57.5 67.5 62.5 74.5 65 C 75.8 65.5 76.5 64.2 75.2 63.5 C 69.5 61 65.5 56.5 63 53.5 Z"/>
+    </g>
+  </g>
+
+  <!-- 前层卡片 (A - 蓝色卡片) -->
+  <g filter="url(#card-shadow)" transform="rotate(-6 50 66)">
+    <rect x="22" y="34" width="54" height="64" rx="14" fill="url(#card-grad-front)"/>
+    <rect x="22.7" y="34.7" width="52.6" height="62.6" rx="13.3" fill="none" stroke="#FFFFFF" stroke-opacity="0.25" stroke-width="1.4"/>
+    <!-- 字母 A -->
+    <path d="M 49 46 L 36.5 74 L 43 74 L 45.4 68.2 L 52.6 68.2 L 55 74 L 61.5 74 Z M 49 53.5 L 51.5 63 L 46.5 63 Z" fill="#FFFFFF"/>
+  </g>
+
+  <!-- 中间交界处的 AI 智能高光星火 (✨ Sparkle) -->
+  <g fill="#FDE047" opacity="0.95" transform="translate(64, 38)">
+    <path d="M 0 -9 C 0 -3 3 0 9 0 C 3 0 0 3 0 9 C 0 3 -3 0 -9 0 C -3 0 0 -3 0 -9 Z"/>
+    <circle cx="8" cy="-8" r="1.5" fill="#FEF08A"/>
+  </g>
+</svg>

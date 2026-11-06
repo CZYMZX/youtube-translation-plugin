@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="100%" height="100%">
+  <!-- 极简高亮纯色圆角方块 (现代极光翡翠青绿) -->
+  <defs>
+    <linearGradient id="flat-teal" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#059669"/>
+      <stop offset="100%" stop-color="#0D9488"/>
+    </linearGradient>
+  </defs>
+
+  <!-- 纯净圆角容器 -->
+  <rect x="8" y="8" width="112" height="112" rx="28" fill="url(#flat-teal)"/>
+
+  <!-- 对角线分割的优雅负空间卡槽 -->
+  <!-- 左上部 “A” -->
+  <g fill="#FFFFFF">
+    <path d="M 46 34 L 32 64 L 39.5 64 L 42.2 57.5 L 49.8 57.5 L 52.5 64 L 60 64 Z M 46 44.5 L 48.5 52.2 L 43.5 52.2 Z"/>
+  </g>
+
+  <!-- 中间极简斜向微缝隙/分离光轨 -->
+  <line x1="34" y1="88" x2="94" y2="40" stroke="#FFFFFF" stroke-opacity="0.35" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- 右下部 “译” (极简汉字结构，辨识度拉满) -->
+  <g fill="#FFFFFF">
+    <!-- 言字旁 (点、横折提) -->
+    <circle cx="70" cy="56" r="2.2"/>
+    <path d="M 66 62 L 74 62 L 72 75 L 75 73" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    
+    <!-- 右半部分“尺/译”结构 -->
+    <!-- 横折 -->
+    <path d="M 78 57 L 96 57 C 97.5 57 98 58 97.5 59.5 L 94 65 L 81 65" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+    <!-- 竖撇与捺 -->
+    <path d="M 86 65 C 86 73 83 79 77 84" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+    <path d="M 87 69 C 90 73 95 79 101 83" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"/>
+  </g>
+</svg>
