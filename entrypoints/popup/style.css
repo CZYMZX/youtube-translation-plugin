@@ -911,3 +911,121 @@ label {
   transform-origin: center center;
   will-change: transform;
 }
+
+/* ───────────── 术语库（v0.2.8） ───────────── */
+.glossary-card .ai-accordion-desc {
+  max-width: 190px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glossary-enable-row {
+  margin: 0;
+  padding: 0;
+}
+
+.glossary-search-group {
+  margin: 0;
+}
+
+.glossary-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.glossary-chip {
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-sub);
+  font-size: 11px;
+  line-height: 1;
+  padding: 5px 9px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.glossary-chip:hover {
+  color: var(--text-main);
+  border-color: var(--border-glass-bright);
+}
+
+.glossary-chip.active {
+  background: rgba(56, 189, 248, 0.18);
+  border-color: rgba(56, 189, 248, 0.55);
+  color: #7dd3fc;
+}
+
+.glossary-list {
+  max-height: 210px;
+  overflow-y: auto;
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.glossary-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 9px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.glossary-item:last-child {
+  border-bottom: none;
+}
+
+.glossary-item-main {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.glossary-ja {
+  color: var(--text-main);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.glossary-arrow {
+  color: var(--text-sub);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.glossary-zh {
+  color: #7dd3fc;
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.glossary-meta {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--text-sub);
+  border: 1px solid var(--border-glass);
+  border-radius: 4px;
+  padding: 1px 5px;
+  cursor: help;
+}
+
+.glossary-empty {
+  padding: 14px 10px;
+  text-align: center;
+  color: var(--text-sub);
+  font-size: 12px;
+}
+
+.glossary-footer {
+  font-size: 10px;
+  color: var(--text-sub);
+  text-align: center;
+  line-height: 1.5;
+}

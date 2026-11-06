@@ -190,6 +190,54 @@
         </div>
       </div>
 
+      <!-- 术语库（折叠手风琴卡片，v0.2.8） -->
+      <div id="glossary-section" class="card ai-accordion-card glossary-card">
+        <button type="button" id="glossary-accordion-header" class="ai-accordion-header" title="展开查看 VTuber / hololive 术语库">
+          <div class="ai-accordion-left">
+            <span class="ai-accordion-icon">
+              <svg width="15" height="15" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 6h24a6 6 0 0 1 6 6v30H14a6 6 0 0 1-6-6z"/>
+                <path d="M8 36a6 6 0 0 1 6-6h24"/>
+              </svg>
+            </span>
+            <div class="ai-accordion-text">
+              <span class="ai-accordion-title">术语库</span>
+              <span class="ai-accordion-desc" id="glossary-desc">VTuber 直播术语 · 主播 / 团体 / 游戏 / 歌名</span>
+            </div>
+          </div>
+          <div class="ai-accordion-right">
+            <span class="badge badge-accent" id="glossary-count-badge">0 条</span>
+            <span class="ai-accordion-arrow">▸</span>
+          </div>
+        </button>
+
+        <div class="ai-accordion-body" id="glossary-accordion-body">
+          <div class="form-check glossary-enable-row">
+            <input type="checkbox" id="glossary-enabled" checked>
+            <label for="glossary-enabled">翻译时自动注入术语库（保证译名统一）</label>
+          </div>
+
+          <div class="form-group glossary-search-group">
+            <input type="text" id="glossary-search" class="form-input" placeholder="搜索日文 / 中文 / 英文…">
+          </div>
+
+          <div class="glossary-chips" id="glossary-chips">
+            <button type="button" class="glossary-chip active" data-category="all">全部</button>
+            <button type="button" class="glossary-chip" data-category="talent">主播</button>
+            <button type="button" class="glossary-chip" data-category="group">团体</button>
+            <button type="button" class="glossary-chip" data-category="game">游戏</button>
+            <button type="button" class="glossary-chip" data-category="song">歌曲</button>
+            <button type="button" class="glossary-chip" data-category="term">用语</button>
+          </div>
+
+          <div class="glossary-list" id="glossary-list"></div>
+
+          <div class="glossary-footer" id="glossary-footer">
+            数据来源：hololive 官网 / 中文维基百科 / 日文维基百科
+          </div>
+        </div>
+      </div>
+
       <div class="form-check">
         <input type="checkbox" id="auto-hide-native">
         <label for="auto-hide-native">自动隐藏 YouTube 原生自动字幕（防止重叠）</label>
@@ -415,7 +463,7 @@
     </div>
 
     <footer class="popup-footer">
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.7</span>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.8</span>
     </footer>
   </div>
 

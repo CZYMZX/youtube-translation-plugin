@@ -109,6 +109,7 @@ export interface ExtensionSettings {
   autoHideNativeSubtitles: boolean; // 是否自动隐藏 YouTube 默认字幕避免重叠
   syncOffsetMs: number; // 字幕时间戳同步微调 (ms)，默认 0，范围 -2000 ~ +2000
   autoFallbackToGoogle?: boolean; // 大模型失败时是否自动平滑降级至 Google 免费翻译 (默认开启)
+  glossaryEnabled?: boolean; // v0.2.8：翻译时注入 VTuber/hololive 术语库（默认开启）
 }
 
 /**
@@ -142,7 +143,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   offsetY: 82,
   autoHideNativeSubtitles: true,
   syncOffsetMs: 0,
-  autoFallbackToGoogle: true
+  autoFallbackToGoogle: true,
+  glossaryEnabled: true
 };
 
 export interface ModelOption {

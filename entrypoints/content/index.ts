@@ -20,7 +20,7 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.2.7]%c Content-script active (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.2.8]%c Content-script active (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );

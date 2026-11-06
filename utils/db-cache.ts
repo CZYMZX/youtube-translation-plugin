@@ -120,12 +120,15 @@ export function buildSentenceCacheKey(
   scenario = 'general',
   reasoning = 'low',
   service = 'google',
-  modelName = ''
+  modelName = '',
+  glossaryTag = ''
 ): string {
   // 注意：不能 toLowerCase，否则仅大小写不同的句子会共用译文；
   // modelName 必须参与 key，避免切换模型后复用旧模型译文。
+  // glossaryTag（v0.2.8）：术语库版本/状态参与 key，术语变更后旧译文自动失效。
   const model = (modelName || '').trim().toLowerCase();
-  return `${service}:${model}:${scenario}:${reasoning}:${targetLang}:${text.trim()}`;
+  const glossary = glossaryTag ? `:${glossaryTag}` : '';
+  return `${service}:${model}:${scenario}:${reasoning}:${targetLang}:${text.trim()}${glossary}`;
 }
 
 /**

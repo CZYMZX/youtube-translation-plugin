@@ -64,6 +64,7 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.autoPunctuation = merged.autoPunctuation !== false;
   merged.mergeShortFragments = merged.mergeShortFragments !== false;
   merged.autoFallbackToGoogle = merged.autoFallbackToGoogle !== false;
+  merged.glossaryEnabled = merged.glossaryEnabled !== false;
 
   return merged;
 }

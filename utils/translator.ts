@@ -4,6 +4,7 @@ import {
   setCachedSentencesBatch,
   buildSentenceCacheKey
 } from './db-cache';
+import { GLOSSARY_VERSION, findGlossaryMatches, buildGlossaryPromptBlock } from './glossary';
 
 export interface TranslationOptions {
   bypassCache?: boolean;
@@ -15,15 +16,21 @@ export interface TranslationOptions {
  */
 const translationCache = new Map<string, string>();
 
+/** v0.2.8：术语库缓存标记（启用时携带版本号，术语更新后旧译文自动失效） */
+function getGlossaryTag(settings: ExtensionSettings): string {
+  return settings.glossaryEnabled !== false ? GLOSSARY_VERSION : '';
+}
+
 function getCacheKey(
   targetLang: string,
   text: string,
   scenario = 'general',
   reasoning = 'low',
   service = 'google',
-  modelName = ''
+  modelName = '',
+  glossaryTag = ''
 ): string {
-  return buildSentenceCacheKey(targetLang, text, scenario, reasoning, service, modelName);
+  return buildSentenceCacheKey(targetLang, text, scenario, reasoning, service, modelName, glossaryTag);
 }
 
 interface BatchPlan {
@@ -47,13 +54,14 @@ function planBatch(
     service = 'google',
     modelName = ''
   } = settings;
+  const glossaryTag = getGlossaryTag(settings);
 
   const results: Array<string | null> = bypassCache
     ? texts.map(() => null)
     : texts.map(
         (t) =>
           translationCache.get(
-            getCacheKey(targetLang, t, scenario, reasoningEffort, service, modelName)
+            getCacheKey(targetLang, t, scenario, reasoningEffort, service, modelName, glossaryTag)
           ) ?? null
       );
 
@@ -85,6 +93,7 @@ function commitBatch(
     service = 'google',
     modelName = ''
   } = settings;
+  const glossaryTag = getGlossaryTag(settings);
 
   for (let i = 0; i < plan.uncachedTexts.length; i++) {
     const originalText = plan.uncachedTexts[i];
@@ -92,7 +101,7 @@ function commitBatch(
     plan.results[plan.uncachedIndices[i]] = trans;
     if (!bypassCache) {
       translationCache.set(
-        getCacheKey(targetLang, originalText, scenario, reasoningEffort, service, modelName),
+        getCacheKey(targetLang, originalText, scenario, reasoningEffort, service, modelName, glossaryTag),
         trans
       );
     }
@@ -133,7 +142,7 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T
 /**
  * 根据场景和推理程度构造专业的 System Prompt
  */
-function buildSystemPrompt(settings: ExtensionSettings, targetLang: string): string {
+function buildSystemPrompt(settings: ExtensionSettings, targetLang: string, texts: string[] = []): string {
   const { scenario = 'general', reasoningEffort = 'low' } = settings;
 
   let personaAndScenario = '';
@@ -179,9 +188,15 @@ function buildSystemPrompt(settings: ExtensionSettings, targetLang: string): str
 专注快速产出最直接、通顺的口语翻译，减少冗余思考开销，保持低延迟。`;
   }
 
+  // v0.2.8 术语库：仅注入本批文本实际命中的术语，控制 prompt 体积
+  const glossaryBlock =
+    settings.glossaryEnabled !== false
+      ? buildGlossaryPromptBlock(findGlossaryMatches(texts))
+      : '';
+
   return `${personaAndScenario}
 ${reasoningGuidance}
-
+${glossaryBlock}
 任务：将按顺序给出的多句视频字幕原文翻译为目标语言：${targetLang}。
 必须严格输出纯 JSON 数组格式，不要包含任何 markdown 解释或代码块标记，结构如下：
 [{"id": 0, "translation": "..."}, {"id": 1, "translation": "..."}]
@@ -350,7 +365,7 @@ async function translateWithOpenAICompatible(
   const model = modelName?.trim() || (service === 'deepseek' ? 'deepseek-chat' : 'gpt-4o-mini');
 
   const payloadItems = uncachedTexts.map((text, id) => ({ id, text }));
-  const systemPrompt = buildSystemPrompt(settings, targetLang);
+  const systemPrompt = buildSystemPrompt(settings, targetLang, uncachedTexts);
 
   const requestBody: any = {
     model,
@@ -473,7 +488,7 @@ async function translateWithGemini(
   const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   const payloadItems = uncachedTexts.map((text, id) => ({ id, text }));
-  const systemPrompt = buildSystemPrompt(settings, targetLang);
+  const systemPrompt = buildSystemPrompt(settings, targetLang, uncachedTexts);
 
   const fullPrompt = `${systemPrompt}
 
@@ -581,7 +596,8 @@ export async function translateSentenceBatch(
       settings.scenario,
       settings.reasoningEffort,
       service,
-      settings.modelName
+      settings.modelName,
+      getGlossaryTag(settings)
     )
   );
 
