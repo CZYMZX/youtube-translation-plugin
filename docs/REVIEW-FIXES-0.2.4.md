@@ -34,9 +34,12 @@
 | 安全边界 | 消息只看 `source` 字符串；后台可抓任意 URL；popup 用 innerHTML 拼接口返回 | 同源校验 + URL 白名单 + 发送者校验 + 全量 textContent                    |
 | 缓存   | 键不含模型、强制小写；IDB 无 TTL                                 | 键含模型；30 天 TTL；分块读；内存上限                                     |
 | 性能   | 全页观察器无节流；抽屉每次全量重建；临时缓存 O(n²)                         | 观察器节流/限域；抽屉增量；落盘防抖；二分查找                                    |
-| 结构   | `overlay.ts` 3212 行；`bridge.ts` 死代码；三份缓存逻辑重复         | 样式外置（2052 行）；死代码删除；缓存逻辑合并                                  |
-| 测试   | 无 `test` 脚本，`test/*.js` 无法运行                         | `npm test`（tsx）可运行 4 组用例                                   |
+| 结构   | `overlay.ts` 3212 行；`bridge.ts` 死代码；三份缓存逻辑重复         | 样式外置（`overlay-styles.ts` 1344 行，`overlay.ts` 降至 2041 行）；死代码删除；缓存逻辑合并                                  |
+| 测试   | 无 `test` 脚本，`test/*.js` 无法运行                         | `npm test`（tsx）可运行 4 个测试文件（5 组用例）                                   |
 | 产物   | 仅 chrome/edge 旧产物                                    | 两套产物均已重建，manifest 均为 0.2.4                                 |
+
+> 行数复核（按仓库 tag `v0.2.4` 的 `entrypoints/content/` 实测）：`overlay-styles.ts` 1344 行、`overlay.ts` 2041 行。
+> 早前记录里的「样式外置 2052 行」无法在任何快照中复现，已按实测值更正；`overlay.ts` 3212 行为当时对 v0.2.3 旧目录的计数，保留不动。
 
 ---
 
@@ -77,9 +80,9 @@
 | 19 | `content/bridge.ts` 死代码              | 已删除（85 行）                                                                |
 | 20 | 4 个未使用 db-cache API、`lookaheadCount` | 已删除；`STORE_VIDEOS` 仅为兼容旧库保留，不再写入                                         |
 | 21 | 三个翻译通道重复缓存逻辑                         | 合并为 `planBatch/commitBatch`，减少约 140 行                                    |
-| 22 | `overlay.ts` 3212 行单类                | **部分完成**：CSS 外置为 `overlay-styles.ts`（2052 行）；组件级拆分未做，避免高风险重构             |
+| 22 | `overlay.ts` 3212 行单类                | **部分完成**：CSS 外置为 `overlay-styles.ts`（1344 行）；组件级拆分未做，避免高风险重构             |
 | 23 | 21 处空 catch、53 处 any                 | **部分完成**：关键路径（消息、抓取、缓存、设置、字幕解析）已补告警；播放器 API 探测类空 catch 保留为降级策略           |
-| 24 | 测试无法运行、无 test 脚本                     | 引入 `tsx`；`npm test` 运行 4 组用例；新增解析与设置清洗测试                                 |
+| 24 | 测试无法运行、无 test 脚本                     | 引入 `tsx`；`npm test` 运行 4 个测试文件（5 组用例）；新增解析与设置清洗测试                                 |
 | 25 | `ExtensionMessage` 未覆盖全部消息           | 补齐 `FETCH_TRACKS_BY_VIDEO_ID / CHECK_GOOGLE... / SETTINGS_UPDATED` 及可选字段 |
 | 26 | `String.fromCharCode` 解码 astral 实体错误 | 改 `String.fromCodePoint`；新增 `😀` 用例                                      |
 | 27 | 日文标点前多空格（`うふ 。`）                     | `shouldInsertSpace()` 处理 CJK 标点/括号；实测输出 `うふ。`                            |
@@ -137,6 +140,10 @@ npm run build:edge    → .output/edge-mv3/manifest.json   version = 0.2.4
 ---
 
 ## 六、如何运行新版本
+
+> 迁移说明（2026-11-06 起）：当前工作基线是 `E:\Antigravity\youtube-translation-plugin`（`package.json` 0.4.0，分支 master）。
+> 下面的命令与加载路径按 v0.2.4 快照目录书写，在当前仓库执行时把目录换成 `E:\Antigravity\youtube-translation-plugin` 即可，产物路径同为 `.output\chrome-mv3`。
+> `油管翻译插件_v0.2.x` / `_v0.4.0` 等旧目录只读，仅作对照与回滚，不得当工作基线。
 
 ```bash
 cd E:\Antigravity\油管翻译插件_v0.2.4
