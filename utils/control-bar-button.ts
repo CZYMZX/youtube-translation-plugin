@@ -52,10 +52,10 @@ export class ControlBarButtonManager {
     if (inner) {
       if (this.isEnabled) {
         inner.style.opacity = '1';
-        inner.style.filter = 'drop-shadow(0 0 6px rgba(255, 255, 255, 0.7))';
+        inner.style.boxShadow = '0 0 6px rgba(255, 255, 255, 0.45)';
       } else {
         inner.style.opacity = '0.38';
-        inner.style.filter = 'grayscale(100%)';
+        inner.style.boxShadow = 'none';
       }
     }
   }
@@ -165,8 +165,8 @@ export class ControlBarButtonManager {
     `;
 
     const stateStyle = this.isEnabled
-      ? 'opacity: 1; filter: drop-shadow(0 0 6px rgba(255, 255, 255, 0.7));'
-      : 'opacity: 0.38; filter: grayscale(100%);';
+      ? 'opacity: 1; box-shadow: 0 0 6px rgba(255, 255, 255, 0.45);'
+      : 'opacity: 0.38;';
 
     btn.innerHTML = `
       <div class="yt-sub-btn-inner" style="

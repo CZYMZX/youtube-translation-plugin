@@ -1,6 +1,11 @@
 /**
  * 字幕浮层样式表（从 overlay.ts 外置，降低单文件复杂度）
  * 注意：仅存放 CSS，不含任何运行时逻辑。
+ *
+ * ⚠️ VSR 兼容红线：本文件禁止使用 backdrop-filter / -webkit-backdrop-filter。
+ * 页面中任意元素带 backdrop-filter 都会强制 Chromium 将视频与页面内容合成，
+ * 导致 NVIDIA RTX Video Super Resolution 无法走视频叠加层而失效（窗口化必现）。
+ * 如需“毛玻璃”观感，请用高不透明度 rgba 背景 + 边框/阴影模拟。
  */
 export const OVERLAY_STYLES = String.raw`
 :host {
@@ -26,8 +31,6 @@ export const OVERLAY_STYLES = String.raw`
           border-radius: 999px;
           font-size: 11.5px;
           font-weight: 500;
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
           opacity: 0;
           pointer-events: none;
           transform: translateY(-4px) scale(0.96);
@@ -58,8 +61,6 @@ export const OVERLAY_STYLES = String.raw`
           border: 1px solid rgba(255, 255, 255, 0.16);
           border-top: 1px solid rgba(255, 255, 255, 0.3);
           box-shadow: 0 16px 38px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.22);
-          backdrop-filter: blur(16px) saturate(180%);
-          -webkit-backdrop-filter: blur(16px) saturate(180%);
           transition: background-color 0.15s ease, opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), bottom 0.28s cubic-bezier(0.16, 1, 0.3, 1), transform 0.3s var(--ease-elastic);
           pointer-events: auto;
           opacity: 0;
@@ -89,8 +90,6 @@ export const OVERLAY_STYLES = String.raw`
           transform: translateX(-50%) translateY(4px) scale(0.96);
           margin-bottom: 6px;
           background: rgba(18, 18, 20, 0.85);
-          backdrop-filter: blur(20px) saturate(160%);
-          -webkit-backdrop-filter: blur(20px) saturate(160%);
           border: 1px solid rgba(255, 255, 255, 0.14);
           border-top: 1px solid rgba(255, 255, 255, 0.25);
           border-radius: 999px;
@@ -176,7 +175,6 @@ export const OVERLAY_STYLES = String.raw`
           justify-content: center;
           color: var(--ai-icon-color, #fbbf24);
           pointer-events: none;
-          filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.7));
           transition: color 0.2s ease, opacity 0.2s ease;
           z-index: 10;
         }
@@ -199,8 +197,6 @@ export const OVERLAY_STYLES = String.raw`
           max-height: calc(100% - 68px);
           box-sizing: border-box;
           background: rgba(18, 18, 22, 0.9);
-          backdrop-filter: blur(24px) saturate(180%);
-          -webkit-backdrop-filter: blur(24px) saturate(180%);
           border: 1px solid rgba(255, 255, 255, 0.16);
           border-top: 1px solid rgba(255, 255, 255, 0.28);
           border-radius: 14px;
@@ -426,7 +422,6 @@ export const OVERLAY_STYLES = String.raw`
           display: flex;
           flex-direction: column;
           gap: 6px;
-          backdrop-filter: blur(14px);
         }
 
         .qp-ai-top {
@@ -1050,7 +1045,6 @@ export const OVERLAY_STYLES = String.raw`
           display: flex;
           flex-direction: column;
           gap: 2px;
-          backdrop-filter: blur(10px);
         }
 
         .qp-preview-micro-ai {
@@ -1091,8 +1085,6 @@ export const OVERLAY_STYLES = String.raw`
           width: 320px;
           height: 100%;
           background: rgba(18, 18, 20, 0.92);
-          backdrop-filter: blur(24px) saturate(180%);
-          -webkit-backdrop-filter: blur(24px) saturate(180%);
           border-left: 1px solid rgba(255, 255, 255, 0.14);
           box-shadow: -10px 0 35px rgba(0, 0, 0, 0.6);
           color: #ffffff;
@@ -1246,8 +1238,6 @@ export const OVERLAY_STYLES = String.raw`
           left: 50%;
           transform: translateX(-50%);
           background: rgba(18, 18, 22, 0.88);
-          backdrop-filter: blur(16px);
-          -webkit-backdrop-filter: blur(16px);
           border: 1px solid rgba(255, 255, 255, 0.16);
           color: #ffffff;
           padding: 6px 14px;
@@ -1333,7 +1323,6 @@ export const OVERLAY_STYLES = String.raw`
           border-radius: 999px;
           font-size: 12px;
           box-shadow: 0 6px 24px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.2);
-          backdrop-filter: blur(16px);
           pointer-events: none;
           z-index: 200;
         }

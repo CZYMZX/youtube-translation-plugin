@@ -1,4 +1,4 @@
-# YouTube 自动字幕断句翻译器 (YT Subtitle Re-segmenter & Translator) - v0.2.4
+# YouTube 自动字幕断句翻译器 (YT Subtitle Re-segmenter & Translator) - v0.2.5
 
 一款专为解决 **YouTube 自动生成字幕（ASR / Auto-generated captions）碎片化、无标点、语义破碎问题** 而打造的沉浸式双语浏览器扩展（深度支持 Microsoft Edge 与 Google Chrome）。
 
@@ -16,6 +16,24 @@
 | **控制栏与播放进度条遮挡字幕** | **仿沉浸式平滑弹性避让**：控制栏与进度条出现时字幕自动上浮，消失后丝滑回落 |
 | **画中画 (PiP) 模式下无法看双语字幕** | **原生双语 TextTrack 注入**：画中画小窗同步投射双语字幕，离窗自动恢复 |
 | **重复播放视频反复消耗 API Token** | **IndexedDB 本地持久化缓存**：同视频或同句二次播放 0 耗费、0 延迟瞬间呈现完整双语 |
+
+---
+
+## 🚀 v0.2.5 RTX VSR 兼容修复
+
+1. **问题**：扩展启用后，NVIDIA RTX Video Super Resolution 在 YouTube 窗口化播放时不再激活。
+2. **根因**：浮层大量使用 `backdrop-filter` 毛玻璃。页面中只要存在该属性，Chromium 就无法将视频交给独立叠加层，NVIDIA VSR 随之被驱动判定为不可增强。
+3. **修复**：
+   - 删除 `overlay-styles.ts` 中全部 15 条 `backdrop-filter` / `-webkit-backdrop-filter`，改用高不透明度 `rgba()` 背景 + 边框/阴影；
+   - 移除视频上层的 `filter: drop-shadow` 与 `filter: grayscale`，改用 `box-shadow` / `opacity`；
+   - 新增 `test/test-vsr-styles.js` 防回归断言，并在样式文件顶部标注 VSR 红线。
+4. **实测**（RTX 3060 Laptop / Edge 156 / 同片段）：
+   - 无滤镜：89.7W / 43.8% / 2082MHz
+   - 注入毛玻璃：42.8W / 27.8% / 1605MHz
+   - 移除毛玻璃：98.4W / 48.1% / 2088MHz
+5. **验证**：NVIDIA 状态指示器在最大化/全屏播放时应显示 Active；详见 `docs/VSR-FIX-0.2.5.md`。
+
+> 说明：覆盖整块播放器的透明宿主本身不会影响 VSR，问题仅来自 `backdrop-filter` 的离屏合成。
 
 ---
 

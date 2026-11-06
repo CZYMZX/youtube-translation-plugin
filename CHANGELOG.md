@@ -4,6 +4,18 @@
 
 ---
 
+## [0.2.5] - 2026-11-04 (RTX VSR 兼容修复版)
+
+### 🎯 修复开启插件后 NVIDIA RTX VSR 失效
+- **根因**：浮层使用 `backdrop-filter` 毛玻璃，强制 Chromium 将视频与页面内容合成，NVIDIA VSR 无法走视频叠加层而被关闭。
+- **移除全部毛玻璃**：删除 `overlay-styles.ts` 中 15 条 `backdrop-filter` / `-webkit-backdrop-filter`（状态徽章、字幕框、工具坞、快捷面板、AI 提示条、抽屉、预览等），改用高不透明度 `rgba()` 背景 + 边框/阴影。
+- **移除视频上层 `filter`**：AI 徽章 `drop-shadow` 删除；控制栏按钮的 `drop-shadow/grayscale` 改为 `box-shadow/opacity`。
+- **实测对照**（RTX 3060 Laptop / Edge 156 / 同片段）：无滤镜 89.7W / 43.8% / 2082MHz；注入 `backdrop-filter` 后 42.8W / 27.8% / 1605MHz；移除后 98.4W / 48.1% / 2088MHz。
+- **防回归**：新增 `test/test-vsr-styles.js`，禁止样式再次引入 `backdrop-filter` 与视频上层 `filter: blur/drop-shadow`；`overlay-styles.ts` 顶部加入 VSR 红线注释。
+- **保留透明宿主验证**：覆盖整块播放器的透明 host 本身不影响 VSR，问题仅在毛玻璃。
+
+---
+
 ## [0.2.4] - 2026-11-04 (全量代码审查修复版)
 
 ### 🔐 安全边界

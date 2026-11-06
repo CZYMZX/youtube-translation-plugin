@@ -4,7 +4,7 @@ export default defineConfig({
   manifest: {
     name: 'YouTube 自动字幕断句翻译器 (YT Subtitle Segmenter & Translator)',
     description: '针对 YouTube 自动语音识别字幕（ASR）提供智能停顿断句、语义标点重构、双语对齐展示与多源实时翻译（Google / DeepSeek / Gemini / OpenAI）。',
-    version: '0.2.4',
+    version: '0.2.5',
     permissions: ['storage'],
     // 说明：保留 https://*/* 是为了支持用户自定义 OpenAI 兼容端点；
     // 不再申请 http://*/*，避免扩展具备明文 HTTP 全域访问能力。
