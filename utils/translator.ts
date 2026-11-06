@@ -20,7 +20,11 @@ export interface TranslationOptions {
 }
 
 /**
- * 翻译结果内存缓存 (key: `${service}:${scenario}:${reasoning}:${targetLang}:${text}`)
+ * 翻译结果内存缓存
+ * key 实际形态（v0.2.9 起，与 db-cache.buildSentenceCacheKey 同源）：
+ * `${service}:${model}:${scenarioId}#${promptHash}:${reasoning}:${targetLang}:${text}[:${glossaryTag}]`
+ * - `scenarioId#promptHash`：场景 id + 场景提示词指纹，改 prompt 后旧译文自动失效；
+ * - `glossaryTag`：术语库版本 / 启用包 / 自定义包指纹，术语变更后旧译文自动失效。
  */
 const translationCache = new Map<string, string>();
 
