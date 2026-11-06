@@ -147,6 +147,9 @@ function bindControls(): void {
     if (el.tagName === 'BUTTON' && el.dataset.value !== undefined) {
       el.addEventListener('click', () => {
         void update({ [key]: el.dataset.value } as Partial<ExtensionSettings>);
+        // 选中态与滑块立即跟上：只有 service/scenario 走 update() 里的局部重绘，
+        // 其余分段项原先要等 storage.onChanged 回声（≥320ms 防抖 + 存储往返）才动。
+        reflectSettings();
       });
       return;
     }
@@ -177,6 +180,8 @@ function reflectSettings(): void {
     if (el.tagName === 'BUTTON' && el.dataset.value !== undefined) {
       const on = String(value) === el.dataset.value;
       el.classList.toggle('active', on);
+      // 分段按钮是「多选一」的按钮组：把选中态也暴露给读屏（原来只有 .active 配色）
+      el.setAttribute('aria-pressed', String(on));
 
       // 只在「当前选中项」上写索引：每个按钮都写会被最后一个覆盖，导致滑块停在末位
       const seg = el.closest('.seg') as HTMLElement | null;
@@ -213,9 +218,13 @@ function syncRangeOutput(key: string, value: number): void {
 /* ══════════════════════════ 保存 ══════════════════════════ */
 
 let saveTimer: number | undefined;
+/* 防抖窗口内可能有多次改动（例如先切「括注」再切「ASR 纠错」），
+   只留最后一个 patch 会把前一个静默丢掉。这里把窗口内的改动累积起来一起写。 */
+let pendingPatch: Partial<ExtensionSettings> = {};
 
 async function update(patch: Partial<ExtensionSettings>): Promise<void> {
   settings = { ...settings, ...patch };
+  pendingPatch = { ...pendingPatch, ...patch };
   // 预览必须读合并后的 settings：早期把 applyPreview() 放在合并之前，
   // 导致滑块/取色器改动整整滞后一次输入才反映到预览上。
   applyPreview();
@@ -225,8 +234,10 @@ async function update(patch: Partial<ExtensionSettings>): Promise<void> {
   setSaveState('saving');
   window.clearTimeout(saveTimer);
   saveTimer = window.setTimeout(async () => {
+    const toSave = pendingPatch;
+    pendingPatch = {};
     try {
-      settings = await saveStoredSettings(patch);
+      settings = await saveStoredSettings(toSave);
       setSaveState('saved');
     } catch {
       setSaveState('error');

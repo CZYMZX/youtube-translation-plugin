@@ -18,7 +18,7 @@
         </span>
         <span class="brand-text">
           <strong>字幕断句翻译器</strong>
-          <span class="brand-sub">高级设置<i id="app-version">v0.4.0</i></span>
+          <span class="brand-sub">高级设置<i id="app-version">v0.4.1</i></span>
         </span>
       </div>
       <div class="topbar-actions">
@@ -206,6 +206,21 @@
 
             <div class="row">
               <div class="row-text">
+                <span class="row-title">ASR 纠错授权</span>
+                <span class="row-desc">常规：按上下文修正明显的同音误转；严格：仅在上下文能确证时纠正，不确定保留原文。</span>
+                <span class="row-note">两种模式的 token 消耗几乎无差别。</span>
+              </div>
+              <div class="row-control">
+                <div class="seg seg-2 seg-compact" data-seg="asrCorrection">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="asrCorrection" data-value="normal">常规</button>
+                  <button type="button" data-setting="asrCorrection" data-value="strict">严格</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
                 <span class="row-title">连通性测试</span>
                 <span class="row-desc" id="service-test-desc">发送一句短文本，测量首字节延迟。</span>
               </div>
@@ -224,6 +239,23 @@
             <h1>术语库</h1>
             <p>按包管理译名。左侧选包，右侧直接改条目；内置包只读，可另存为自定义副本再编辑。</p>
           </header>
+
+          <div class="rows">
+            <div class="row gloss-option-row">
+              <div class="row-text">
+                <span class="row-title">专有名词括注原文</span>
+                <span class="row-desc">开启后专名显示为 <code>中文译名（日文原文）</code>，关闭只显示中文译名。</span>
+                <span class="row-note">切换后已有字幕会按新格式重译一次。</span>
+              </div>
+              <div class="row-control">
+                <div class="seg seg-2 seg-compact" data-seg="glossaryAnnotation">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="glossaryAnnotation" data-value="off">关闭</button>
+                  <button type="button" data-setting="glossaryAnnotation" data-value="on">开启</button>
+                </div>
+              </div>
+            </div>
+          </div>
 
           <div class="gloss-layout">
             <aside class="pack-rail">

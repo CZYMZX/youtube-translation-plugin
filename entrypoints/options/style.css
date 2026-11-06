@@ -429,6 +429,13 @@ body {
   color: var(--text-body);
 }
 
+/* 辅注：比 .row-desc 弱一档，用于「切换后会发生什么」这类补充说明 */
+.row-note {
+  font-size: 10.5px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+
 .row-control {
   display: flex;
   align-items: center;
@@ -721,6 +728,13 @@ body {
   transform: scale(0.97);
 }
 
+/* 二元分段放在行右侧：给个固定宽度，避免 .seg 的 width:100%
+   在收缩型 .row-control 里算出宽度不定的结果（会撑宽或抖动） */
+.seg-compact {
+  width: 132px;
+  flex: 0 0 132px;
+}
+
 /* ── 滑块 ── */
 .range-wrap {
   display: flex;
@@ -905,6 +919,15 @@ body {
 }
 
 /* ───────────────────────── 术语库工作区 ───────────────────────── */
+/* 分区顶部的全局选项行：与下方「包列表 + 表格」工作区用 1px 分隔，
+   避免这行被读成 pane-head 的一部分 */
+.gloss-option-row {
+  padding-top: 0;
+  padding-bottom: 16px;
+  margin-bottom: 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.055);
+}
+
 .gloss-layout {
   display: grid;
   grid-template-columns: 218px minmax(0, 1fr);
