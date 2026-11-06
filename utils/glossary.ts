@@ -303,12 +303,12 @@ export function getGlossaryStats(): GlossaryStats {
  * 在给定文本中匹配术语（日文原词子串匹配；长度 ≥2 才参与，避免单字误命中）。
  * 返回按日文长度降序的条目，最多 limit 条，用于注入 prompt。
  */
-export function findGlossaryMatches(texts: string[], limit = 40): GlossaryEntry[] {
+export function findGlossaryMatches(texts: string[], limit = 40, source: GlossaryEntry[] = GLOSSARY): GlossaryEntry[] {
   if (texts.length === 0) return [];
   const haystack = texts.join('\n');
   const matched: GlossaryEntry[] = [];
 
-  for (const entry of GLOSSARY) {
+  for (const entry of source) {
     const key = entry.ja.trim();
     if (key.length < 2) continue;
     if (haystack.includes(key)) {

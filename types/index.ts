@@ -83,7 +83,7 @@ export interface ExtensionSettings {
   modelName?: string;  // 如 deepseek-chat, gpt-4o-mini, gemini-1.5-flash 等
   
   // 翻译场景与推理程度
-  scenario: 'general' | 'vtuber'; // 翻译场景：通用日常 vs VTuber 直播
+  scenario: string; // 翻译场景 id：内置 general/vtuber/science/music/gaming，或用户上传场景包 id
   reasoningEffort: 'none' | 'low' | 'high'; // 模型推理深度：极速 vs 轻度推理 vs 深度推理思考
 
   // 断句参数
@@ -110,6 +110,7 @@ export interface ExtensionSettings {
   syncOffsetMs: number; // 字幕时间戳同步微调 (ms)，默认 0，范围 -2000 ~ +2000
   autoFallbackToGoogle?: boolean; // 大模型失败时是否自动平滑降级至 Google 免费翻译 (默认开启)
   glossaryEnabled?: boolean; // v0.2.8：翻译时注入 VTuber/hololive 术语库（默认开启）
+  glossaryPacks?: string[]; // v0.2.9：启用的术语库包 id 列表（内置 + 上传）
 }
 
 /**
@@ -144,7 +145,8 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   autoHideNativeSubtitles: true,
   syncOffsetMs: 0,
   autoFallbackToGoogle: true,
-  glossaryEnabled: true
+  glossaryEnabled: true,
+  glossaryPacks: ['vtuber-hololive']
 };
 
 export interface ModelOption {

@@ -229,7 +229,7 @@ input:checked + .slider:before {
   top: 3px;
   bottom: 3px;
   left: 3px;
-  width: calc((100% - 6px) / 3);
+  width: calc((100% - 6px) / var(--tab-count, 3));
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.14);
   border: 1px solid rgba(255, 255, 255, 0.22);
@@ -1028,4 +1028,219 @@ label {
   color: var(--text-sub);
   text-align: center;
   line-height: 1.5;
+}
+
+
+/* ───────────── 术语与场景页（v0.2.9） ───────────── */
+.section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 14px 0 8px;
+}
+
+.section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #ffffff;
+  letter-spacing: 0.02em;
+}
+
+.section-head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pack-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md, 10px);
+  background: rgba(255, 255, 255, 0.04);
+  transition: border-color var(--transition-fast), background var(--transition-fast);
+}
+
+.pack-card.clickable {
+  cursor: pointer;
+}
+
+.pack-card.clickable:hover {
+  border-color: var(--border-glass-bright);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.pack-card.active {
+  border-color: rgba(56, 189, 248, 0.55);
+  background: rgba(56, 189, 248, 0.12);
+}
+
+.pack-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pack-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pack-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-main);
+  white-space: nowrap;
+}
+
+.pack-desc {
+  font-size: 11px;
+  color: var(--text-sub);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 210px;
+}
+
+.pack-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.pack-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--text-sub);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pack-toggle input[type="checkbox"] {
+  accent-color: #38bdf8;
+  width: 13px;
+  height: 13px;
+}
+
+.pack-badge-empty {
+  border: 1px dashed var(--border-glass);
+  color: var(--text-sub);
+  background: transparent;
+}
+
+.spec-details {
+  margin-top: 8px;
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.14);
+  padding: 0 10px;
+}
+
+.spec-details summary {
+  cursor: pointer;
+  padding: 8px 0;
+  font-size: 11px;
+  color: var(--text-sub);
+  list-style: none;
+}
+
+.spec-details summary::-webkit-details-marker {
+  display: none;
+}
+
+.spec-details summary::before {
+  content: "▸ ";
+  color: var(--text-muted);
+}
+
+.spec-details[open] summary::before {
+  content: "▾ ";
+}
+
+.spec-body {
+  padding: 0 0 10px;
+  font-size: 11px;
+  color: var(--text-sub);
+  line-height: 1.6;
+}
+
+.spec-body p {
+  margin: 0 0 6px;
+}
+
+.spec-body code {
+  color: #7dd3fc;
+  font-family: var(--font-mono, monospace);
+}
+
+.spec-body pre {
+  margin: 0 0 8px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid var(--border-glass);
+  overflow-x: auto;
+  font-size: 10px;
+  line-height: 1.5;
+  color: #cbd5e1;
+}
+
+.pack-preview {
+  margin-top: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border-glass);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.pack-preview-title {
+  position: sticky;
+  top: 0;
+  padding: 6px 10px;
+  font-size: 11px;
+  color: var(--text-sub);
+  background: rgba(15, 23, 42, 0.9);
+  border-bottom: 1px solid var(--border-glass);
+}
+
+
+/* 卡片内操作按钮（非绝对定位，v0.2.9 修正 .btn-sm 误用） */
+.btn-chip {
+  padding: 4px 9px;
+  font-size: 11px;
+  line-height: 1.2;
+  border-radius: 6px;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-sub);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all var(--transition-fast);
+}
+
+.btn-chip:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  border-color: var(--border-glass-bright);
+}
+
+.btn-chip:disabled {
+  opacity: 0.45;
+  cursor: default;
+  background: rgba(255, 255, 255, 0.04);
 }

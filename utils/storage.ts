@@ -4,7 +4,6 @@ const STORAGE_KEY = 'yt_sub_translator_settings';
 const READ_TIMEOUT_MS = 1500;
 
 const VALID_SERVICES = ['google', 'gemini', 'openai', 'deepseek'] as const;
-const VALID_SCENARIOS = ['general', 'vtuber'] as const;
 const VALID_REASONING = ['none', 'low', 'high'] as const;
 const VALID_DISPLAY_MODES = ['bilingual', 'translation_only', 'original_only'] as const;
 const VALID_LAYOUTS = ['translation_top', 'original_top'] as const;
@@ -27,7 +26,10 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) } as ExtensionSettings;
 
   if (!VALID_SERVICES.includes(merged.service as any)) merged.service = 'google';
-  if (!VALID_SCENARIOS.includes(merged.scenario as any)) merged.scenario = 'general';
+  /* v0.2.9：场景支持用户上传包 id（ASCII/CJK 短标识），非法值回落 vtuber */
+  if (typeof merged.scenario !== 'string' || !/^[\w\u4e00-\u9fff-]{1,80}$/.test(merged.scenario)) {
+    merged.scenario = 'vtuber';
+  }
   if (!VALID_REASONING.includes(merged.reasoningEffort as any)) merged.reasoningEffort = 'low';
   if (!VALID_DISPLAY_MODES.includes(merged.displayMode as any)) merged.displayMode = 'bilingual';
   if (!VALID_LAYOUTS.includes(merged.layoutOrder as any)) merged.layoutOrder = 'translation_top';
@@ -65,6 +67,14 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.mergeShortFragments = merged.mergeShortFragments !== false;
   merged.autoFallbackToGoogle = merged.autoFallbackToGoogle !== false;
   merged.glossaryEnabled = merged.glossaryEnabled !== false;
+  /* v0.2.9：术语库启用包列表（只保留字符串数组，长度与字符集受限） */
+  if (Array.isArray(merged.glossaryPacks)) {
+    merged.glossaryPacks = merged.glossaryPacks
+      .filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 60)
+      .slice(0, 20);
+  } else {
+    merged.glossaryPacks = ['vtuber-hololive'];
+  }
 
   return merged;
 }

@@ -14,7 +14,22 @@
  */
 
 import { DEFAULT_SETTINGS, type ExtensionSettings } from '../../types';
-import { GLOSSARY, GLOSSARY_CATEGORY_LABELS, getGlossaryStats, type GlossaryCategory } from '../../utils/glossary';
+import { GLOSSARY_CATEGORY_LABELS, type GlossaryCategory } from '../../utils/glossary';
+import {
+  getAllGlossaryPacks,
+  getAllScenes,
+  loadCustomPacks,
+  saveGlossaryPacks,
+  saveScenePacks,
+  validateGlossaryPack,
+  validateScenePack,
+  DEFAULT_GLOSSARY_PACKS,
+  BUILTIN_GLOSSARY_PACKS,
+  BUILTIN_SCENES,
+  type CustomPacks,
+  type GlossaryPack,
+  type ScenePack
+} from '../../utils/packs';
 import {
   ICON_PREVIEW_OPEN,
   ICON_PREVIEW_CLOSE,
@@ -94,14 +109,20 @@ const testStatus = document.getElementById('test-status') as HTMLElement;
 const autoHideNativeCheck = document.getElementById('auto-hide-native') as HTMLInputElement;
 const autoFallbackToggle = document.getElementById('auto-fallback-toggle') as HTMLInputElement;
 
-// 术语库（v0.2.8）
-const glossarySection = document.getElementById('glossary-section') as HTMLElement | null;
-const glossaryHeader = document.getElementById('glossary-accordion-header') as HTMLButtonElement | null;
-const glossaryCountBadge = document.getElementById('glossary-count-badge') as HTMLElement | null;
-const glossarySearchInput = document.getElementById('glossary-search') as HTMLInputElement | null;
-const glossaryChips = document.getElementById('glossary-chips') as HTMLElement | null;
-const glossaryList = document.getElementById('glossary-list') as HTMLElement | null;
+// 术语库注入开关（v0.2.9：位于「术语与场景」页）
 const glossaryEnabledCheck = document.getElementById('glossary-enabled') as HTMLInputElement | null;
+
+// 术语与场景页（v0.2.9）
+const sceneListEl = document.getElementById('scene-list') as HTMLElement | null;
+const glossaryPackListEl = document.getElementById('glossary-pack-list') as HTMLElement | null;
+const sceneActiveBadgeEl = document.getElementById('scene-active-badge') as HTMLElement | null;
+const glossaryTotalBadgeEl = document.getElementById('glossary-total-badge') as HTMLElement | null;
+const packPreviewEl = document.getElementById('pack-preview') as HTMLElement | null;
+const packStatusEl = document.getElementById('pack-status') as HTMLElement | null;
+const btnUploadScene = document.getElementById('btn-upload-scene') as HTMLButtonElement | null;
+const btnUploadGlossary = document.getElementById('btn-upload-glossary') as HTMLButtonElement | null;
+const sceneUploadInput = document.getElementById('scene-upload-input') as HTMLInputElement | null;
+const glossaryUploadInput = document.getElementById('glossary-upload-input') as HTMLInputElement | null;
 
 // 断句参数
 const pauseThresholdRange = document.getElementById('pause-threshold') as HTMLInputElement;
@@ -145,7 +166,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   setupSmoothSwitchers();
   await loadSettings();
   bindEvents();
-  initGlossaryUI();
+  await initPacksUI();
   updatePreview();
   checkTranslationConnectivity();
 });
@@ -386,6 +407,10 @@ function populateForm() {
   if (glossaryEnabledCheck) {
     glossaryEnabledCheck.checked = currentSettings.glossaryEnabled !== false;
   }
+  if (sceneListEl) {
+    renderSceneList();
+    renderGlossaryPackList();
+  }
 
   pauseThresholdRange.value = String(currentSettings.pauseThreshold);
   pauseThresholdVal.textContent = `${currentSettings.pauseThreshold} ms`;
@@ -573,7 +598,7 @@ function persistSettings(immediate = false) {
     enabled: enabledToggle.checked,
     targetLang: targetLangSelect.value,
     service: serviceSelect.value as any,
-    scenario: scenarioSelect.value as any,
+    scenario: (scenarioSelect.value || currentSettings.scenario || 'vtuber') as any,
     reasoningEffort: reasoningSelect.value as any,
     apiKey: apiKeyInput.value.trim(),
     apiBaseUrl: apiBaseUrlInput.value.trim(),
@@ -581,6 +606,9 @@ function persistSettings(immediate = false) {
     autoHideNativeSubtitles: autoHideNativeCheck.checked,
     autoFallbackToGoogle: autoFallbackToggle ? autoFallbackToggle.checked : true,
     glossaryEnabled: glossaryEnabledCheck ? glossaryEnabledCheck.checked : true,
+    glossaryPacks: currentSettings.glossaryPacks && currentSettings.glossaryPacks.length > 0
+      ? currentSettings.glossaryPacks
+      : ['vtuber-hololive'],
     pauseThreshold: parseInt(pauseThresholdRange.value, 10),
     maxWordsPerSentence: parseInt(maxWordsRange.value, 10),
     minWordsPerSentence: currentSettings.minWordsPerSentence,
@@ -635,27 +663,23 @@ function bindEvents() {
     autoFallbackToggle.addEventListener('change', () => persistSettings(true));
   }
 
-  // 术语库交互（v0.2.8）
-  if (glossaryHeader && glossarySection) {
-    glossaryHeader.addEventListener('click', (e) => {
-      e.preventDefault();
-      glossarySection.classList.toggle('expanded');
-    });
-  }
+  // 术语库注入开关（v0.2.9）
   if (glossaryEnabledCheck) {
     glossaryEnabledCheck.addEventListener('change', () => persistSettings(true));
   }
-  if (glossarySearchInput) {
-    glossarySearchInput.addEventListener('input', () => renderGlossaryList());
+
+  // 术语与场景页（v0.2.9）
+  if (btnUploadScene && sceneUploadInput) {
+    btnUploadScene.addEventListener('click', () => sceneUploadInput.click());
   }
-  if (glossaryChips) {
-    glossaryChips.addEventListener('click', (e) => {
-      const btn = (e.target as HTMLElement).closest('.glossary-chip') as HTMLElement | null;
-      if (!btn) return;
-      glossaryChips.querySelectorAll('.glossary-chip').forEach((c) => c.classList.remove('active'));
-      btn.classList.add('active');
-      renderGlossaryList();
-    });
+  if (btnUploadGlossary && glossaryUploadInput) {
+    btnUploadGlossary.addEventListener('click', () => glossaryUploadInput.click());
+  }
+  if (sceneUploadInput) {
+    sceneUploadInput.addEventListener('change', () => handleSceneUpload(sceneUploadInput));
+  }
+  if (glossaryUploadInput) {
+    glossaryUploadInput.addEventListener('change', () => handleGlossaryUpload(glossaryUploadInput));
   }
 
   scenarioSelect.addEventListener('change', () => persistSettings(true));
@@ -1055,75 +1079,327 @@ function updatePreview() {
   }
 }
 
-/* ───────────────────────── 术语库（v0.2.8） ───────────────────────── */
 
-/**
- * 初始化术语库入口：徽章计数 + 首次渲染列表
- */
-function initGlossaryUI() {
-  const stats = getGlossaryStats();
-  if (glossaryCountBadge) {
-    glossaryCountBadge.textContent = `${stats.total} 条`;
-    glossaryCountBadge.title = `主播 ${stats.byCategory.talent} · 团体 ${stats.byCategory.group} · 游戏 ${stats.byCategory.game} · 歌曲 ${stats.byCategory.song} · 用语 ${stats.byCategory.term}`;
-  }
-  renderGlossaryList();
+/* ───────────────────── 术语与场景页（v0.2.9） ───────────────────── */
+
+let customPacks: CustomPacks = { glossaries: [], scenes: [] };
+
+async function initPacksUI(): Promise<void> {
+  customPacks = await loadCustomPacks();
+  renderSceneList();
+  renderGlossaryPackList();
 }
 
-/**
- * 渲染术语列表（按分类 chip + 关键词过滤，DOM 构建避免 XSS）
- */
-function renderGlossaryList() {
-  if (!glossaryList) return;
+function showPackStatus(message: string, kind: 'ok' | 'error' | 'warn' = 'ok'): void {
+  if (!packStatusEl) return;
+  packStatusEl.textContent = message;
+  packStatusEl.style.color = kind === 'error' ? '#f87171' : kind === 'warn' ? '#fbbf24' : '#34d399';
+  window.setTimeout(() => {
+    if (packStatusEl.textContent === message) {
+      packStatusEl.textContent = '';
+    }
+  }, 5000);
+}
 
-  const activeChip = glossaryChips?.querySelector('.glossary-chip.active') as HTMLElement | null;
-  const category = (activeChip?.dataset.category as GlossaryCategory | 'all') || 'all';
-  const keyword = (glossarySearchInput?.value || '').trim().toLowerCase();
+function getEnabledPackIds(): string[] {
+  const ids = currentSettings.glossaryPacks;
+  return Array.isArray(ids) && ids.length > 0 ? ids : DEFAULT_GLOSSARY_PACKS.slice();
+}
 
-  const list = GLOSSARY.filter((entry) => {
-    if (category !== 'all' && entry.category !== category) return false;
-    if (!keyword) return true;
-    const haystack = [entry.ja, entry.zh, entry.en || ''].join(' ').toLowerCase();
-    return haystack.includes(keyword);
-  }).slice(0, 200);
+/** 场景卡片列表（内置 + 上传） */
+function renderSceneList(): void {
+  const scenes = getAllScenes(customPacks);
+  const activeId = currentSettings.scenario || 'vtuber';
 
-  glossaryList.innerHTML = '';
-  if (list.length === 0) {
+  // 同步隐藏 select（保存逻辑依赖它）
+  if (scenarioSelect) {
+    scenarioSelect.innerHTML = '';
+    for (const scene of scenes) {
+      const option = document.createElement('option');
+      option.value = scene.id;
+      option.textContent = scene.name;
+      scenarioSelect.appendChild(option);
+    }
+    scenarioSelect.value = activeId;
+  }
+
+  if (sceneActiveBadgeEl) {
+    sceneActiveBadgeEl.textContent = scenes.find((s) => s.id === activeId)?.name || '通用日常';
+  }
+  if (!sceneListEl) return;
+
+  sceneListEl.innerHTML = '';
+  for (const scene of scenes) {
+    const card = document.createElement('div');
+    card.className = 'pack-card clickable' + (scene.id === activeId ? ' active' : '');
+
+    const main = document.createElement('div');
+    main.className = 'pack-main';
+    const nameRow = document.createElement('div');
+    nameRow.className = 'pack-name-row';
+    const name = document.createElement('span');
+    name.className = 'pack-name';
+    name.textContent = scene.name;
+    const badge = document.createElement('span');
+    badge.className = 'badge' + (scene.prompt ? '' : ' pack-badge-empty');
+    badge.textContent = scene.prompt ? (scene.builtIn ? '内置' : '已上传') : '待上传';
+    nameRow.append(name, badge);
+    const desc = document.createElement('span');
+    desc.className = 'pack-desc';
+    desc.textContent = scene.hint || scene.description;
+    main.append(nameRow, desc);
+
+    const actions = document.createElement('div');
+    actions.className = 'pack-actions';
+    const useBtn = document.createElement('button');
+    useBtn.type = 'button';
+    useBtn.className = 'btn-chip';
+    useBtn.textContent = scene.id === activeId ? '使用中' : '使用';
+    useBtn.disabled = scene.id === activeId || !scene.prompt;
+    useBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      selectScene(scene);
+    });
+    const uploadBtn = document.createElement('button');
+    uploadBtn.type = 'button';
+    uploadBtn.className = 'btn-chip';
+    uploadBtn.textContent = '上传';
+    uploadBtn.title = `上传「${scene.name}」场景包（JSON）`;
+    uploadBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      sceneUploadInput?.click();
+    });
+    actions.append(useBtn, uploadBtn);
+
+    card.append(main, actions);
+    card.addEventListener('click', () => {
+      if (!scene.prompt) {
+        showPackStatus('该场景为占位类别，请先上传场景包后再使用', 'warn');
+        return;
+      }
+      selectScene(scene);
+    });
+    sceneListEl.appendChild(card);
+  }
+}
+
+function selectScene(scene: ScenePack): void {
+  if (!scene.prompt) {
+    showPackStatus('该场景尚未配置提示词', 'warn');
+    return;
+  }
+  currentSettings.scenario = scene.id;
+  if (scenarioSelect) scenarioSelect.value = scene.id;
+  persistSettings(true);
+  renderSceneList();
+  updatePreview();
+  showPackStatus(`已切换到「${scene.name}」场景`, 'ok');
+}
+
+/** 术语库包卡片列表（内置 + 上传） */
+function renderGlossaryPackList(): void {
+  const packs = getAllGlossaryPacks(customPacks);
+  const enabled = getEnabledPackIds();
+
+  if (glossaryTotalBadgeEl) {
+    const total = packs.filter((p) => enabled.includes(p.id)).reduce((sum, p) => sum + p.entries.length, 0);
+    glossaryTotalBadgeEl.textContent = `${total} 条`;
+    glossaryTotalBadgeEl.title = `启用 ${enabled.length} 个术语库`;
+  }
+  if (!glossaryPackListEl) return;
+
+  glossaryPackListEl.innerHTML = '';
+  for (const pack of packs) {
+    const card = document.createElement('div');
+    card.className = 'pack-card clickable';
+
+    const main = document.createElement('div');
+    main.className = 'pack-main';
+    const nameRow = document.createElement('div');
+    nameRow.className = 'pack-name-row';
+    const name = document.createElement('span');
+    name.className = 'pack-name';
+    name.textContent = pack.name;
+    const countBadge = document.createElement('span');
+    countBadge.className = 'badge' + (pack.entries.length === 0 ? ' pack-badge-empty' : '');
+    countBadge.textContent = `${pack.entries.length} 条`;
+    nameRow.append(name, countBadge);
+    const desc = document.createElement('span');
+    desc.className = 'pack-desc';
+    desc.textContent = pack.description;
+    main.append(nameRow, desc);
+
+    const actions = document.createElement('div');
+    actions.className = 'pack-actions';
+    const toggle = document.createElement('label');
+    toggle.className = 'pack-toggle';
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.checked = enabled.includes(pack.id);
+    checkbox.disabled = pack.entries.length === 0;
+    checkbox.addEventListener('change', () => togglePack(pack, checkbox.checked));
+    toggle.append(checkbox, document.createTextNode(' 启用'));
+
+    const uploadBtn = document.createElement('button');
+    uploadBtn.type = 'button';
+    uploadBtn.className = 'btn-chip';
+    uploadBtn.textContent = '上传';
+    uploadBtn.title = `向「${pack.name}」类别上传术语库（JSON）`;
+    uploadBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      glossaryUploadInput?.click();
+    });
+    actions.append(toggle, uploadBtn);
+
+    if (!pack.builtIn) {
+      const delBtn = document.createElement('button');
+      delBtn.type = 'button';
+      delBtn.className = 'btn-chip';
+      delBtn.textContent = '删除';
+      delBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        handleDeletePack(pack);
+      });
+      actions.append(delBtn);
+    }
+
+    card.append(main, actions);
+    card.addEventListener('click', () => previewPack(pack));
+    glossaryPackListEl.appendChild(card);
+  }
+}
+
+function togglePack(pack: GlossaryPack, enabledOn: boolean): void {
+  const current = getEnabledPackIds();
+  const next = enabledOn
+    ? Array.from(new Set([...current, pack.id]))
+    : current.filter((id) => id !== pack.id);
+  currentSettings.glossaryPacks = next;
+  persistSettings(true);
+  renderGlossaryPackList();
+  showPackStatus(`「${pack.name}」已${enabledOn ? '启用' : '停用'}`, 'ok');
+}
+
+function previewPack(pack: GlossaryPack): void {
+  if (!packPreviewEl) return;
+  packPreviewEl.classList.remove('hidden');
+  packPreviewEl.innerHTML = '';
+
+  const title = document.createElement('div');
+  title.className = 'pack-preview-title';
+  title.textContent = `${pack.name} · ${pack.entries.length} 条${pack.entries.length > 60 ? '（显示前 60 条）' : ''}`;
+  packPreviewEl.appendChild(title);
+
+  if (pack.entries.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'glossary-empty';
-    empty.textContent = '未找到匹配术语';
-    glossaryList.appendChild(empty);
+    empty.textContent = '该类别暂无内容，可通过「上传」导入术语库 JSON';
+    packPreviewEl.appendChild(empty);
     return;
   }
 
   const frag = document.createDocumentFragment();
-  for (const entry of list) {
+  for (const entry of pack.entries.slice(0, 60)) {
     const row = document.createElement('div');
     row.className = 'glossary-item';
-
     const main = document.createElement('div');
     main.className = 'glossary-item-main';
-
     const ja = document.createElement('span');
     ja.className = 'glossary-ja';
     ja.textContent = entry.ja;
-
     const arrow = document.createElement('span');
     arrow.className = 'glossary-arrow';
     arrow.textContent = '→';
-
     const zh = document.createElement('span');
     zh.className = 'glossary-zh';
     zh.textContent = entry.zh;
-
     main.append(ja, arrow, zh);
-
     const meta = document.createElement('span');
     meta.className = 'glossary-meta';
-    meta.textContent = GLOSSARY_CATEGORY_LABELS[entry.category];
+    meta.textContent = GLOSSARY_CATEGORY_LABELS[entry.category] || '用语';
     meta.title = `来源：${entry.source}`;
-
     row.append(main, meta);
     frag.appendChild(row);
   }
-  glossaryList.appendChild(frag);
+  packPreviewEl.appendChild(frag);
+}
+
+async function handleDeletePack(pack: GlossaryPack): Promise<void> {
+  if (!window.confirm(`确定删除自定义术语库「${pack.name}」？该操作不可恢复。`)) return;
+  const packs = customPacks.glossaries.filter((p) => p.id !== pack.id);
+  const ok = await saveGlossaryPacks(packs);
+  if (!ok) {
+    showPackStatus('删除失败：本地存储不可用', 'error');
+    return;
+  }
+  customPacks = { ...customPacks, glossaries: packs };
+  currentSettings.glossaryPacks = getEnabledPackIds().filter((id) => id !== pack.id);
+  persistSettings(true);
+  renderGlossaryPackList();
+  if (packPreviewEl) {
+    packPreviewEl.classList.add('hidden');
+    packPreviewEl.innerHTML = '';
+  }
+  showPackStatus(`已删除「${pack.name}」`, 'ok');
+}
+
+async function handleGlossaryUpload(input: HTMLInputElement): Promise<void> {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    const json = JSON.parse(await file.text());
+    const result = validateGlossaryPack(json);
+    if (!result.ok || !result.pack) {
+      showPackStatus(`上传失败：${result.errors.slice(0, 3).join('；')}`, 'error');
+      return;
+    }
+    const newPack = result.pack;
+    if (BUILTIN_GLOSSARY_PACKS.some((p) => p.name === newPack.name)) {
+      newPack.name = `${newPack.name}（自定义）`;
+    }
+    const packs = [...customPacks.glossaries.filter((p) => p.name !== newPack.name), newPack];
+    const ok = await saveGlossaryPacks(packs);
+    if (!ok) {
+      showPackStatus('保存失败：本地存储不可用', 'error');
+      return;
+    }
+    customPacks = { ...customPacks, glossaries: packs };
+    currentSettings.glossaryPacks = Array.from(new Set([...getEnabledPackIds(), newPack.id]));
+    persistSettings(true);
+    renderGlossaryPackList();
+    previewPack(newPack);
+    showPackStatus(`已导入「${newPack.name}」${newPack.entries.length} 条，并自动启用`, 'ok');
+  } catch (err: any) {
+    showPackStatus(`解析失败：${err?.message || '不是合法 JSON'}`, 'error');
+  }
+}
+
+async function handleSceneUpload(input: HTMLInputElement): Promise<void> {
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  try {
+    const json = JSON.parse(await file.text());
+    const result = validateScenePack(json);
+    if (!result.ok || !result.pack) {
+      showPackStatus(`上传失败：${result.errors.slice(0, 3).join('；')}`, 'error');
+      return;
+    }
+    const newPack = result.pack;
+    if (BUILTIN_SCENES.some((p) => p.name === newPack.name)) {
+      newPack.name = `${newPack.name}（自定义）`;
+    }
+    const packs = [...customPacks.scenes.filter((p) => p.name !== newPack.name), newPack];
+    const ok = await saveScenePacks(packs);
+    if (!ok) {
+      showPackStatus('保存失败：本地存储不可用', 'error');
+      return;
+    }
+    customPacks = { ...customPacks, scenes: packs };
+    renderSceneList();
+    showPackStatus(`已导入场景「${newPack.name}」，在列表中点击「使用」即可切换`, 'ok');
+  } catch (err: any) {
+    showPackStatus(`解析失败：${err?.message || '不是合法 JSON'}`, 'error');
+  }
 }

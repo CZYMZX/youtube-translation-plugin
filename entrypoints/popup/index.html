@@ -24,11 +24,12 @@
     </header>
 
     <!-- 导航标签页 (平滑物理滑块) -->
-    <div class="smooth-tabs" id="main-tabs" style="--tab-active-index: 0;">
+    <div class="smooth-tabs" id="main-tabs" style="--tab-active-index: 0; --tab-count: 4;">
       <div class="tab-glider" aria-hidden="true"></div>
       <button type="button" class="tab-btn active" data-tab="general" data-index="0">通用与翻译</button>
-      <button type="button" class="tab-btn" data-tab="segmentation" data-index="1">断句引擎</button>
-      <button type="button" class="tab-btn" data-tab="style" data-index="2">样式排版</button>
+      <button type="button" class="tab-btn" data-tab="packs" data-index="1">术语与场景</button>
+      <button type="button" class="tab-btn" data-tab="segmentation" data-index="2">断句引擎</button>
+      <button type="button" class="tab-btn" data-tab="style" data-index="3">样式排版</button>
     </div>
 
     <!-- 标签 1：通用与翻译 -->
@@ -59,29 +60,6 @@
           <option value="es">西班牙语 (Spanish)</option>
           <option value="ru">俄语 (Russian)</option>
         </select>
-      </div>
-
-      <!-- 翻译场景 (平滑选项切换器) -->
-      <div class="form-group">
-        <div class="label-with-value">
-          <label>
-            <svg width="14" height="14" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;">
-              <rect x="6" y="8" width="36" height="32" rx="4"/>
-              <path d="M6 18h36M18 18v22M30 18v22"/>
-            </svg>
-            翻译场景
-          </label>
-          <span class="badge badge-accent" id="scenario-badge">二次元熟肉</span>
-        </div>
-        <select id="scenario-select" class="visually-hidden">
-          <option value="vtuber">VTuber 虚拟主播直播</option>
-          <option value="general">通用日常与科技访谈</option>
-        </select>
-        <div class="smooth-switcher" data-target="scenario-select" data-count="2" style="--count: 2; --active-index: 0;">
-          <div class="switcher-glider" aria-hidden="true"></div>
-          <button type="button" class="switcher-item active" data-value="vtuber">VTuber 直播</button>
-          <button type="button" class="switcher-item" data-value="general">通用日常</button>
-        </div>
       </div>
 
       <!-- 模型推理程度 (3段平滑选项切换器) -->
@@ -190,61 +168,85 @@
         </div>
       </div>
 
-      <!-- 术语库（折叠手风琴卡片，v0.2.8） -->
-      <div id="glossary-section" class="card ai-accordion-card glossary-card">
-        <button type="button" id="glossary-accordion-header" class="ai-accordion-header" title="展开查看 VTuber / hololive 术语库">
-          <div class="ai-accordion-left">
-            <span class="ai-accordion-icon">
-              <svg width="15" height="15" viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round">
-                <path d="M8 6h24a6 6 0 0 1 6 6v30H14a6 6 0 0 1-6-6z"/>
-                <path d="M8 36a6 6 0 0 1 6-6h24"/>
-              </svg>
-            </span>
-            <div class="ai-accordion-text">
-              <span class="ai-accordion-title">术语库</span>
-              <span class="ai-accordion-desc" id="glossary-desc">VTuber 直播术语 · 主播 / 团体 / 游戏 / 歌名</span>
-            </div>
-          </div>
-          <div class="ai-accordion-right">
-            <span class="badge badge-accent" id="glossary-count-badge">0 条</span>
-            <span class="ai-accordion-arrow">▸</span>
-          </div>
-        </button>
-
-        <div class="ai-accordion-body" id="glossary-accordion-body">
-          <div class="form-check glossary-enable-row">
-            <input type="checkbox" id="glossary-enabled" checked>
-            <label for="glossary-enabled">翻译时自动注入术语库（保证译名统一）</label>
-          </div>
-
-          <div class="form-group glossary-search-group">
-            <input type="text" id="glossary-search" class="form-input" placeholder="搜索日文 / 中文 / 英文…">
-          </div>
-
-          <div class="glossary-chips" id="glossary-chips">
-            <button type="button" class="glossary-chip active" data-category="all">全部</button>
-            <button type="button" class="glossary-chip" data-category="talent">主播</button>
-            <button type="button" class="glossary-chip" data-category="group">团体</button>
-            <button type="button" class="glossary-chip" data-category="game">游戏</button>
-            <button type="button" class="glossary-chip" data-category="song">歌曲</button>
-            <button type="button" class="glossary-chip" data-category="term">用语</button>
-          </div>
-
-          <div class="glossary-list" id="glossary-list"></div>
-
-          <div class="glossary-footer" id="glossary-footer">
-            数据来源：hololive 官网 / 中文维基百科 / 日文维基百科
-          </div>
-        </div>
-      </div>
-
       <div class="form-check">
         <input type="checkbox" id="auto-hide-native">
         <label for="auto-hide-native">自动隐藏 YouTube 原生自动字幕（防止重叠）</label>
       </div>
     </div>
 
-    <!-- 标签 2：智能断句参数 -->
+    <!-- 标签 2：术语与场景（v0.2.9） -->
+    <div class="tab-content" id="tab-packs">
+      <div class="card intro-card">
+        <p class="intro-text">
+          「翻译场景」决定注入给翻译 AI 的提示词风格；「术语库」保证专有名词译名统一。两者均可上传自定义包扩充。
+        </p>
+      </div>
+
+      <!-- 隐藏的兼容字段：同步当前场景，供既有保存逻辑读取 -->
+      <select id="scenario-select" class="visually-hidden">
+        <option value="vtuber">VTuber 虚拟主播直播</option>
+        <option value="general">通用日常与访谈</option>
+      </select>
+
+      <!-- 翻译场景 -->
+      <div class="section-head">
+        <span class="section-title">翻译场景</span>
+        <div class="section-head-right">
+          <span class="badge badge-accent" id="scene-active-badge">VTuber 直播</span>
+          <button type="button" class="btn-chip" id="btn-upload-scene">＋ 上传场景</button>
+        </div>
+      </div>
+      <div class="pack-list" id="scene-list"></div>
+      <details class="spec-details">
+        <summary>翻译场景上传规范</summary>
+        <div class="spec-body">
+          <p>JSON 对象，必填 <code>name</code>（≤40 字）与 <code>prompt</code>（20~4000 字）：</p>
+          <pre>{
+  "version": 1,
+  "name": "科普视频",
+  "description": "科学解说 / 教育内容",
+  "hint": "例：TED-Ed、物理讲解",
+  "prompt": "你是一位科普字幕译者。要求：术语准确、逻辑清晰、保留公式与单位……"
+}</pre>
+          <p>prompt 会作为 system prompt 的场景段注入；请写明受众、语气、术语处理与禁止事项。上传后立即出现在场景列表，选中即生效。</p>
+        </div>
+      </details>
+
+      <!-- 术语库 -->
+      <div class="section-head">
+        <span class="section-title">术语库</span>
+        <div class="section-head-right">
+          <label class="pack-toggle"><input type="checkbox" id="glossary-enabled" checked> 注入</label>
+          <span class="badge" id="glossary-total-badge">0 条</span>
+          <button type="button" class="btn-chip" id="btn-upload-glossary">＋ 上传术语库</button>
+        </div>
+      </div>
+      <div class="pack-list" id="glossary-pack-list"></div>
+      <div class="pack-preview hidden" id="pack-preview"></div>
+      <details class="spec-details">
+        <summary>术语库上传规范</summary>
+        <div class="spec-body">
+          <p>JSON 对象，必填 <code>name</code> 与非空 <code>entries</code> 数组（≤2000 条）：</p>
+          <pre>{
+  "version": 1,
+  "name": "MC 游戏术语库",
+  "description": "Minecraft 方块 / 生物 / 机制",
+  "entries": [
+    { "ja": "クリーパー", "zh": "苦力怕", "en": "Creeper", "category": "term",
+      "source": "https://zh.minecraft.wiki/", "sourceType": "wiki" }
+  ]
+}</pre>
+          <p>每条必填 <code>ja</code>（日文原词）与 <code>zh</code>（中文译名）；<code>category</code> 可选 talent/group/game/song/term，缺省按 term 处理。翻译时只注入本批文本命中的术语。</p>
+        </div>
+      </details>
+
+      <div id="pack-status" class="status-msg"></div>
+
+      <input type="file" id="scene-upload-input" accept=".json,application/json" class="hidden">
+      <input type="file" id="glossary-upload-input" accept=".json,application/json" class="hidden">
+    </div>
+
+    <!-- 标签 3：智能断句参数 -->
     <div class="tab-content" id="tab-segmentation">
       <div class="card intro-card">
         <p class="intro-text">
@@ -329,7 +331,7 @@
       </div>
     </div>
 
-    <!-- 标签 3：样式排版 -->
+    <!-- 标签 4：样式排版 -->
     <div class="tab-content" id="tab-style">
       <div class="form-group">
         <label>展示内容模式</label>
@@ -463,7 +465,7 @@
     </div>
 
     <footer class="popup-footer">
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.8</span>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.2.9</span>
     </footer>
   </div>
 

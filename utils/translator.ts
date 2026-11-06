@@ -5,6 +5,14 @@ import {
   buildSentenceCacheKey
 } from './db-cache';
 import { GLOSSARY_VERSION, findGlossaryMatches, buildGlossaryPromptBlock } from './glossary';
+import {
+  loadCustomPacks,
+  resolveScenePrompt,
+  hashPrompt,
+  collectGlossaryEntries,
+  DEFAULT_GLOSSARY_PACKS,
+  type CustomPacks
+} from './packs';
 
 export interface TranslationOptions {
   bypassCache?: boolean;
@@ -16,9 +24,42 @@ export interface TranslationOptions {
  */
 const translationCache = new Map<string, string>();
 
-/** v0.2.8：术语库缓存标记（启用时携带版本号，术语更新后旧译文自动失效） */
+/** v0.2.9：自定义术语库 / 场景包（chrome.storage.local），10 秒 TTL 缓存 */
+let activeCustomPacks: CustomPacks = { glossaries: [], scenes: [] };
+let packsLoadedAt = 0;
+
+async function refreshPacksIfStale(force = false): Promise<void> {
+  if (!force && Date.now() - packsLoadedAt < 10000) return;
+  try {
+    activeCustomPacks = await loadCustomPacks();
+    packsLoadedAt = Date.now();
+  } catch {
+    activeCustomPacks = { glossaries: [], scenes: [] };
+  }
+}
+
+/** v0.2.8：术语库缓存标记（启用包 + 版本 + 自定义包指纹，任一变化旧译文失效） */
 function getGlossaryTag(settings: ExtensionSettings): string {
-  return settings.glossaryEnabled !== false ? GLOSSARY_VERSION : '';
+  if (settings.glossaryEnabled === false) return '';
+  const ids = (settings.glossaryPacks && settings.glossaryPacks.length > 0
+    ? settings.glossaryPacks
+    : DEFAULT_GLOSSARY_PACKS
+  )
+    .slice()
+    .sort()
+    .join(',');
+  const customFp = activeCustomPacks.glossaries
+    .map((p) => `${p.id}:${p.entries.length}`)
+    .sort()
+    .join(',');
+  return `${GLOSSARY_VERSION}|${ids}|${customFp}`;
+}
+
+/** 场景标签：场景 id + 提示词指纹（自定义场景改提示词后旧译文失效） */
+function getScenarioTag(settings: ExtensionSettings): string {
+  const scenarioId = settings.scenario || 'vtuber';
+  const scene = resolveScenePrompt(scenarioId, activeCustomPacks);
+  return `${scenarioId}#${hashPrompt(scene.prompt)}`;
 }
 
 function getCacheKey(
@@ -61,7 +102,7 @@ function planBatch(
     : texts.map(
         (t) =>
           translationCache.get(
-            getCacheKey(targetLang, t, scenario, reasoningEffort, service, modelName, glossaryTag)
+            getCacheKey(targetLang, t, getScenarioTag(settings), reasoningEffort, service, modelName, glossaryTag)
           ) ?? null
       );
 
@@ -101,7 +142,7 @@ function commitBatch(
     plan.results[plan.uncachedIndices[i]] = trans;
     if (!bypassCache) {
       translationCache.set(
-        getCacheKey(targetLang, originalText, scenario, reasoningEffort, service, modelName, glossaryTag),
+        getCacheKey(targetLang, originalText, getScenarioTag(settings), reasoningEffort, service, modelName, glossaryTag),
         trans
       );
     }
@@ -143,32 +184,10 @@ async function callWithRetry<T>(fn: () => Promise<T>, maxRetries = 2): Promise<T
  * 根据场景和推理程度构造专业的 System Prompt
  */
 function buildSystemPrompt(settings: ExtensionSettings, targetLang: string, texts: string[] = []): string {
-  const { scenario = 'general', reasoningEffort = 'low' } = settings;
+  const { reasoningEffort = 'low' } = settings;
 
-  let personaAndScenario = '';
-  if (scenario === 'vtuber') {
-    personaAndScenario = `你是一位精通 VTuber（虚拟主播）文化和 ACG 流行语的资深双语翻译字幕君（熟肉切片官/烤肉 Man）。
-当前翻译场景是【VTuber 虚拟主播直播/切片】，请严格遵照以下行业翻译准则：
-1. 风格生动活泼、萌趣传神、接地气，还原主播的性格特征、语气口癖与情绪起伏（如傲娇、惊慌尖叫、狂笑吐槽、假哭、自言自语等）。
-2. 精准识别并地道翻译二次元/VTuber 圈内流行用语与弹幕黑话：
-   - kusa / 草 / www / lmao -> “草”、“笑死”、“哈哈哈”、“www”
-   - teetee / 尊い -> “太尊了”、“贴贴”、“甜死我了”
-   - pon -> “天然呆”、“笨比”、“又犯蠢了”
-   - seiso -> “清楚”（或反讽的“真清楚捏”）
-   - yabai / yabe -> “牙白”、“要糟”、“寄了”、“坏了坏了”
-   - stream / chat -> “直播间”、“弹幕区 / 观众们”
-   - clipping / clipper -> “切片 / 烤肉组”
-   - gachikoi / dd -> “单推 / 纯爱”、“DD”
-   - superchat / sc -> “醒目留言 / SC”
-   - 常见游戏用语（APEX/VALO/Minecraft等）：马枪、拉枪、偷屁股、下饭、送了
-3. 主播与直播间弹幕观众（Chat）互动、互怼或玩梗时，译文必须符合国内熟肉切片和弹幕观看习惯，严禁僵硬死板的字面机翻。
-4. 语言精炼易读，适合直播快节奏快速扫视。`;
-  } else {
-    personaAndScenario = `你是一位精通视频双语字幕翻译的资深专家。
-当前翻译场景是【通用日常视频与访谈】，要求：
-1. 语言地道自然，符合影视与日常口语化表达习惯，简练通顺。
-2. 保持上下文连贯，准确处理前后句的代词指代与隐喻。`;
-  }
+  // v0.2.9：场景提示词来自场景包（内置 + 用户上传）；占位场景回退 general
+  const personaAndScenario = resolveScenePrompt(settings.scenario || 'vtuber', activeCustomPacks).prompt;
 
   let reasoningGuidance = '';
   if (reasoningEffort === 'high') {
@@ -189,9 +208,16 @@ function buildSystemPrompt(settings: ExtensionSettings, targetLang: string, text
   }
 
   // v0.2.8 术语库：仅注入本批文本实际命中的术语，控制 prompt 体积
+  // v0.2.9：按用户启用的术语库包（内置 + 上传）汇总匹配
   const glossaryBlock =
     settings.glossaryEnabled !== false
-      ? buildGlossaryPromptBlock(findGlossaryMatches(texts))
+      ? buildGlossaryPromptBlock(
+          findGlossaryMatches(
+            texts,
+            40,
+            collectGlossaryEntries(settings.glossaryPacks || DEFAULT_GLOSSARY_PACKS, activeCustomPacks)
+          )
+        )
       : '';
 
   return `${personaAndScenario}
@@ -585,6 +611,9 @@ export async function translateSentenceBatch(
 ): Promise<string[]> {
   if (texts.length === 0) return [];
 
+  // v0.2.9：翻译前刷新自定义术语库 / 场景包（10s TTL，避免每批读存储）
+  await refreshPacksIfStale();
+
   const service = settings.service || 'google';
   const bypassCache = !!options?.bypassCache;
 
@@ -593,7 +622,7 @@ export async function translateSentenceBatch(
     buildSentenceCacheKey(
       targetLang,
       t,
-      settings.scenario,
+      getScenarioTag(settings),
       settings.reasoningEffort,
       service,
       settings.modelName,
