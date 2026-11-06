@@ -30,31 +30,31 @@
     <div class="shell">
       <nav class="sidenav" id="sidenav" role="tablist" aria-orientation="vertical" aria-label="设置分区">
         <div class="nav-marker" aria-hidden="true"></div>
-        <button type="button" role="tab" class="navitem active" data-pane="general" aria-selected="true" tabindex="0">
+        <button type="button" role="tab" class="navitem active" id="nav-general" aria-controls="pane-general" data-pane="general" aria-selected="true" tabindex="0">
           <span class="navitem-label">常规</span>
           <span class="navitem-hint">开关 · 语言 · 场景</span>
         </button>
-        <button type="button" role="tab" class="navitem" data-pane="service" aria-selected="false" tabindex="-1">
+        <button type="button" role="tab" class="navitem" id="nav-service" aria-controls="pane-service" data-pane="service" aria-selected="false" tabindex="-1">
           <span class="navitem-label">服务与模型</span>
           <span class="navitem-hint">Key · 端点 · 降级</span>
         </button>
-        <button type="button" role="tab" class="navitem" data-pane="glossary" aria-selected="false" tabindex="-1">
+        <button type="button" role="tab" class="navitem" id="nav-glossary" aria-controls="pane-glossary" data-pane="glossary" aria-selected="false" tabindex="-1">
           <span class="navitem-label">术语库</span>
           <span class="navitem-hint">编辑 · 导入导出</span>
         </button>
-        <button type="button" role="tab" class="navitem" data-pane="segment" aria-selected="false" tabindex="-1">
+        <button type="button" role="tab" class="navitem" id="nav-segment" aria-controls="pane-segment" data-pane="segment" aria-selected="false" tabindex="-1">
           <span class="navitem-label">断句引擎</span>
           <span class="navitem-hint">策略 · 阈值</span>
         </button>
-        <button type="button" role="tab" class="navitem" data-pane="appearance" aria-selected="false" tabindex="-1">
+        <button type="button" role="tab" class="navitem" id="nav-appearance" aria-controls="pane-appearance" data-pane="appearance" aria-selected="false" tabindex="-1">
           <span class="navitem-label">字幕样式</span>
           <span class="navitem-hint">字号 · 配色 · 位置</span>
         </button>
-        <button type="button" role="tab" class="navitem" data-pane="performance" aria-selected="false" tabindex="-1">
+        <button type="button" role="tab" class="navitem" id="nav-performance" aria-controls="pane-performance" data-pane="performance" aria-selected="false" tabindex="-1">
           <span class="navitem-label">同步与缓存</span>
           <span class="navitem-hint">偏移 · 清缓存</span>
         </button>
-        <button type="button" role="tab" class="navitem" data-pane="about" aria-selected="false" tabindex="-1">
+        <button type="button" role="tab" class="navitem" id="nav-about" aria-controls="pane-about" data-pane="about" aria-selected="false" tabindex="-1">
           <span class="navitem-label">关于</span>
           <span class="navitem-hint">版本 · 说明</span>
         </button>
@@ -97,6 +97,8 @@
                   <option value="en">English</option>
                   <option value="ja">日本語</option>
                   <option value="ko">한국어</option>
+                  <option value="fr">Français</option>
+                  <option value="de">Deutsch</option>
                   <option value="es">Español</option>
                   <option value="ru">Русский</option>
                 </select>
@@ -562,8 +564,8 @@
               <div class="row-control"><span class="pill pill-ok">本地存储</span></div>
             </div>
             <div class="row">
-              <div class="row-text"><span class="row-title">快捷键</span><span class="row-desc">在视频页按 <kbd>Alt</kbd> + <kbd>T</kbd> 可快速开关浮层。</span></div>
-              <div class="row-control"><span class="mono">Alt + T</span></div>
+              <div class="row-text"><span class="row-title">打开快捷面板</span><span class="row-desc">点浏览器工具栏上的扩展图标，即可在视频页打开 380px 快捷面板。</span></div>
+              <div class="row-control"><span class="mono">工具栏图标</span></div>
             </div>
           </div>
         </section>

@@ -28,7 +28,7 @@ README 只有理念，具体数值在 `references/`。实际采用的可执行�
 ## 二、改动范围（界面与组件清单）
 
 ### 2.1 全局
-- `:root` 令牌层重写：表面、文字层级、圆角三档、时长四级、缓动六条、弹簧两条、错峰两档、阴影两级。
+- `:root` 令牌层重写：表面、文字层级、圆角档位（`--radius-lg/md/sm/pill` = 12 / 8 / 6 / 999，见 §5.1）、时长四级、缓动六条、弹簧两条、错峰两档、阴影两级。
 - 移除 `transition: all` **6 处**（`.form-select/.form-input`、`.btn-sm/.btn-xs`、`.btn`、`.glossary-chip`、`.btn-chip`、`.preview-box`）。
 - 卡片放弃「表面 + 边框 + 阴影」三重叠加，只留表面 + 边框；模糊半径 16px → 10px。
 
@@ -113,7 +113,7 @@ README 只有理念，具体数值在 `references/`。实际采用的可执行�
 | 令牌实机解析 | `--dur-fast: .16s`、`--dur-base: .3s`、`--spring-soft: linear(0, .18 12%, …)` |
 | 滑块计算值 | `transition-timing-function: linear(0 0%, .18 12%, …)`、`duration: 0.3s` |
 | 键盘导航 | `ArrowRight` → 激活「术语与场景」、`aria-selected` 同步、焦点跟随 |
-| reduced-motion | 8 个子项 `opacity=1`、`animation-name: none`，无「停在 from 帧」 |
+| reduced-motion | 页签子项 `opacity=1`、`animation-name: none`，无「停在 from 帧」（子项数随页签变化：常规 6 个 / 断句引擎 8 个） |
 | 横向溢出 | `scrollWidth - clientWidth = 0` |
 | 控制台 | 无 pageerror |
 | 构建 | chrome / edge 均 0.3.0；内容脚本 `backdrop-filter` = 0（VSR 红线保持） |
@@ -133,6 +133,19 @@ README 只有理念，具体数值在 `references/`。实际采用的可执行�
 | 卡片零阴影 | 卡片无阴影，但页签滑块保留一层轻投影 | 滑块需要与底槽区分层级，属功能而非装饰 |
 | 单一 accent | 保留白色为唯一交互色，另留 3 个语义状态色（成功/警告/错误） | 状态色是信息编码，不是装饰用色 |
 | `backdrop-filter` | popup 保留 10px 毛玻璃，内容脚本仍为 0 | 毛玻璃只影响弹窗；视频浮层加滤镜会关闭 RTX VSR（已有回归测试守护） |
+
+---
+
+## 5.1 登记偏差（勿擅自「顺手修」）
+
+以下是文档口径与代码现状的**已知不一致**，全部保留原状，只有拍板后才改：
+
+| 项 | 文档口径 | 代码现状 | 为什么不改 |
+|---|---|---|---|
+| 圆角档位 | 「12 / 8 / 999 三档」 | 两页 `:root` 都有第四档 `--radius-sm: 6px`（`.btn-sm/.btn-xs`、`.pack-item`、`.op-btn`、`.gloss-input` 在用），测试只校验「令牌种类 ≤ 4」所以不报红 | 改取值会动 `.btn-sm/.btn-xs` 等控件外观，属视觉变更 |
+| 硬编码圆角 | 未列 | popup 另有 `7px`（`.switcher-glider` / `.switcher-item`）、`8px`（`.header-logo-icon`、`.glossary-list`、`.spec-details`、`.pack-preview`）、`6px`（`.spec-body pre`、`.btn-chip`）、`4px`（`.glossary-meta`）、`2px`（`.pack-card::before`）；`9px` 只出现在 `options/style.css` 的 `.brand-mark` | 同理，是视觉变更 |
+| `.preview-sub` 过渡 | 「只动 transform / opacity」 | `options/style.css` 仍 `transition: bottom`，而 `main.ts` 已改用 `top` → 该过渡永不触发 | 属任务四与任务五交界处的历史残留，改它会动预览动效手感 |
+| 档名 | 早期引用写作 `UI-1.3.0.md` | 本任务对应文档就是 `docs/UI.md`（正文标题已是 v0.3.0），仓库里不存在 `UI-1.3.0.md` | 只在资料库侧修正引用，仓库不改名，避免历史链接断裂 |
 
 ---
 

@@ -186,7 +186,7 @@ body {
 
 .save-chip[data-state="saving"] i {
   background: var(--state-warn);
-  animation: pulse 1.1s var(--ease-in-out);
+  animation: pulse 1.1s var(--ease-standard);
 }
 
 .save-chip[data-state="error"] {

@@ -6,7 +6,7 @@
  *   - 术语库：utils/packs.ts（自定义包存 local，内置包在代码里）
  * 两处任一改动都会通过 storage.onChanged 同步到另一处，不存在"两份设置"。
  */
-import type { ExtensionSettings } from '../../types';
+import { DEFAULT_SETTINGS, type ExtensionSettings } from '../../types';
 import { getStoredSettings, saveStoredSettings } from '../../utils/storage';
 import {
   getAllGlossaryPacks,
@@ -131,16 +131,14 @@ function bindControls(): void {
     if (el instanceof HTMLInputElement && el.type === 'range') {
       el.addEventListener('input', () => {
         syncRangeOutput(key, Number(el.value));
-        applyPreview();
-        void update({ [key]: Number(el.value) } as Partial<ExtensionSettings>, { silentPreview: true });
+        void update({ [key]: Number(el.value) } as Partial<ExtensionSettings>);
       });
       return;
     }
 
     if (el instanceof HTMLInputElement && el.type === 'color') {
       el.addEventListener('input', () => {
-        applyPreview();
-        void update({ [key]: el.value } as Partial<ExtensionSettings>, { silentPreview: true });
+        void update({ [key]: el.value } as Partial<ExtensionSettings>);
       });
       return;
     }
@@ -216,9 +214,11 @@ function syncRangeOutput(key: string, value: number): void {
 
 let saveTimer: number | undefined;
 
-async function update(patch: Partial<ExtensionSettings>, opts: { silentPreview?: boolean } = {}): Promise<void> {
+async function update(patch: Partial<ExtensionSettings>): Promise<void> {
   settings = { ...settings, ...patch };
-  if (!opts.silentPreview) applyPreview();
+  // 预览必须读合并后的 settings：早期把 applyPreview() 放在合并之前，
+  // 导致滑块/取色器改动整整滞后一次输入才反映到预览上。
+  applyPreview();
   if (patch.scenario) renderScenarios();
   if (patch.service) reflectSettings();
 
@@ -275,7 +275,7 @@ function renderScenarios(): void {
 /* ══════════════════════════ 字幕预览 ══════════════════════════ */
 
 function hexToRgba(hex: string, alpha: number): string {
-  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-fd]{2})$/i.exec(hex);
+  const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!m) return `rgba(15, 23, 42, ${alpha})`;
   const r = parseInt(m[1], 16);
   const g = parseInt(m[2], 16);
@@ -734,27 +734,9 @@ async function testService(): Promise<void> {
 
 async function resetSettings(): Promise<void> {
   if (!window.confirm('恢复默认设置？术语库与自定义场景包会保留。')) return;
-  const defaults = {
-    enabled: true,
-    targetLang: 'zh-CN',
-    service: 'google' as const,
-    scenario: 'vtuber',
-    reasoningEffort: 'low' as const,
-    pauseThreshold: 450,
-    maxCharsPerSentence: 28,
-    maxDurationMs: 6500,
-    maxWordsPerSentence: 16,
-    autoPunctuation: true,
-    mergeShortFragments: true,
-    displayMode: 'bilingual' as const,
-    layoutOrder: 'translation_top' as const,
-    fontSize: 20,
-    bgOpacity: 75,
-    offsetY: 82,
-    syncOffsetMs: 0,
-    autoHideNativeSubtitles: true
-  };
-  settings = await saveStoredSettings(defaults);
+  // 只认 types 里的 DEFAULT_SETTINGS：早期这里手写了一份残缺的默认值副本，
+  // 漏掉 segmentationLanguage / 三种配色 / API 配置，导致「恢复默认」名不副实。
+  settings = await saveStoredSettings({ ...DEFAULT_SETTINGS });
   reflectSettings();
   applyPreview();
   renderScenarios();

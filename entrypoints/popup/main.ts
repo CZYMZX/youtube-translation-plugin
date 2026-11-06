@@ -88,7 +88,6 @@ const serviceSelect = document.getElementById('service-select') as HTMLSelectEle
 
 // 场景与推理
 const scenarioSelect = document.getElementById('scenario-select') as HTMLSelectElement;
-const scenarioBadge = document.getElementById('scenario-badge') as HTMLElement;
 const reasoningSelect = document.getElementById('reasoning-select') as HTMLSelectElement;
 const reasoningBadge = document.getElementById('reasoning-badge') as HTMLElement;
 
@@ -426,7 +425,6 @@ function populateForm() {
   serviceSelect.value = currentSettings.service;
 
   scenarioSelect.value = currentSettings.scenario || 'vtuber';
-  updateScenarioBadge();
 
   reasoningSelect.value = currentSettings.reasoningEffort || 'low';
   updateReasoningBadge();
@@ -516,17 +514,6 @@ function updateColorDotActiveStates() {
       dot.classList.remove('active');
     }
   });
-}
-
-function updateScenarioBadge() {
-  if (!scenarioBadge) return;
-  if (scenarioSelect.value === 'vtuber') {
-    scenarioBadge.textContent = '二次元熟肉';
-    scenarioBadge.className = 'badge badge-accent';
-  } else {
-    scenarioBadge.textContent = '通用口语';
-    scenarioBadge.className = 'badge';
-  }
 }
 
 function updateReasoningBadge() {
@@ -667,7 +654,6 @@ function persistSettings(immediate = false) {
     syncOffsetMs: currentSettings.syncOffsetMs || 0
   };
 
-  updateScenarioBadge();
   updateReasoningBadge();
   updateAiAccordionState();
   updatePreview();

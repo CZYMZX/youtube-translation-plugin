@@ -103,7 +103,7 @@
 |---|---|
 | `tsc --noEmit` | 0 error |
 | `npm test` | EXIT=0，五个套件全绿（packs 53 · glossary 46 · segmenter 34 · popup-ui 28 · **options-ui 40**） |
-| 分区 | 7 个，`role=tablist` + 7 个 `tabpanel`，方向键可切换 |
+| 分区 | 7 个，`role=tablist` + 7 个 `tabpanel`，每个面板的 `aria-labelledby` 都指向真实存在的 `#nav-*`，方向键 / Home / End 可切换 |
 | 术语库 | 首包 146 行；搜索「そら」→ 1/146；只读横幅正确显示；「另存副本」后可编辑 |
 | 操作列 | 「编辑」「删除」均完整渲染（实测各 37px，修复前编辑被裁掉） |
 | 实时预览 | 字号 20px → 32px 立即生效，且 `fontSize=32` 已落盘 |
@@ -112,11 +112,24 @@
 | 控制台 | 无 pageerror |
 | 构建 | chrome / edge 均 0.4.0，`options_ui.open_in_tab=true`；内容脚本 `backdrop-filter` 仍为 0（VSR 红线） |
 
-### 修掉的两个实现缺陷
+### 修掉的实现缺陷（累计）
 
 1. **分段滑块停在末位**：`reflectSettings` 给每个按钮都写了 `--seg-index`，最后一个覆盖全部 →
    改为只在选中项上写索引。
 2. **术语库操作列裁掉「编辑」**：`col-ops: 10%` 放不下两个按钮 → 调整为 21%，并压缩前几列。
+3. **预览参数滞后一次输入**：`applyPreview()` 在 `settings` 合并之前调用，滑块/取色器要连动两次才反映到预览。
+   改为在 `update()` 内合并后统一重画，删掉 `silentPreview` 旁路。（2026-11 复核修复）
+4. **预览背景色恒为默认色**：`hexToRgba` 的第三个捕获组误写成 `[a-fd]`（漏 `\d`），
+   凡蓝通道含数字（`#0f172a`、`#123456` …）即失配 → 静默回退 `rgba(15, 23, 42, α)`，肉眼看不出来。
+   已改正则。（2026-11 复核修复）
+5. **7 个 `aria-labelledby="nav-*"` 悬空**：导航按钮没有 `id`，读屏软件拿不到分区名。已补 `id` 与 `aria-controls`。
+6. **「恢复默认」名不副实**：`resetSettings` 手写了一份残缺默认值，漏掉 `segmentationLanguage`、三种配色、
+   API 配置。改为直接展开 `types/index.ts` 的 `DEFAULT_SETTINGS`，不再维护第二份默认值副本。
+7. **未定义令牌**：`.save-chip[data-state="saving"] i` 引用 `var(--ease-in-out)`（两页 `:root` 都没有），
+   实际回落到默认 `ease`。改用已在字典里的 `--ease-standard`。
+8. **关于页宣称不存在的能力**：写着「`Alt` + `T` 快速开关浮层」，但 `wxt.config.ts` 没有 `commands` 注册、
+   内容脚本也没有对应 keydown。改为如实描述「点工具栏图标打开快捷面板」。
+9. **目标语言缺项**：弹窗给 9 种语言，设置页只有 7 种（缺 fr / de）。已补齐。
 
 ---
 
