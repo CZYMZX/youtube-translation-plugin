@@ -21,14 +21,14 @@ CaptionToken[]
 LanguageProfile                      ← 语言策略参数包（单位制/日语语法/英语语法/最小断句单位）
    │ segmentCaptionTokens()          ← 9 条规则（4 条硬约束优先）
    ▼
-后处理：短碎片合并 → 纯标点句过滤 → 时间轴去重叠 → 重编号
+后处理：纯标点句过滤（flush 时）→ 短碎片合并 → 时间轴去重叠 → 重编号
 ```
 
 ### 规则顺序（前者优先）
 
 | # | 规则 | 类型 |
 |---|---|---|
-| 1 | 句末终止标点（。！？…，英语含缩写保护） | 软 |
+| 1 | 句末终止标点（。！？… ；英语含缩写保护） | 软 |
 | 2 | 超长停顿 >= max(2×阈值, 800ms) | **硬** |
 | 3 | 时长 >= maxDurationMs | **硬** |
 | 4 | 长度 >= 上限（CJK 字数 / 拉丁词数） | **硬** |
@@ -41,6 +41,20 @@ LanguageProfile                      ← 语言策略参数包（单位制/日�
 原版 bug：规则 2 内「组不足 4 字则不断」会短路掉规则 7 的时长上限，33 秒静音被整句吞掉（实测 68s 句）。v0.2.6 将硬约束前置且无条件触发。
 
 ## 三、语言策略细节
+
+### 语言判定阈值（detectStreamLanguage，整轨字符统计）
+
+原先只写了「按假名/谚文/汉字/拉丁统计判定」，具体阈值未入文档。2026-11-06 按 `utils/segmenter.ts` 核对补齐：
+
+| 判定 | 条件（整轨计数，按 Unicode 码点逐字累加） |
+|---|---|
+| ja | 假名 ≥3 |
+| ko | 谚文 ≥3 且 谚文 > 汉字 |
+| zh | 汉字 ≥4（且不满足 ja/ko） |
+| en | 拉丁字母 ≥12 且 拉丁 > 汉字 |
+| generic | 其余（含空轨） |
+
+判定按上表顺序短路，`segmentationLanguage` 非 `auto` 时跳过检测直接采用用户指定语言。
 
 ### 日语（ja）
 - 句末助词表新增单独「ね/よ/な/わ/ぞ」（VTuber 高频，需组内 >=8 字 + 轻停顿或新句叹词配合，避免误触发）；
@@ -65,6 +79,8 @@ LanguageProfile                      ← 语言策略参数包（单位制/日�
 | 短碎片自动合并 | 开关 | 开 | 无标点碎句并入相邻句 |
 
 接线链路：`popup/index.html` → `popup/main.ts`（元素/回显/保存/事件）→ `types/index.ts`（`segmentationLanguage` / `maxCharsPerSentence` / `mergeShortFragments`）→ `utils/storage.ts`（清洗校验）→ `content/index.ts`（配置变更触发重断句，比较全部 7 个断句字段）。
+
+> 路径更新（v0.4.0）：断句控件已随「7 分区高级设置页」整体迁到 `entrypoints/options/index.html` + `entrypoints/options/main.ts`，弹窗 `entrypoints/popup/` 只保留「高级设置」入口、不再含这些控件；`entrypoints/content/index.ts`、`utils/storage.ts` 两环不变，`test/test-options-ui.js` 已覆盖新路径。控件取值范围未变（CJK 字数 16~48 默认 28、时长 4~12 秒默认 6.5 秒）。
 
 ## 五、真实数据回归（TED 中文轨，363 tokens）
 

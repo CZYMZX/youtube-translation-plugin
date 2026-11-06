@@ -71,4 +71,7 @@ if (questionSent) {
   console.log('✓ 疑问句自动补问号测试通过: ' + questionSent.text);
 }
 
-console.log('\n所有单元测试顺利通过！');
+// 注意：本文件用 console.assert —— 断言失败只打印、进程仍以 EXIT=0 退出。
+// 所以这句话只能说「执行完毕」，不能说「通过」；要看上方有没有 ASSERT 失败行
+// （判定纪律见 README「质量红线」与 docs 任务六：console.assert 文件不能拿退出码当结论）。
+console.log('\n用例执行完毕（本文件用 console.assert：失败不改变退出码，请核对上方输出）');

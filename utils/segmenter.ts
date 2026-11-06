@@ -7,7 +7,7 @@ import type {
 import { normalizeCaptionResponse, decodeHtmlEntities } from './caption-parser';
 
 /**
- * 断句引擎 v0.2.6 —— 语言分策略断句
+ * 断句引擎 v0.2.6 + v0.2.7 —— 语言分策略断句 + 防劈词/悬空助词守卫
  *
  * 核心思路：
  * 1. 先对整条字幕轨做语言检测（ja / zh / ko / en / generic）；
@@ -17,11 +17,11 @@ import { normalizeCaptionResponse, decodeHtmlEntities } from './caption-parser';
  *    - 中文：仅依赖标点（。！？；）+ 声学停顿 + 字数/时长硬上限，不套用日语语法；
  *    - 英语：标点（.!?，含缩写保护）+ 词数 + 从句连词 + 疑问起始词；
  *    - 其他：通用（标点 + 停顿 + 长度/时长硬上限）。
- * 3. 三条硬约束优先级最高，杜绝 68 秒长句与无限吞噬：
- *    - 超长停顿（>= max(2×阈值, 800ms)）无条件断句；
- *    - 单句时长达到 maxDurationMs 强制切断；
- *    - CJK 字数 / 拉丁词数达到上限强制切断。
- * 4. 输出后处理：短碎片合并、纯标点句过滤、相邻句时间轴去重叠。
+ * 3. 硬约束优先级最高，杜绝 68 秒长句与无限吞噬（v0.2.7 分级）：
+ *    - 极端停顿（>= max(5s, 3×超长停顿阈值)）无条件断句，守卫不得拦；
+ *    - 超长停顿（>= max(2×阈值, 800ms)）、单句时长达 maxDurationMs、CJK 字数/拉丁词数
+ *      达上限——守卫生效时延后切分（词中换气不劈词），但达到 2 倍上限时无条件强制切断。
+ * 4. 输出后处理：纯标点句过滤（flush 时）、短碎片合并、相邻句时间轴去重叠、重编号。
  */
 
 /**
@@ -159,7 +159,7 @@ function endsWithUnfinishedForm(text: string): boolean {
 
 /**
  * v0.2.7 守卫 B：判断当前组末 token 是否以裸格助词结尾（SOV 悬空宾语信号）。
- * 剥离尾部标点后以单个格助词收尾 ⇒ 宾语尚未落到动词上，不宜在此切分。
+ * 剥离尾部标点后以单个格助词（を/が/に/は/も/で/と/へ/や）收尾 ⇒ 宾语尚未落到动词上，不宜在此切分。
  * 权衡：疑问终助词「の」等完整句形态也会被延迟切分，但规则 1（源标点）
  * 与规则 2a（极端停顿）不受此守卫约束，过度合并的代价可控。
  */
@@ -464,7 +464,7 @@ export function extractCaptionTokens(captionData: Json3CaptionData | any): Capti
       }
 
       // 如果当前 seg 自身含有换行或明确标点，则进行子分词拆分
-      // v0.2.7：行级 ASR token（整行 >40 字且无句读、只有顿号）也按顿号细分
+      // v0.2.7：行级 ASR token（整行 >40 字、含顿号/逗号）也按「、，,」细分
       const isLongLineToken = [...text].length > 40 && /[、，,]/.test(text);
       if (/[。！？!?\n…]/.test(text) || isLongLineToken) {
         const subTokens = splitRawSegmentByPunctuation(text, segStart, segEnd, isLongLineToken);
@@ -607,7 +607,7 @@ function polishSentenceText(
 }
 
 /**
- * 核心断句算法 v0.2.6：语言分策略 + 硬约束 + 后处理
+ * 核心断句算法 v0.2.6（v0.2.7 加守卫与安全阀）：语言分策略 + 硬约束 + 后处理
  */
 export function segmentCaptionTokens(
   tokens: CaptionToken[],
@@ -647,7 +647,8 @@ export function segmentCaptionTokens(
 
   // 超长停顿硬断阈值：不小于 800ms 且不低于 2× 用户停顿阈值
   const hardPauseMs = Math.max(800, pauseThreshold * 2);
-  // v0.2.7 极端停顿阈值：达到该值无条件切断（即使劈词/悬空助词——说话人确实停了很久）
+  // v0.2.7 极端停顿阈值 = max(5s, 3×超长停顿阈值)：达到该值无条件切断
+  // （即使劈词/悬空助词——说话人确实停了很久）。默认停顿阈值 450ms 时该线即 5s。
   const hardPauseExtremeMs = Math.max(5000, hardPauseMs * 3);
 
   // CJK 字符上限：用户可调（v0.2.6 前为硬编码 24/32）

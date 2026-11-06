@@ -1,5 +1,5 @@
 /**
- * 断句引擎 v0.2.6 回归测试：语言分策略 / 硬约束 / 标点清理 / 噪声过滤 / 碎句合并
+ * 断句引擎 v0.2.6 / v0.2.7 回归测试：语言分策略 / 硬约束 / 标点清理 / 噪声过滤 / 碎句合并 / 守卫 A·B
  */
 import { extractCaptionTokens, segmentCaptionTokens, detectStreamLanguage } from '../utils/segmenter.ts';
 
@@ -225,13 +225,15 @@ console.log('--- 测试 14: 语言策略设置可感知 ---');
   const jaTokens = extractCaptionTokens({
     events: [
       ev(0, 2000, [['今日は', 0], ['いい天気です', 400], ['ね', 800]]),
-      ev(2100, 2000, [['次の話題', 0], ['に入ります', 600]])
+      // 第二事件起点 2200：与前句末 token（结束于 2000ms）留 200ms 停顿，
+      // 满足规则 6 的「句末助词 + 轻停顿（>=160ms）」，auto/ja 才会断句；en/zh 不断
+      ev(2200, 2000, [['次の話題', 0], ['に入ります', 600]])
     ]
   });
   // auto/ja 会因句末助词「ね」在 800ms 处断句；en 强制策略则不套用日语语法
   const sAuto = segmentCaptionTokens(jaTokens, S);
   const sEn = segmentCaptionTokens(jaTokens, { ...S, segmentationLanguage: 'en' });
-  check('auto 与 en 策略产生差异（策略生效）', sAuto.length !== sEn.length || true, `auto=${sAuto.length} / en=${sEn.length}`);
+  check('auto 与 en 策略产生差异（策略生效）', sAuto.length !== sEn.length, `auto=${sAuto.length} / en=${sEn.length}`);
   check('日语规则仅在 ja/auto 下启用', segmentCaptionTokens(jaTokens, { ...S, segmentationLanguage: 'zh' }).length >= 1);
 }
 
