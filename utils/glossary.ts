@@ -25,12 +25,17 @@ export interface GlossaryEntry {
   sourceType: 'official' | 'wiki' | 'community';
   /**
    * v0.3.1：该词同时是高频日常词（如「修繕」= 修补房屋），单句出现不足以证明是游戏语境。
-   * 标记后仅当同批文本命中 ≥2 条术语时才注入，避免把日常句强行套上游戏译名。
+   * 标记后仅当**同一句**内命中 ≥2 条术语时才注入——逐句判定，绝不按整批（按整批会被
+   * 同批其他句子的正常术语「救活」，导致「この家、修繕しないとな」仍被塞进游戏译名）。
    */
   needsContext?: boolean;
 }
 
-/** 术语库版本（参与缓存键，内容变化必须 bump） */
+/**
+ * 术语库版本（参与翻译缓存键，见 utils/translator.ts `getGlossaryTag`）
+ * 三包（VTuber 146 / MC 165 / AI 35）**共用**此版本号：任一包术语内容有变动都必须 bump，
+ * 否则「条数不变、译名变了」的修正不会让旧译文失效。
+ */
 export const GLOSSARY_VERSION = '2026-11-04.1';
 
 const OFFICIAL_TALENTS = 'https://hololive.hololivepro.com/talents/';

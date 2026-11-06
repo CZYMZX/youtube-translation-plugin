@@ -2,7 +2,7 @@
  * 术语库 / 翻译场景「包」体系（v0.2.9）
  *
  * 设计：
- * - 内置包（builtIn=true）：VTuber 术语库（146 条）、MC 游戏术语库（0 条占位）、AI 术语库（0 条占位）；
+ * - 内置包（builtIn=true）：VTuber 术语库（146 条）、MC 游戏术语库（165 条）、AI 术语库（35 条）；
  *   翻译场景：VTuber 直播、通用日常（有提示词），科普视频 / 音乐视频 / 游戏实况（0 占位）。
  * - 用户上传包：存 chrome.storage.local，结构由 validate*Packet 严格校验，不合格不入库。
  * - 上传规范见 docs/PACK-UPLOAD-SPEC.md（弹窗内也有摘要）。
@@ -117,6 +117,10 @@ export const BUILTIN_SCENES: ScenePack[] = [
  * 生成方式：按官方本地化 key 精确取值，非人工转写，保证与游戏内译名逐字一致。
  * 共 165 条：方块 44 · 物品 36 · 生物 54 · 机制 28 · 维度 3
  * 数据日期：2026-11-05。
+ * 复核：2026-11-06 用 ja_jp 值反查 key、再比对 zh_cn，165/165 逐字一致（0 差异、0 缺失 key），
+ *   6 处写法偏差（レッドストーンダスト / ネザライトインゴット / 松明 / ジ・エンド / 白色のベッド /
+ *   シード値）中前 5 项在库，`シード値` 不在 165 条选集中；药水效果三项（移動速度上昇→迅捷、
+ *   採掘速度上昇→急迫、攻撃力上昇→力量）在库。
  */
 const MC_TERMS: Array<[string, string, string]> = [
   ['草ブロック', '草方块', 'Grass Block'],
@@ -290,6 +294,8 @@ const MC_TERMS: Array<[string, string, string]> = [
  * 来源：日文维基百科条目 + 中文维基对应条目（经 API 跨语言链接核对，28/35 有对应条目），
  * 中文译名取业界通行译法；无语种链接的术语人工核定。
  * 数据时间：2026-11-05。
+ * 注意：source 是「包级来源」（35 条统一指向大規模言語モデル 条目），不是逐条 URL；
+ *   逐条核对方法与未立条清单见 docs/GLOSSARY-0.2.9-accum-B-官方核对.md 第九节。
  */
 const AI_TERMS: Array<[string, string, string]> = [
   ['人工知能', '人工智能', 'Artificial Intelligence'],
@@ -603,7 +609,7 @@ export function getAllScenes(custom: CustomPacks): ScenePack[] {
   return [...BUILTIN_SCENES, ...custom.scenes];
 }
 
-/** 解析场景提示词；未配置/占位的场景回退到 general */
+/** 解析场景提示词；未配置/占位的场景整体回退到 general（prompt 与 name 均取 general） */
 export function resolveScenePrompt(scenarioId: string, custom: CustomPacks): { prompt: string; name: string } {
   const scenes = getAllScenes(custom);
   const scene = scenes.find((s) => s.id === scenarioId);
