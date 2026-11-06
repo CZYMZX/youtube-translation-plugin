@@ -8,6 +8,9 @@ const VALID_REASONING = ['none', 'low', 'high'] as const;
 const VALID_DISPLAY_MODES = ['bilingual', 'translation_only', 'original_only'] as const;
 const VALID_LAYOUTS = ['translation_top', 'original_top'] as const;
 const VALID_SEGMENTATION_LANGS = ['auto', 'ja', 'zh', 'en', 'generic'] as const;
+/* v0.4.2 两个新增选项的合法取值（非法值一律回落默认，避免脏数据进 prompt 装配） */
+const VALID_GLOSSARY_ANNOTATION = ['off', 'on'] as const;
+const VALID_ASR_CORRECTION = ['strict', 'normal'] as const;
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value);
@@ -74,6 +77,13 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
       .slice(0, 20);
   } else {
     merged.glossaryPacks = ['vtuber-hololive'];
+  }
+  /* v0.4.2：专名括注 / ASR 纠错授权（默认 off / normal = 老行为；非法值回落默认） */
+  if (!VALID_GLOSSARY_ANNOTATION.includes(merged.glossaryAnnotation as any)) {
+    merged.glossaryAnnotation = 'off';
+  }
+  if (!VALID_ASR_CORRECTION.includes(merged.asrCorrection as any)) {
+    merged.asrCorrection = 'normal';
   }
 
   return merged;

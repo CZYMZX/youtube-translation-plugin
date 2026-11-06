@@ -17,7 +17,7 @@
     "zip:chrome": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "compile": "tsc --noEmit",
-    "test": "tsx test/test-packs.js && tsx test/test-glossary.js && tsx test/test-segmenter.js && tsx test/test-segmenter-lang.js && tsx test/test-parser.js && tsx test/test-settings.js && tsx test/test-vsr-styles.js && tsx test/test-scenario.js && tsx test/test-popup-ui.js && tsx test/test-options-ui.js",
+    "test": "tsx test/test-packs.js && tsx test/test-glossary.js && tsx test/test-segmenter.js && tsx test/test-segmenter-lang.js && tsx test/test-parser.js && tsx test/test-settings.js && tsx test/test-vsr-styles.js && tsx test/test-scenario.js && tsx test/test-retry.js && tsx test/test-popup-ui.js && tsx test/test-options-ui.js",
     "icon:apply": "node scripts/apply-icon.js",
     "export-chat": "node scripts/export-conversation.js"
   },

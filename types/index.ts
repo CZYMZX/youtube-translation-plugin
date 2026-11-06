@@ -111,6 +111,20 @@ export interface ExtensionSettings {
   autoFallbackToGoogle?: boolean; // 大模型失败时是否自动平滑降级至 Google 免费翻译 (默认开启)
   glossaryEnabled?: boolean; // v0.2.8：翻译时注入 VTuber/hololive 术语库（默认开启）
   glossaryPacks?: string[]; // v0.2.9：启用的术语库包 id 列表（内置 + 上传）
+
+  /**
+   * v0.4.2 专名括注（参与缓存键：切换即让旧译文失效）
+   * - 'off'（默认，保持旧行为）：专名只给一个中文译名，禁止括号原文 / 罗马字 / 英文；
+   * - 'on'：专名写作「中文译名（日文原文）」，术语表命中与未命中的专名都带括号原文。
+   */
+  glossaryAnnotation?: 'off' | 'on';
+
+  /**
+   * v0.4.2 ASR 纠错授权（参与缓存键：切换即让旧译文失效）
+   * - 'normal'（默认，保持旧行为）：可按上下文修正明显同音误转，不得改写事实；
+   * - 'strict'：仅当上下文能确证时才改，不确定就保留原文。
+   */
+  asrCorrection?: 'strict' | 'normal';
 }
 
 /**
@@ -146,7 +160,10 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   syncOffsetMs: 0,
   autoFallbackToGoogle: true,
   glossaryEnabled: true,
-  glossaryPacks: ['vtuber-hololive']
+  glossaryPacks: ['vtuber-hololive'],
+  /* v0.4.2：两个新增选项的默认值 = 现有行为，老用户升级后译文格式不变 */
+  glossaryAnnotation: 'off',
+  asrCorrection: 'normal'
 };
 
 export interface ModelOption {
