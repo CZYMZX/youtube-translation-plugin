@@ -66,25 +66,37 @@
 
 ### 2. 代码侧事实
 
-`entrypoints/content/overlay-styles.ts` 中存在 **10 处 `backdrop-filter`**，覆盖：
+`entrypoints/content/overlay-styles.ts` 中存在 **15 条 `backdrop-filter` / `-webkit-backdrop-filter` 声明，分布在 9 个组件**，覆盖：
 
 - `.status-indicator`（状态徽章，`blur(16px)`，启动后即存在于 DOM）
 - `.subtitle-box`（字幕卡片，`blur(16px) saturate(180%)`，播放时持续显示）
-- `.controls-bar`（悬浮工具坞，`blur(20px)`）
-- `.quick-panel`（快捷面板，`blur(24px)`）
+- `.controls-bar`（悬浮工具坞，`blur(20px) saturate(160%)`）
+- `.quick-panel`（快捷面板，`blur(24px) saturate(180%)`）
 - `.qp-ai-banner`（`blur(14px)`）
-- 抽屉 / 预览等多处（`blur(10px) ~ blur(16px)`）
+- `.qp-preview-micro-card`（预览微卡片，`blur(10px)`）
+- `.transcript-drawer`（剧本抽屉，`blur(24px) saturate(180%)`）
+- `.drawer-sync-btn`（回到当前句胶囊，`blur(16px)`）
+- `.toast-notification`（toast 提示，`blur(16px)`）
+
+> 复核口径（按仓库 tag `v0.2.4` 的 `overlay-styles.ts` 实测）：带 `-webkit-` 前缀的成对写法 6 组 + 单条写法 3 处 = **15 条声明 / 9 个组件**。
+> 留档时写的「10 处」是组件数量级的估读，与「15 条声明」不是同一个口径，引用时请按 15 条声明（9 个组件）表述。
 
 同时 `overlay.ts` 在播放器内挂载了一个覆盖整块视频的宿主：
 
 ```ts
 this.host.id = 'yt-sub-translator-host';
 this.host.style.position = 'absolute';
-this.host.style.inset = '0' (width/height 100%);
+this.host.style.top = '0';
+this.host.style.left = '0';
+this.host.style.width = '100%';
+this.host.style.height = '100%';
 this.host.style.pointerEvents = 'none';
 this.host.style.zIndex = '85';
 this.host.style.overflow = 'hidden';
 ```
+
+> 复核（`entrypoints/content/overlay.ts` 的 `mount()`）：宿主是用 `top/left = 0` + `width/height = 100%` 铺满播放器，
+> 并没有使用 `inset: 0`；`pointerEvents = none` / `zIndex 85` / `overflow hidden` 与留档一致。
 
 ### 3. 外部证据
 
@@ -105,7 +117,7 @@ NVIDIA 官方论坛（GeForce Forums）有明确复现记录：
 ## 五、留档时的构建与验证状态
 
 - `npm run compile`：通过
-- `npm test`：4 组通过
+- `npm test`：4 个测试文件（5 组用例）通过
 - `.output/chrome-mv3` / `.output/edge-mv3`：manifest 均为 0.2.4
 - Edge 实测：字幕、抽屉、popup 均正常；本问题为 GPU 呈现层问题，不影响字幕功能本身
 
