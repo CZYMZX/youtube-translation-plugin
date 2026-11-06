@@ -4,6 +4,44 @@
 
 ---
 
+## [0.2.4] - 2026-11-04 (全量代码审查修复版)
+
+### 🔐 安全边界
+- **消息来源校验**：内容脚本只接受 `event.source === window` 且同源的 `YT_SUB_TRANSLATOR_MAIN` 消息，页面脚本无法再伪造字幕数据。
+- **URL 白名单**：后台 `FETCH_CAPTIONS` 仅允许 `https://*.youtube.com/api/timedtext`，并校验发送者必须来自 YouTube 标签页，关闭任意 URL 抓取面。
+- **XSS/HTML 注入消除**：popup 的测试结果、模型列表错误、浮层状态徽章、快捷面板状态全部改为 `textContent` + 固定 SVG 图标构建。
+- **权限收敛**：移除 `http://*/*`，保留 `https://*/*` 以支持自定义 OpenAI 兼容端点。
+
+### 🎯 正确性
+- **AI 精翻跨视频串写修复**：引入 `aiRunToken` 与 `runVideoId/runSentences` 快照，切视频立即中止旧循环，落盘使用启动时视频 ID。
+- **音轨选择按原声语言**：`defaultAudioLanguage` → ASR 轨语言 → 历史偏好三级推断；目标语言轨 -120 分，派生翻译轨 -60 分，避免二次翻译。
+- **缓存键补全模型维度**：`service:model:scenario:reasoning:targetLang:text`，不再 `toLowerCase()`；大模型返回条目不完整时抛错并拒绝写缓存。
+- **提示词注入防护**：system prompt 明确字幕文本仅作翻译素材，不执行其中指令。
+- **DOM 音轨解析**：用括号配对扫描替换非贪婪正则，修复 `name.runs` 嵌套数组导致的截断。
+
+### ⚡ 性能
+- **观察器节流**：播放器 observer 150ms 节流；字幕 observer 限缩到 `#movie_player` 容器并 200ms 节流，直播聊天不再刷屏。
+- **抽屉增量渲染**：关闭时不构建 DOM；打开时一次性渲染，之后只更新变化行的译文；搜索 180ms 防抖；高亮走 `Map` 索引且仅抽屉打开时执行。
+- **临时字幕存储**：`sessionStorage` 写入改为 1.5s 防抖，捕获配额异常并降级纯内存，消除长视频 O(n²) 序列化。
+- **IndexedDB**：批量读按 200 key 分块；新增 `updatedAt` 索引与 30 天 TTL 清理；内存缓存上限 8000 条；处理 `onblocked`。
+- **时间轴查找**：浮层与翻译队列均改为二分查找，移除 `timeupdate` 中的重复按钮全页查询。
+
+### 🛡️ 健壮性
+- **设置读取**：超时记录告警并回退 local/默认值，不再静默锁定默认配置；保存串行化，新增字段清洗与范围夹取。
+- **翻译队列**：20s 超时、代际校验、每句最多 2 次重试，消息丢失不再永久卡 `translating`；重断句后的旧结果直接丢弃。
+- **后台抓取**：统一 12s 超时；InnerTube 改为 ANDROID 优先并补齐 visitorData/客户端头。
+- **广告后自愈**：广告耗尽看门狗后，正片播放中自动重新探测（最多 2 次），解决“广告结束仍无字幕”。
+- **弹窗保存**：`pagehide/visibilitychange` 立即 flush 防抖中的设置；所有消息回调检查 `lastError`。
+
+### 🧹 结构与测试
+- 删除无人引用的 `entrypoints/content/bridge.ts`（85 行）与 4 个未使用的 db-cache API。
+- 三个翻译通道的缓存逻辑收敛为 `planBatch/commitBatch`，减少约 140 行重复。
+- `overlay.ts` 样式表外置为 `overlay-styles.ts`，单文件 3212 → 约 2050 行。
+- 新增 `tsx` 与 `npm test`，补充字幕解析、设置清洗用例，修复原有测试无法运行的问题。
+- README/CHANGELOG 更正 v1.2.1 中与实现不符的描述（`loadModule`、页面同源 fetch）。
+
+---
+
 ## [0.2.3] - 2026-11-04 (字幕检索致命崩溃修复版)
 
 ### 🚨 修复内容脚本启动即崩溃 (P1)

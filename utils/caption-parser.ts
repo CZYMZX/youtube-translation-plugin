@@ -15,14 +15,14 @@ export function decodeHtmlEntities(str: string): string {
     .replace(/&nbsp;/g, ' ')
     .replace(/&#(\d+);/g, (_, dec) => {
       try {
-        return String.fromCharCode(Number(dec));
+        return String.fromCodePoint(Number(dec));
       } catch {
         return _;
       }
     })
     .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
       try {
-        return String.fromCharCode(parseInt(hex, 16));
+        return String.fromCodePoint(parseInt(hex, 16));
       } catch {
         return _;
       }
@@ -233,6 +233,11 @@ export function normalizeCaptionResponse(rawInput: any): Json3CaptionData {
             }
           }
           return parsed as Json3CaptionData;
+        }
+        // JSON 合法但不是可识别字幕结构：明确返回空，避免继续按 VTT/XML 误判
+        if (parsed && typeof parsed === 'object') {
+          console.warn('[CaptionParser] JSON 响应缺少 events 数组，按空字幕处理');
+          return { wireMagic: 'pb3', events: [] };
         }
       } catch (e) {
         console.warn('[CaptionParser] JSON.parse failed, fallback to format sniff:', e);

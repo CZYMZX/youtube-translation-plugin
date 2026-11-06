@@ -150,7 +150,27 @@ export interface ModelOption {
  */
 export type ExtensionMessage =
   | { type: 'FETCH_CAPTIONS'; payload: { url: string } }
+  | {
+      type: 'FETCH_TRACKS_BY_VIDEO_ID';
+      payload: {
+        videoId: string;
+        apiKey?: string;
+        clientVersion?: string;
+        visitorData?: string;
+      };
+    }
   | { type: 'FETCH_MODELS'; payload: { settings: ExtensionSettings } }
-  | { type: 'TRANSLATE_BATCH'; payload: { texts: string[]; targetLang: string; settings: ExtensionSettings } }
+  | {
+      type: 'TRANSLATE_BATCH';
+      payload: {
+        texts: string[];
+        targetLang: string;
+        settings: ExtensionSettings;
+        noFallback?: boolean;
+        bypassCache?: boolean;
+      };
+    }
   | { type: 'GET_SETTINGS' }
-  | { type: 'SAVE_SETTINGS'; payload: Partial<ExtensionSettings> };
+  | { type: 'SAVE_SETTINGS'; payload: Partial<ExtensionSettings> }
+  | { type: 'CHECK_GOOGLE_TRANSLATE_CONNECTION' }
+  | { type: 'SETTINGS_UPDATED'; settings: ExtensionSettings };

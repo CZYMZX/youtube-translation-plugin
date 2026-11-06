@@ -2,8 +2,9 @@ import type { SubtitleSentence, ExtensionSettings } from '../types';
 
 export interface TranslationQueueOptions {
   batchSize?: number;
-  lookaheadCount?: number;
   onSentenceUpdated?: () => void;
+  /** 单批请求超时时间，超时后自动释放并发并允许重试 */
+  requestTimeoutMs?: number;
 }
 
 /**
@@ -12,6 +13,7 @@ export interface TranslationQueueOptions {
  * 1. 播放点优先（Seek Preemption）：快进/跳转时立即优先抢占翻译当前视野内的句子
  * 2. 避免重复与阻塞：智能合并，避免对正在翻译的区间重复请求
  * 3. 适度并行：维持至多 2 个并发批次，前后台互不卡死
+ * 4. 超时自愈：消息丢失时不会让句子永久卡在 translating
  */
 export class TranslationQueue {
   private sentences: SubtitleSentence[] = [];
@@ -20,11 +22,17 @@ export class TranslationQueue {
   private maxConcurrency: number = 2;
   private batchSize: number = 8;
   private onSentenceUpdated?: () => void;
+  private requestTimeoutMs: number = 20000;
+  /** 每次 setSentences 自增，用于丢弃旧数组的在途回调结果 */
+  private generation = 0;
+  /** 每句的超时次数，避免无限重试 */
+  private attempts = new Map<number, number>();
 
   constructor(settings: ExtensionSettings, options: TranslationQueueOptions = {}) {
     this.settings = settings;
     if (options.batchSize) this.batchSize = options.batchSize;
     if (options.onSentenceUpdated) this.onSentenceUpdated = options.onSentenceUpdated;
+    if (options.requestTimeoutMs) this.requestTimeoutMs = options.requestTimeoutMs;
   }
 
   public updateSettings(settings: ExtensionSettings) {
@@ -33,6 +41,37 @@ export class TranslationQueue {
 
   public setSentences(sentences: SubtitleSentence[]) {
     this.sentences = sentences;
+    this.generation++;
+    this.attempts.clear();
+  }
+
+  /**
+   * 二分查找当前时间对应的句子下标，避免每帧 O(n) 全量扫描
+   */
+  private findIndexAt(time: number): number {
+    const arr = this.sentences;
+    if (arr.length === 0) return -1;
+
+    let lo = 0;
+    let hi = arr.length - 1;
+    let lastStarted = 0;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid].start <= time) {
+        lastStarted = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+
+    // 合成句尾可能被延长，回看/前看少量邻居确认命中
+    const from = Math.max(0, lastStarted - 2);
+    const to = Math.min(arr.length - 1, lastStarted + 2);
+    for (let i = from; i <= to; i++) {
+      if (time >= arr[i].start && time <= arr[i].end + 2000) return i;
+    }
+    return lastStarted;
   }
 
   /**
@@ -43,24 +82,8 @@ export class TranslationQueue {
     if (this.sentences.length === 0) return;
 
     const actualTime = currentTimeMs - syncOffsetMs;
-
-    // 1. 寻找当前时间点所在或最近的句子下标
-    let currentIdx = -1;
-    for (let i = 0; i < this.sentences.length; i++) {
-      if (actualTime >= this.sentences[i].start && actualTime <= this.sentences[i].end + 2000) {
-        currentIdx = i;
-        break;
-      }
-    }
-    if (currentIdx === -1) {
-      for (let i = 0; i < this.sentences.length; i++) {
-        if (this.sentences[i].start > actualTime) {
-          currentIdx = Math.max(0, i - 1);
-          break;
-        }
-      }
-    }
-    if (currentIdx === -1) currentIdx = 0;
+    const currentIdx = this.findIndexAt(actualTime);
+    if (currentIdx < 0) return;
 
     // 2. 划定最高优先级窗口：从当前句前 1 句到后 12 句
     const highPriStart = Math.max(0, currentIdx - 1);
@@ -91,7 +114,7 @@ export class TranslationQueue {
   }
 
   /**
-   * 发起一批翻译
+   * 发起一批翻译（带超时与代际校验）
    */
   private dispatchBatch(targets: SubtitleSentence[]) {
     if (targets.length === 0) return;
@@ -103,6 +126,34 @@ export class TranslationQueue {
 
     this.activeRequests++;
     const texts = targets.map((t) => t.text);
+    const gen = this.generation;
+    let settled = false;
+
+    const finish = () => {
+      if (settled) return false;
+      settled = true;
+      this.activeRequests = Math.max(0, this.activeRequests - 1);
+      clearTimeout(timer);
+      return true;
+    };
+
+    const timer = setTimeout(() => {
+      if (!finish()) return;
+      console.warn('[TranslationQueue] 翻译请求超时，释放并发并安排重试');
+      for (const t of targets) {
+        const count = (this.attempts.get(t.id) || 0) + 1;
+        this.attempts.set(t.id, count);
+        if (count >= 2) {
+          t.status = 'error';
+          t.translation = '[翻译超时，请点击重试]';
+        } else {
+          t.status = 'idle';
+        }
+      }
+      if (gen === this.generation && this.onSentenceUpdated) {
+        this.onSentenceUpdated();
+      }
+    }, this.requestTimeoutMs);
 
     chrome.runtime.sendMessage(
       {
@@ -114,12 +165,17 @@ export class TranslationQueue {
         }
       },
       (res) => {
-        this.activeRequests = Math.max(0, this.activeRequests - 1);
+        // 读取 lastError，避免控制台出现未处理的 runtime 警告
+        void chrome.runtime.lastError;
+        if (!finish()) return;
+        // 数组已被替换（切视频/重新断句），旧结果直接丢弃
+        if (gen !== this.generation) return;
 
         if (res && res.success && Array.isArray(res.translations)) {
           for (let i = 0; i < targets.length; i++) {
             targets[i].translation = res.translations[i] || targets[i].text;
             targets[i].status = 'done';
+            this.attempts.delete(targets[i].id);
           }
         } else {
           console.warn('[TranslationQueue] Batch failed:', res?.error);

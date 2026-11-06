@@ -261,6 +261,22 @@ export function extractCaptionTokens(captionData: Json3CaptionData | any): Capti
 }
 
 /**
+ * 判断 token 之间是否需要插入空格：
+ * - CJK 与 CJK 之间不插空格
+ * - 标点前不插空格，左括号后不插空格
+ */
+function shouldInsertSpace(prev: string, curr: string): boolean {
+  if (!prev || !curr) return false;
+  // 闭合标点/右括号前不加空格
+  if (/^[.,!?;:%)\]}、。，！？：；）】」』]/.test(curr)) return false;
+  // 左括号后不加空格
+  if (/[(\[{（【「『]$/.test(prev)) return false;
+  // CJK 字符之间不加空格
+  if (isCjkText(prev) && isCjkText(curr)) return false;
+  return true;
+}
+
+/**
  * 智能大小写与句末标点自动修补（支持日文平假片假汉字无空格自然拼接与英文自然空格拼接）
  */
 function polishSentenceText(tokens: CaptionToken[], autoPunctuation: boolean): string {
@@ -270,13 +286,7 @@ function polishSentenceText(tokens: CaptionToken[], autoPunctuation: boolean): s
   for (let i = 1; i < tokens.length; i++) {
     const prev = tokens[i - 1].text;
     const curr = tokens[i].text;
-    const isPrevCjk = isCjkText(prev);
-    const isCurrCjk = isCjkText(curr);
-    if (isPrevCjk && isCurrCjk) {
-      rawJoined += curr;
-    } else {
-      rawJoined += ' ' + curr;
-    }
+    rawJoined += shouldInsertSpace(prev, curr) ? ' ' + curr : curr;
   }
   rawJoined = rawJoined.trim();
 

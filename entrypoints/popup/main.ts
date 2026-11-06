@@ -35,6 +35,36 @@ function hexToRgba(hex: string, opacity: number): string {
   return `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
 }
 
+/**
+ * 状态文案统一用 DOM 构建，杜绝把接口返回内容拼进 innerHTML
+ */
+function renderStatus(
+  el: HTMLElement | null,
+  className: string,
+  icon: string,
+  text: string,
+  detail?: string
+) {
+  if (!el) return;
+  el.className = className;
+  el.textContent = '';
+
+  const iconSpan = document.createElement('span');
+  iconSpan.style.cssText =
+    'display:inline-flex;width:13px;height:13px;margin-right:4px;vertical-align:-1.5px;color:#ffffff;';
+  iconSpan.innerHTML = icon;
+  el.appendChild(iconSpan);
+  el.appendChild(document.createTextNode(text));
+
+  if (detail) {
+    el.appendChild(document.createElement('br'));
+    const detailEl = document.createElement('span');
+    detailEl.style.opacity = '0.85';
+    detailEl.textContent = detail;
+    el.appendChild(detailEl);
+  }
+}
+
 // DOM 元素引用
 const enabledToggle = document.getElementById('enabled-toggle') as HTMLInputElement;
 const targetLangSelect = document.getElementById('target-lang') as HTMLSelectElement;
@@ -217,7 +247,14 @@ function syncSmoothSwitchers() {
 async function loadSettings() {
   return new Promise<void>((resolve) => {
     chrome.runtime.sendMessage({ type: 'GET_SETTINGS' }, (res) => {
-      if (res && res.success && res.settings) {
+      if (chrome.runtime.lastError) {
+        console.warn('[Popup] 读取设置失败:', chrome.runtime.lastError.message);
+        if (networkAlert && networkAlertText) {
+          networkAlert.classList.remove('hidden');
+          networkAlertText.textContent =
+            '读取本地设置失败，当前显示默认值；直接修改会覆盖原配置，请刷新后重试。';
+        }
+      } else if (res && res.success && res.settings) {
         currentSettings = { ...DEFAULT_SETTINGS, ...res.settings };
       }
       populateForm();
@@ -466,6 +503,31 @@ function updateAiAccordionState() {
  * 实时同步保存配置
  */
 let saveTimer: any = null;
+let savePending = false;
+
+function sendSettingsSave() {
+  savePending = false;
+  chrome.runtime.sendMessage(
+    {
+      type: 'SAVE_SETTINGS',
+      payload: currentSettings
+    },
+    () => {
+      // 读取 lastError，避免 popup 关闭时出现未处理的 runtime 警告
+      void chrome.runtime.lastError;
+    }
+  );
+}
+
+/**
+ * popup 关闭/切后台时立即落盘，避免 250ms 防抖窗口内的最后一次输入丢失
+ */
+function flushPendingSettingsSave() {
+  if (!savePending) return;
+  clearTimeout(saveTimer);
+  sendSettingsSave();
+}
+
 function persistSettings(immediate = false) {
   currentSettings = {
     enabled: enabledToggle.checked,
@@ -500,21 +562,22 @@ function persistSettings(immediate = false) {
   updateAiAccordionState();
   updatePreview();
 
-  const doSave = () => {
-    chrome.runtime.sendMessage({
-      type: 'SAVE_SETTINGS',
-      payload: currentSettings
-    });
-  };
-
   if (immediate) {
     clearTimeout(saveTimer);
-    doSave();
+    sendSettingsSave();
   } else {
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(doSave, 250);
+    savePending = true;
+    saveTimer = setTimeout(sendSettingsSave, 250);
   }
 }
+
+window.addEventListener('pagehide', flushPendingSettingsSave);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    flushPendingSettingsSave();
+  }
+});
 
 /**
  * 绑定所有控件事件
@@ -704,7 +767,12 @@ async function fetchModelsFromApi() {
       if (res && res.success && Array.isArray(res.models) && res.models.length > 0) {
         if (fetchModelsStatus) {
           fetchModelsStatus.className = 'sub-status-msg success';
-          fetchModelsStatus.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;margin-right:4px;vertical-align:-1px;">${ICON_CHECK}</span>成功获取到 ${res.models.length} 个可用模型！`;
+          renderStatus(
+            fetchModelsStatus,
+            'sub-status-msg success',
+            ICON_CHECK,
+            `成功获取到 ${res.models.length} 个可用模型！`
+          );
         }
 
         // 缓存到 local storage
@@ -723,7 +791,12 @@ async function fetchModelsFromApi() {
       } else {
         if (fetchModelsStatus) {
           fetchModelsStatus.className = 'sub-status-msg error';
-          fetchModelsStatus.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;margin-right:4px;vertical-align:-1px;">${ICON_ALERT}</span>获取失败: ${res?.error || '接口未返回模型列表'}`;
+          renderStatus(
+            fetchModelsStatus,
+            'sub-status-msg error',
+            ICON_ALERT,
+            `获取失败: ${res?.error || '接口未返回模型列表'}`
+          );
         }
       }
     }
@@ -793,14 +866,25 @@ async function handleTestApi() {
         } else if (currentSettings.service === 'gemini') {
           serviceLabel = `Gemini [${currentSettings.modelName?.trim() || 'gemini-1.5-flash'}]`;
         }
-        testStatus.innerHTML = `<span style="display:inline-flex;width:13px;height:13px;margin-right:4px;vertical-align:-1.5px;color:#ffffff;">${ICON_CHECK}</span>连通正常 (${serviceLabel}) · 耗时 ${latencyMs}ms：<br/><span style="opacity:0.85;">"${res.translations[0]}"</span>`;
+        renderStatus(
+          testStatus,
+          'status-msg success',
+          ICON_CHECK,
+          `连通正常 (${serviceLabel}) · 耗时 ${latencyMs}ms：`,
+          `"${res.translations[0]}"`
+        );
       } else {
         testStatus.className = 'status-msg error';
         if (latencyBadge) {
           latencyBadge.className = 'latency-badge latency-error';
           latencyBadge.textContent = `异常 (${latencyMs}ms)`;
         }
-        testStatus.innerHTML = `<span style="display:inline-flex;width:13px;height:13px;margin-right:4px;vertical-align:-1.5px;color:#ef4444;">${ICON_ALERT}</span>连接失败 (耗时 ${latencyMs}ms)：${res?.error || '请求未响应'}`;
+        renderStatus(
+          testStatus,
+          'status-msg error',
+          ICON_ALERT,
+          `连接失败 (耗时 ${latencyMs}ms)：${res?.error || '请求未响应'}`
+        );
       }
     }
   );

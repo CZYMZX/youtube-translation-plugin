@@ -20,7 +20,7 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.2.3]%c Content-script active (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.2.4]%c Content-script active (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -41,7 +41,7 @@ export default defineContentScript({
     let urlWatchdogTimer: any = null;
     let captionsWatchdogTimer: any = null;
     let captionsWatchdogAttempts = 0;
-    let cachedHostClientInfo: { apiKey?: string; clientVersion?: string } = {};
+    let cachedHostClientInfo: { apiKey?: string; clientVersion?: string; visitorData?: string } = {};
     // 注意：必须在使用前完成声明。setupPlayerAndOverlay() 在启动时就会执行，并会重置该变量；
     // 若声明位置晚于调用点，会触发 "Cannot access 'pipTextTrack' before initialization" (TDZ) 并使整个 main() 中断。
     let pipTextTrack: TextTrack | null = null;
@@ -49,6 +49,18 @@ export default defineContentScript({
     let trackCascadeActive = false;
     // 记录已消费的字幕 token 数，允许后续更完整的截获结果覆盖先到的分片/广告字幕
     let lastCaptionTokenCount = 0;
+    // 当前视频原声语言（由 MAIN world 从 playerResponse 读出），用于选对字幕轨
+    let currentSourceLang = '';
+    // AI 全篇精翻的运行代际：切视频时自增，旧循环立即失效，避免把旧字幕写进新视频
+    let aiRunToken = 0;
+    // 播放器 / 字幕 DOM 观察器的节流计时器
+    let playerSyncTimer: any = null;
+    let domCaptionTimer: any = null;
+    let playerObserver: MutationObserver | null = null;
+    let captionObserver: MutationObserver | null = null;
+    let captionObserverTarget: Element | null = null;
+    // 广告会耗尽看门狗，广告结束后允许有限次数重新武装
+    let watchdogRearms = 0;
 
     // 1. 同步实例化核心管理器
     translationQueue = new TranslationQueue(settings, {
@@ -128,7 +140,8 @@ export default defineContentScript({
 
     /**
      * 借鉴沉浸式翻译：优雅控制原生字幕显隐
-     * 当插件启用且开启隐藏原生字幕时，隐藏 YouTube 原生粗黑框字幕，避免激活原生字幕管线后产生视觉重叠与闪烁
+     * 仅在插件已经拿到可渲染字幕后才隐藏原生字幕；
+     * 否则取轨失败时会把原生字幕也一起隐藏，用户会彻底看不到字幕。
      */
     function updateNativeSubtitleVisibility() {
       if (!nativeSubtitleStyleEl) {
@@ -137,7 +150,10 @@ export default defineContentScript({
         document.head.appendChild(nativeSubtitleStyleEl);
       }
 
-      if (settings?.enabled && settings?.autoHideNativeSubtitles) {
+      const shouldHide =
+        settings?.enabled && settings?.autoHideNativeSubtitles && currentSentences.length > 0;
+
+      if (shouldHide) {
         nativeSubtitleStyleEl.textContent = `
           .ytp-caption-window-container,
           .caption-window {
@@ -156,14 +172,22 @@ export default defineContentScript({
     function initPlayerObserver() {
       setupPlayerAndOverlay();
 
-      const observer = new MutationObserver(() => {
-        setupPlayerAndOverlay();
-        if (buttonManager) {
-          buttonManager.checkAndMount();
-        }
-      });
+      // 节流：YouTube 页面（尤其直播间聊天）DOM 变动极其频繁，
+      // 若每个 mutation 都执行 querySelector + 挂载检查，会造成持续主线程占用。
+      const schedulePlayerSync = () => {
+        if (playerSyncTimer) return;
+        playerSyncTimer = setTimeout(() => {
+          playerSyncTimer = null;
+          setupPlayerAndOverlay();
+          if (buttonManager) {
+            buttonManager.checkAndMount();
+          }
+        }, 150);
+      };
 
-      observer.observe(document.body, { childList: true, subtree: true });
+      if (playerObserver) playerObserver.disconnect();
+      playerObserver = new MutationObserver(schedulePlayerSync);
+      playerObserver.observe(document.body, { childList: true, subtree: true });
 
       // 请求 MAIN world bridge 脚本发送字幕音轨
       window.postMessage({ source: 'YT_SUB_TRANSLATOR_CONTENT', action: 'REQUEST_TRACKS' }, '*');
@@ -241,6 +265,7 @@ export default defineContentScript({
       }
 
       overlay.ensureMounted(player);
+      ensureCaptionObserverTarget();
 
       if (videoElement !== video) {
         if (videoElement) {
@@ -351,9 +376,19 @@ export default defineContentScript({
       if (translationQueue) {
         translationQueue.triggerForTime(currentTimeMs, settings.syncOffsetMs);
       }
-      if (buttonManager) {
-        buttonManager.checkAndMount();
+      // 广告/缓冲会耗尽启动期看门狗；正片开始播放后自动重新武装有限次数
+      if (
+        currentSentences.length === 0 &&
+        !captionsWatchdogTimer &&
+        watchdogRearms < 2 &&
+        videoElement.currentTime > 1 &&
+        !videoElement.closest('.html5-video-player')?.classList.contains('ad-showing')
+      ) {
+        watchdogRearms++;
+        console.log(`[YT-Sub-Translator] 播放中未检测到字幕，重新启动探测 (${watchdogRearms}/2)`);
+        startCaptionsWatchdog();
       }
+      // 控制栏按钮自身有 350ms 看门狗，这里不再重复做全页查询
     }
 
     function getVideoIdFromUrl(): string {
@@ -387,6 +422,11 @@ export default defineContentScript({
       currentLoadingTrackUrl = '';
       lastCaptionTokenCount = 0;
       trackCascadeActive = false;
+      currentSourceLang = '';
+      // 让正在执行的 AI 全篇精翻立即失效，避免把上一部视频的译文写到新视频缓存里
+      aiRunToken++;
+      isFullAiRunning = false;
+      watchdogRearms = 0;
       updateNativeSubtitleVisibility();
 
       if (overlay) {
@@ -490,16 +530,64 @@ export default defineContentScript({
           payload: {
             videoId: vid,
             apiKey: cachedHostClientInfo.apiKey,
-            clientVersion: cachedHostClientInfo.clientVersion
+            clientVersion: cachedHostClientInfo.clientVersion,
+            visitorData: cachedHostClientInfo.visitorData
           }
         },
         (res) => {
           if (res && res.success && res.tracks && res.tracks.length > 0 && currentSentences.length === 0) {
             console.log('[YT-Sub-Translator] Fetched tracks via YouTubei fallback:', res.tracks.length);
-            handleCaptionTracks(res.tracks);
+            handleCaptionTracks(res.tracks, currentSourceLang);
           }
         }
       );
+    }
+
+    /**
+     * 从任意 JSON 文本中提取指定 key 后的数组字面量。
+     * 使用括号配对扫描，避免正则非贪婪匹配在内层数组（如 name.runs）处截断。
+     */
+    function extractJsonArrayAfterKey(text: string, key: string): string | null {
+      const marker = `"${key}"`;
+      let searchFrom = 0;
+
+      while (true) {
+        const keyIdx = text.indexOf(marker, searchFrom);
+        if (keyIdx === -1) return null;
+
+        const arrStart = text.indexOf('[', keyIdx + marker.length);
+        if (arrStart === -1) return null;
+
+        const between = text.slice(keyIdx + marker.length, arrStart);
+        if (!/^\s*:\s*$/.test(between)) {
+          searchFrom = keyIdx + marker.length;
+          continue;
+        }
+
+        let depth = 0;
+        let inString = false;
+        let escaped = false;
+
+        for (let i = arrStart; i < text.length; i++) {
+          const ch = text[i];
+          if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+          }
+          if (ch === '"') {
+            inString = true;
+            continue;
+          }
+          if (ch === '[') depth++;
+          else if (ch === ']') {
+            depth--;
+            if (depth === 0) return text.slice(arrStart, i + 1);
+          }
+        }
+        return null;
+      }
     }
 
     function scanTracksFromDomScripts(): YouTubeCaptionTrack[] | null {
@@ -508,14 +596,15 @@ export default defineContentScript({
         const text = s.textContent || '';
         if (text.includes('captionTracks') && (text.includes('playerCaptionsTracklistRenderer') || text.includes('baseUrl'))) {
           try {
-            const match = text.match(/"captionTracks":\s*(\[[\s\S]+?\])/);
-            if (match && match[1]) {
-              const tracks = JSON.parse(match[1]);
-              if (Array.isArray(tracks) && tracks.length > 0) {
-                return tracks;
-              }
+            const arrayText = extractJsonArrayAfterKey(text, 'captionTracks');
+            if (!arrayText) continue;
+            const tracks = JSON.parse(arrayText);
+            if (Array.isArray(tracks) && tracks.length > 0) {
+              return tracks;
             }
-          } catch (e) {}
+          } catch (e) {
+            console.warn('[YT-Sub-Translator] DOM 字幕轨解析失败，跳过该 script:', e);
+          }
         }
       }
       return null;
@@ -525,30 +614,52 @@ export default defineContentScript({
      * 接收来自 MAIN world bridge 脚本的消息
      */
     window.addEventListener('message', (event) => {
+      // 只接受同源页面窗口的消息，防止第三方 iframe / 脚本伪造字幕数据
+      if (event.source !== window || event.origin !== window.location.origin) return;
       if (!event.data || event.data.source !== 'YT_SUB_TRANSLATOR_MAIN') return;
 
       if (event.data.type === 'CAPTION_TRACKS_FOUND') {
-        const { tracks, videoData, clientInfo } = event.data;
-        if (clientInfo) {
-          cachedHostClientInfo = clientInfo;
+        const { tracks, videoData, clientInfo, sourceLang, isAd } = event.data;
+
+        // 广告播放时 videoData.video_id 是广告视频，不能据此切换正片上下文
+        if (isAd) return;
+
+        if (clientInfo && typeof clientInfo === 'object') {
+          cachedHostClientInfo = {
+            apiKey: typeof clientInfo.apiKey === 'string' ? clientInfo.apiKey : '',
+            clientVersion:
+              typeof clientInfo.clientVersion === 'string' ? clientInfo.clientVersion : '',
+            visitorData: typeof clientInfo.visitorData === 'string' ? clientInfo.visitorData : ''
+          };
         }
 
-        const newVid = videoData?.video_id || getVideoIdFromUrl();
+        if (typeof sourceLang === 'string' && sourceLang) {
+          currentSourceLang = sourceLang;
+        }
+
+        const newVid =
+          (videoData && typeof videoData.video_id === 'string' && videoData.video_id) ||
+          getVideoIdFromUrl();
         if (newVid && newVid !== currentVideoId) {
           handleVideoChange(newVid);
         }
 
-        if (tracks && tracks.length > 0) {
-          handleCaptionTracks(tracks);
+        if (Array.isArray(tracks) && tracks.length > 0) {
+          handleCaptionTracks(tracks, currentSourceLang);
         }
       } else if (event.data.type === 'CAPTURED_TIMEDTEXT_RESPONSE') {
         // 核心突破（借鉴沉浸式翻译）：零拷贝直接获取 YouTube 播放器刚完成的 responseText
         // 彻底免去多余的二次网络请求，杜绝 429 频率限制与 Cookie 鉴权丢失！
         const { url, responseText } = event.data;
-        if (!responseText) return;
+        if (typeof responseText !== 'string' || responseText.length === 0) return;
+        // 限制单条响应体积，避免伪造的超大 payload 拖垮页面
+        if (responseText.length > 8 * 1024 * 1024) {
+          console.warn('[YT-Sub-Translator] 忽略超大字幕响应:', responseText.length);
+          return;
+        }
 
         // 广告/预加载也会走 timedtext，必须校验视频 ID，避免把其他视频的字幕套到当前视频上
-        const capturedVid = (String(url).match(/[?&]v=([^&]+)/) || [])[1];
+        const capturedVid = (String(url || '').match(/[?&]v=([^&]+)/) || [])[1];
         if (capturedVid && currentVideoId && capturedVid !== currentVideoId) {
           return;
         }
@@ -570,12 +681,20 @@ export default defineContentScript({
       } else if (event.data.type === 'CAPTURED_TIMEDTEXT_URL') {
         // 兜底机制：若未拦截到响应体，尝试通过 Background 代理拉取
         const { url } = event.data;
-        if (url && currentSentences.length === 0 && url !== currentLoadingTrackUrl) {
-          console.log('[YT-Sub-Translator] Direct timedtext URL intercepted from YouTube player:', url);
+        if (
+          typeof url === 'string' &&
+          url.startsWith('https://') &&
+          url.includes('/api/timedtext') &&
+          url.length <= 4096 &&
+          currentSentences.length === 0 &&
+          url !== currentLoadingTrackUrl
+        ) {
+          console.log('[YT-Sub-Translator] Direct timedtext URL intercepted from YouTube player');
           currentLoadingTrackUrl = url;
           chrome.runtime.sendMessage(
             { type: 'FETCH_CAPTIONS', payload: { url } },
             (response) => {
+              void chrome.runtime.lastError;
               if (response && response.success && response.data && currentSentences.length === 0) {
                 lastCaptionData = response.data;
                 processCaptionData(response.data);
@@ -613,9 +732,16 @@ export default defineContentScript({
       setTimeout(triggerNavigationSync, 300);
     });
 
-    function sortCaptionTracks(tracks: YouTubeCaptionTrack[]): YouTubeCaptionTrack[] {
+    function sortCaptionTracks(
+      tracks: YouTubeCaptionTrack[],
+      sourceLang: string,
+      targetLang: string
+    ): YouTubeCaptionTrack[] {
       const validTracks = tracks.filter((t) => !!t.baseUrl);
       if (validTracks.length <= 1) return validTracks;
+
+      const srcBase = (sourceLang || '').toLowerCase().split('-')[0];
+      const tgtBase = (targetLang || '').toLowerCase().split('-')[0];
 
       const getScore = (track: YouTubeCaptionTrack): number => {
         let score = 0;
@@ -625,21 +751,31 @@ export default defineContentScript({
           : (track.name?.simpleText || track.name?.runs?.[0]?.text || '');
         const isAsr = track.kind === 'asr';
 
-        // 1. 人工优质字幕基础分 100 分，自动生成字幕 40 分
-        score += isAsr ? 40 : 100;
+        // 1. 人工字幕 100 分，自动生成字幕 80 分
+        score += isAsr ? 80 : 100;
 
-        // 2. 源语言偏好权重
-        if (lang.startsWith('ja')) {
-          score += 60; // 日语
-        } else if (lang.startsWith('en')) {
-          score += 45; // 英语
-        } else if (lang.startsWith('zh')) {
-          score += 35; // 中文
-        } else if (lang.startsWith('ko')) {
-          score += 30; // 韩语
+        // 2. 原声语言是唯一强信号：命中 +200，避免把译文轨再翻一遍
+        if (srcBase) {
+          if (lang.startsWith(srcBase)) {
+            score += 200;
+          } else if (track.vssId && track.vssId.startsWith('.')) {
+            // YouTube 的派生翻译轨通常以 '.' 开头且语言不同于原声
+            score -= 60;
+          }
+        } else {
+          // 3. 拿不到原声语言时才使用历史语言偏好
+          if (lang.startsWith('ja')) score += 60;
+          else if (lang.startsWith('en')) score += 45;
+          else if (lang.startsWith('zh')) score += 35;
+          else if (lang.startsWith('ko')) score += 30;
         }
 
-        // 3. 原声关键字加分
+        // 4. 目标语言轨降权（否则等于把中文再翻译成中文）
+        if (tgtBase && lang.startsWith(tgtBase)) {
+          score -= 120;
+        }
+
+        // 5. 原声关键字加分
         if (/original|原声|日本語|Japanese/i.test(rawName)) {
           score += 20;
         }
@@ -654,14 +790,25 @@ export default defineContentScript({
      * 选择最适字幕音轨并拉取数据 (带多音轨自动无缝候选回退机制)
      * 彻底解决某个 ASR 音轨为空或损坏导致整个视频被误判为“无可用字幕”的严重缺陷
      */
-    function handleCaptionTracks(tracks: YouTubeCaptionTrack[]) {
+    function handleCaptionTracks(tracks: YouTubeCaptionTrack[], sourceLang = '') {
       if (!tracks || tracks.length === 0) return;
       if (currentSentences.length > 0) return;
       // 单飞：同一时刻只允许一条候选音轨瀑布，避免重复广播造成 N 倍并发请求
       if (trackCascadeActive) return;
       trackCascadeActive = true;
 
-      const candidateTracks = sortCaptionTracks(tracks);
+      // 原声语言优先级：MAIN world 的 defaultAudioLanguage → 本地上次值 → ASR 轨语言
+      const inferredSourceLang =
+        sourceLang ||
+        currentSourceLang ||
+        (tracks.find((t) => t.kind === 'asr')?.languageCode || '');
+      if (inferredSourceLang) currentSourceLang = inferredSourceLang;
+
+      const candidateTracks = sortCaptionTracks(
+        tracks,
+        inferredSourceLang,
+        settings.targetLang
+      );
       // YouTube 的 baseUrl 现需 pot 令牌才返回数据，逐个试 41 条只会触发 429。
       // 这里只做有限次兜底，主要数据源仍是播放器自身请求的零拷贝截获。
       const MAX_CANDIDATES = 3;
@@ -787,7 +934,14 @@ export default defineContentScript({
       if (currentSentences.length === 0) return;
       const texts = currentSentences.map((s) => s.text);
       const cacheKeys = texts.map((t) =>
-        buildSentenceCacheKey(settings.targetLang, t, settings.scenario, settings.reasoningEffort, settings.service)
+        buildSentenceCacheKey(
+          settings.targetLang,
+          t,
+          settings.scenario,
+          settings.reasoningEffort,
+          settings.service,
+          settings.modelName
+        )
       );
       try {
         const cachedMap = await getCachedSentencesBatch(cacheKeys);
@@ -901,34 +1055,40 @@ export default defineContentScript({
       }
 
       isFullAiRunning = true;
+      // 固化本次运行上下文：切换视频后 token 变化，旧循环立即失效
+      const runToken = ++aiRunToken;
+      const runVideoId = currentVideoId;
+      const runSentences = currentSentences;
       if (overlay) {
-        overlay.showToast(`正在为全篇 ${currentSentences.length} 句字幕启动 AI 深度精翻...`);
-        overlay.updateAiProgress(0, `准备开始精翻 (共 ${currentSentences.length} 句)...`);
+        overlay.showToast(`正在为全篇 ${runSentences.length} 句字幕启动 AI 深度精翻...`);
+        overlay.updateAiProgress(0, `准备开始精翻 (共 ${runSentences.length} 句)...`);
       }
 
       const batchSize = 12;
       const chunks: SubtitleSentence[][] = [];
-      for (let i = 0; i < currentSentences.length; i += batchSize) {
-        chunks.push(currentSentences.slice(i, i + batchSize));
+      for (let i = 0; i < runSentences.length; i += batchSize) {
+        chunks.push(runSentences.slice(i, i + batchSize));
       }
 
       let doneSentences = 0;
-      const totalSentences = currentSentences.length;
+      const totalSentences = runSentences.length;
 
       // 预先统计已有译文的句子
-      for (const s of currentSentences) {
+      for (const s of runSentences) {
         if (s.translation && s.status === 'done') {
           doneSentences++;
         }
       }
 
       for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+        // 视频已切换：立即终止，避免旧字幕继续请求和落盘
+        if (runToken !== aiRunToken) return;
         const chunk = chunks[cIdx];
         const needTrans = chunk.filter((s) => !s.translation || s.status !== 'done');
 
         if (needTrans.length > 0) {
           for (const s of needTrans) s.status = 'translating';
-          if (overlay) overlay.setSentences(currentSentences);
+          if (overlay) overlay.setSentences(runSentences);
 
           try {
             const texts = needTrans.map((s) => s.text);
@@ -947,6 +1107,8 @@ export default defineContentScript({
                 resolve
               );
             });
+
+            if (runToken !== aiRunToken) return;
 
             if (res && res.success && Array.isArray(res.translations)) {
               for (let j = 0; j < needTrans.length; j++) {
@@ -968,22 +1130,23 @@ export default defineContentScript({
             }
           }
 
-          // 实时写入本地临时缓存
-          EphemeralSubtitleStore.save(currentVideoId, currentSentences);
+          // 实时写入本地临时缓存（使用运行开始时的视频 ID，绝不串写到新视频）
+          EphemeralSubtitleStore.save(runVideoId, runSentences);
 
           const percent = Math.min(100, Math.round((doneSentences / totalSentences) * 100));
           if (overlay) {
             overlay.updateAiProgress(percent, `已处理 ${doneSentences}/${totalSentences} 句 (${percent}%)`);
-            overlay.setSentences(currentSentences);
+            overlay.setSentences(runSentences);
           }
         }
       }
 
+      if (runToken !== aiRunToken) return;
       isFullAiRunning = false;
-      EphemeralSubtitleStore.save(currentVideoId, currentSentences);
+      EphemeralSubtitleStore.save(runVideoId, runSentences);
       if (overlay) {
         overlay.setAiComplete(totalSentences);
-        overlay.setSentences(currentSentences);
+        overlay.setSentences(runSentences);
         overlay.showToast('全篇 AI 深度字幕已精翻完成！已临时存储在本地，切片/关闭后自动销毁');
       }
     }
@@ -1013,7 +1176,7 @@ export default defineContentScript({
     let liveTranslateTimer: any = null;
 
     function initDomCaptionObserver() {
-      const captionObserver = new MutationObserver(() => {
+      const processDomCaption = () => {
         if (!settings?.enabled) return;
 
         const segments = document.querySelectorAll('.ytp-caption-segment');
@@ -1051,6 +1214,7 @@ export default defineContentScript({
                 }
               },
               (res) => {
+                void chrome.runtime.lastError;
                 if (res && res.success && Array.isArray(res.translations) && res.translations[0]) {
                   if (overlay) {
                     overlay.renderLiveCaption(fullText, res.translations[0]);
@@ -1060,9 +1224,34 @@ export default defineContentScript({
             );
           }, 200);
         }
+      };
+
+      // 节流：直播间聊天会持续触发 characterData，绝不能每个 mutation 都全页查询
+      if (captionObserver) captionObserver.disconnect();
+      captionObserver = new MutationObserver(() => {
+        if (domCaptionTimer) return;
+        domCaptionTimer = setTimeout(() => {
+          domCaptionTimer = null;
+          processDomCaption();
+        }, 200);
       });
 
-      captionObserver.observe(document.body, { childList: true, subtree: true, characterData: true });
+      ensureCaptionObserverTarget();
+    }
+
+    /**
+     * 优先只观察播放器字幕容器，避免 body 级观察在直播页被聊天刷屏
+     */
+    function ensureCaptionObserverTarget() {
+      if (!captionObserver) return;
+      const container =
+        document.querySelector('#movie_player .ytp-caption-window-container') ||
+        document.getElementById('movie_player') ||
+        document.body;
+      if (container === captionObserverTarget) return;
+      captionObserver.disconnect();
+      captionObserver.observe(container, { childList: true, subtree: true, characterData: true });
+      captionObserverTarget = container;
     }
   }
 });

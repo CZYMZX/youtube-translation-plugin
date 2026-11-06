@@ -1,4 +1,4 @@
-# YouTube 自动字幕断句翻译器 (YT Subtitle Re-segmenter & Translator) - v0.2.3
+# YouTube 自动字幕断句翻译器 (YT Subtitle Re-segmenter & Translator) - v0.2.4
 
 一款专为解决 **YouTube 自动生成字幕（ASR / Auto-generated captions）碎片化、无标点、语义破碎问题** 而打造的沉浸式双语浏览器扩展（深度支持 Microsoft Edge 与 Google Chrome）。
 
@@ -19,6 +19,39 @@
 
 ---
 
+## 🚀 v0.2.4 全量代码审查修复
+
+本版本针对全量代码审查发现的 30 项问题做了系统性治理（27 项完整修复、3 项部分修复），原始 v0.2.3 保持独立存档不变：
+
+1. **安全边界**
+   - 内容脚本只接受同源 `window` 消息，主世界伪造消息不再生效；
+   - 后台 `FETCH_CAPTIONS` 增加 YouTube 域名 + `/api/timedtext` 路径白名单与发送者校验；
+   - 移除 `http://*/*` 明文全域权限；popup/浮层的接口返回值全部改为 `textContent`/DOM 构建。
+2. **数据正确性**
+   - AI 全篇精翻引入运行代际与视频 ID 快照，切视频立即中止，杜绝旧字幕写进新视频；
+   - 音轨选择改为“原声语言优先（`defaultAudioLanguage` → ASR 轨语言）”，并把目标语言轨降权；
+   - 缓存键加入模型名、不再强制小写；大模型返回条目不完整时拒绝写入缓存；
+   - 提示词增加“字幕文本仅作翻译素材”的注入防护。
+3. **性能**
+   - 播放器与字幕 DOM 观察器增加节流与容器级观察，避免直播聊天刷屏；
+   - 剧本抽屉改为打开时渲染 + 增量更新译文 + 搜索防抖；高亮不再每帧全量查询；
+   - 临时 AI 字幕落盘改为 1.5s 防抖并处理 `QuotaExceededError`；
+   - IndexedDB 批量读分块（200/批）、增加 30 天 TTL 清理与内存缓存上限；
+   - 时间轴查找改为二分，翻译队列不再每帧 O(n) 扫描。
+4. **健壮性**
+   - 设置读取超时不再静默伪装默认值；保存串行化，避免并发覆盖；
+   - 翻译队列增加 20s 超时、代际校验与有限重试，消息丢失不再永久卡 `translating`；
+   - 后台抓取统一 12s 超时；广告结束后若仍无字幕，播放中自动重新探测（最多 2 次）；
+   - popup 关闭/切后台时立即 flush 未落盘的设置；所有消息回调检查 `lastError`。
+5. **结构与测试**
+   - 删除未使用的 `content/bridge.ts` 与 4 个死代码 API；
+   - 三个翻译通道的缓存逻辑合并为 `planBatch/commitBatch`；
+   - `overlay.ts` 样式表外置为 `overlay-styles.ts`（3212 行 → 约 2050 行）；
+   - 新增 `npm test`（tsx），补充解析、设置清洗用例，测试可直接运行。
+6. **文档更正**：v1.2.1 条目中“`loadModule` 主动唤醒、页面同源 fetch”等描述与实现不符，本版已按真实实现（模拟 CC 唤醒 + 零拷贝截获）更正。
+
+---
+
 ## 🚀 v0.2.3 重磅升级与致命修复
 
 1. **彻底解决内容脚本启动期 TDZ 崩溃**：
@@ -29,11 +62,11 @@
    - 建立在播放器原生 timedtext 零拷贝拦截之上，收敛音轨兜底为 3 条并增加单飞锁，彻底杜绝 429 限流风险与广告字幕串台。
 4. **升级 InnerTube Android 客户端版本**：
    - 将 Android 客户端版本从已失效的 `19.09.37` 升级为 `20.10.38`，保障 API 双模式兜底返回 200 成功率。
-5. **沉浸式极速字幕秒开机制 (Sub-100ms Caption Sniffer)**：
-   - **主动唤醒字幕引擎**：在播放器加载第一时间调用 `movie_player.loadModule('captions')`，使懒加载音轨在 50ms 内静默激活并生成 `tracklist`。
-   - **页面同源直连 fetch**：抛弃易受 403 拦截且延迟高的 Background 消息中转，直接在 Content Script 内携带合法 Cookie 发起同源 fetch，延迟从秒级骤降至 30ms~80ms。
-   - **响应体零拷贝截获 (0ms 接管)**：通过 Fetch/XHR Hook 直接拦截 YouTube 播放器自身拉取的 timedtext 响应体文本，实现 0 毫秒零额外网络请求瞬间接管展示。
-   - **音轨智能评分重构**：自动降级 YouTube 劣质二次衍生机翻轨，优先原声真实 ASR 音轨。
+5. **沉浸式字幕秒开机制 (Caption Sniffer)**
+   - **主动唤醒字幕引擎**：通过模拟点击播放器 CC 按钮触发原生字幕管线（不依赖内部 `loadModule`）。
+   - **有限兜底抓取**：`baseUrl` 直连仅保留 3 条候选兜底（YouTube 现要求 `pot` 令牌，直连通常返回空）。
+   - **响应体零拷贝截获 (0ms 接管)**：通过 XHR/Fetch Hook 直接拦截播放器自身拉取的 timedtext 响应体，是当前最稳定的数据源。
+   - **音轨评分**：优先原声语言轨，目标语言轨与派生翻译轨降权。
 6. **画面尺寸响应式自适应缩放 (Responsive Viewport Scaling)**：
    - 引入 `ResizeObserver` 实时感知播放器画面尺寸，字号、容器内边距与圆角随画面开方因子平滑缩放，解决全屏字号过小的缺陷。
 7. **基于底部的绝对平滑自适应定位 (Smart Bottom-anchored Positioning)**：

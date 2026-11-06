@@ -6,11 +6,16 @@ import type { SubtitleSentence } from '../types';
  * 1. 仅在当前视频播放期间临时保留在本地 (内存 + 标签页会话 sessionStorage)
  * 2. 视频切换 (SPA 跳转) 或页面关闭/刷新时，自动从本地彻底销毁清空
  * 3. 避免任何冗余磁盘残留，播放期间快进快退零延迟秒级复用
+ * 4. 写入 sessionStorage 采用防抖，避免长视频每批翻译都全量序列化（O(n²)）
  */
 export class EphemeralSubtitleStore {
   private static memoryCache: Map<string, SubtitleSentence[]> = new Map();
   private static initialized = false;
   private static currentBoundVideoId: string = '';
+  private static flushTimers: Map<string, any> = new Map();
+  private static storageDisabled = false;
+
+  private static readonly FLUSH_DELAY_MS = 1500;
 
   private static getStorageKey(videoId: string): string {
     return `yt_sub_ai_temp_${videoId}`;
@@ -45,6 +50,10 @@ export class EphemeralSubtitleStore {
         } catch (e) {
           // 忽略受限环境
         }
+        for (const timer of this.flushTimers.values()) {
+          clearTimeout(timer);
+        }
+        this.flushTimers.clear();
         this.memoryCache.clear();
         console.log('[EphemeralSubtitleStore] 页面关闭，已彻底销毁所有临时 AI 字幕。');
       };
@@ -55,12 +64,33 @@ export class EphemeralSubtitleStore {
   }
 
   /**
-   * 保存当前视频的临时 AI 字幕
+   * 保存当前视频的临时 AI 字幕（内存立即生效，sessionStorage 防抖落盘）
    */
   public static save(videoId: string, sentences: SubtitleSentence[]) {
     if (!videoId) return;
     this.currentBoundVideoId = videoId;
     this.memoryCache.set(videoId, sentences);
+
+    if (this.storageDisabled) return;
+
+    const existing = this.flushTimers.get(videoId);
+    if (existing) clearTimeout(existing);
+
+    const timer = setTimeout(() => {
+      this.flushTimers.delete(videoId);
+      this.flush(videoId);
+    }, this.FLUSH_DELAY_MS);
+
+    this.flushTimers.set(videoId, timer);
+  }
+
+  /**
+   * 立即把内存中的字幕写入 sessionStorage
+   */
+  private static flush(videoId: string) {
+    if (this.storageDisabled) return;
+    const sentences = this.memoryCache.get(videoId);
+    if (!sentences) return;
 
     try {
       const serialized = JSON.stringify(
@@ -75,8 +105,16 @@ export class EphemeralSubtitleStore {
         }))
       );
       sessionStorage.setItem(this.getStorageKey(videoId), serialized);
-    } catch (e) {
-      // 容错处理超额异常
+    } catch (e: any) {
+      // QuotaExceededError：长视频全量字幕可能超过 5MB，降级为纯内存缓存并明确告知
+      this.storageDisabled = true;
+      const pending = this.flushTimers.get(videoId);
+      if (pending) clearTimeout(pending);
+      this.flushTimers.delete(videoId);
+      console.warn(
+        '[EphemeralSubtitleStore] sessionStorage 写入失败（可能超出配额），已降级为纯内存缓存：',
+        e?.name || e
+      );
     }
   }
 
@@ -113,12 +151,20 @@ export class EphemeralSubtitleStore {
    */
   public static clear(videoId?: string) {
     if (videoId) {
+      const timer = this.flushTimers.get(videoId);
+      if (timer) clearTimeout(timer);
+      this.flushTimers.delete(videoId);
+
       this.memoryCache.delete(videoId);
       try {
         sessionStorage.removeItem(this.getStorageKey(videoId));
       } catch (e) {}
       console.log(`[EphemeralSubtitleStore] 视频 ${videoId} 已切换或关闭，已安全释放并清除临时 AI 字幕。`);
     } else {
+      for (const timer of this.flushTimers.values()) {
+        clearTimeout(timer);
+      }
+      this.flushTimers.clear();
       this.memoryCache.clear();
       try {
         const keysToRemove: string[] = [];

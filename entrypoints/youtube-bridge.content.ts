@@ -6,7 +6,7 @@ export default defineContentScript({
   runAt: 'document_start',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.2.3]%c MAIN-world bridge loaded (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.2.4]%c MAIN-world bridge loaded (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -85,11 +85,38 @@ export default defineContentScript({
         if (ytcfg && typeof ytcfg.get === 'function') {
           return {
             apiKey: ytcfg.get('INNERTUBE_API_KEY') || '',
-            clientVersion: ytcfg.get('INNERTUBE_CLIENT_VERSION') || ''
+            clientVersion: ytcfg.get('INNERTUBE_CLIENT_VERSION') || '',
+            visitorData: ytcfg.get('VISITOR_DATA') || ''
           };
         }
       } catch (e) {}
-      return { apiKey: '', clientVersion: '' };
+      return { apiKey: '', clientVersion: '', visitorData: '' };
+    }
+
+    /**
+     * 原声语言：用于选择正确的字幕轨，避免把译文轨再翻一遍
+     */
+    function getSourceLang(): string {
+      try {
+        const player = getPlayer();
+        const resp = player?.getPlayerResponse?.() || (window as any).ytInitialPlayerResponse;
+        const details = resp?.videoDetails;
+        return details?.defaultAudioLanguage || details?.defaultAudioLanguageIso || '';
+      } catch (e) {
+        return '';
+      }
+    }
+
+    /**
+     * 广告播放期间会切换 videoData.video_id，需让内容脚本忽略，避免清空正片缓存
+     */
+    function isAdPlaying(): boolean {
+      try {
+        const player = getPlayer();
+        return typeof player?.getAdState === 'function' ? player.getAdState() > 0 : false;
+      } catch (e) {
+        return false;
+      }
     }
 
     function broadcastTracks(reason: string) {
@@ -105,6 +132,8 @@ export default defineContentScript({
           tracks: tracks || [],
           videoData: videoData,
           clientInfo: clientInfo,
+          sourceLang: getSourceLang(),
+          isAd: isAdPlaying(),
           reason: reason || 'poll'
         },
         '*'

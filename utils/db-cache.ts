@@ -1,25 +1,39 @@
 /**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - IndexedDB 本地持久化缓存核心
- * 版本: v1.2.0
- * 
+ * 版本: v0.2.4
+ *
  * 功能特性：
  * 1. 毫秒级持久化缓存，跨页面、跨会话有效；
  * 2. 二次观看相同视频实现 0 API 消耗、0 秒瞬时显示完整双语字幕；
  * 3. 内存 Map 一级缓存 + IndexedDB 二级持久化缓存双层架构；
- * 4. 异常自动降级（无痕模式或禁用存储时静默回退纯内存缓存）。
+ * 4. 异常自动降级（无痕模式或禁用存储时静默回退纯内存缓存）；
+ * 5. 30 天 TTL 自动清理，避免长期使用后数据库无限膨胀。
  * ============================================================================
  */
 
 const DB_NAME = 'yt_sub_translator_v2_cache';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE_SENTENCES = 'sentence_cache';
-const STORE_VIDEOS = 'video_track_cache';
+const STORE_VIDEOS = 'video_track_cache'; // 兼容旧库，保留但不写入
 
-// 内存一级缓存
+// 内存一级缓存（带简单容量上限，防止长会话无限增长）
 const memorySentenceCache = new Map<string, string>();
+const MEMORY_CACHE_LIMIT = 8000;
+
+// 句子缓存保留时长
+const CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 let dbPromise: Promise<IDBDatabase | null> | null = null;
+let pruneScheduled = false;
+
+function memorySet(key: string, value: string) {
+  if (!memorySentenceCache.has(key) && memorySentenceCache.size >= MEMORY_CACHE_LIMIT) {
+    const oldest = memorySentenceCache.keys().next().value;
+    if (oldest) memorySentenceCache.delete(oldest);
+  }
+  memorySentenceCache.set(key, value);
+}
 
 function getDB(): Promise<IDBDatabase | null> {
   if (typeof indexedDB === 'undefined') {
@@ -32,15 +46,31 @@ function getDB(): Promise<IDBDatabase | null> {
         req.onupgradeneeded = (e) => {
           const db = (e.target as IDBOpenDBRequest).result;
           if (!db.objectStoreNames.contains(STORE_SENTENCES)) {
-            db.createObjectStore(STORE_SENTENCES, { keyPath: 'key' });
+            const store = db.createObjectStore(STORE_SENTENCES, { keyPath: 'key' });
+            store.createIndex('updatedAt', 'updatedAt');
+          } else {
+            // 老库升级：补建 updatedAt 索引，供 TTL 清理使用
+            const tx = (e.target as IDBOpenDBRequest).transaction;
+            const store = tx?.objectStore(STORE_SENTENCES);
+            if (store && !store.indexNames.contains('updatedAt')) {
+              store.createIndex('updatedAt', 'updatedAt');
+            }
           }
           if (!db.objectStoreNames.contains(STORE_VIDEOS)) {
             db.createObjectStore(STORE_VIDEOS, { keyPath: 'videoKey' });
           }
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => {
+          schedulePrune(req.result);
+          resolve(req.result);
+        };
         req.onerror = () => {
           console.warn('[DBCache] IndexedDB open error, fallback to memory cache');
+          resolve(null);
+        };
+        // 其他标签页仍持有旧版本连接时，不让调用方无限等待
+        req.onblocked = () => {
+          console.warn('[DBCache] IndexedDB upgrade blocked by another tab, fallback to memory cache');
           resolve(null);
         };
       } catch (err) {
@@ -52,57 +82,54 @@ function getDB(): Promise<IDBDatabase | null> {
   return dbPromise;
 }
 
+/**
+ * 延迟执行一次过期缓存清理（每个上下文只跑一次）
+ */
+function schedulePrune(db: IDBDatabase) {
+  if (pruneScheduled) return;
+  pruneScheduled = true;
+  setTimeout(() => {
+    try {
+      const cutoff = Date.now() - CACHE_TTL_MS;
+      const tx = db.transaction(STORE_SENTENCES, 'readwrite');
+      const index = tx.objectStore(STORE_SENTENCES).index('updatedAt');
+      const req = index.openCursor(IDBKeyRange.upperBound(cutoff));
+      let removed = 0;
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor) {
+          if (removed > 0) console.log(`[DBCache] 已清理 ${removed} 条过期句子缓存`);
+          return;
+        }
+        cursor.delete();
+        removed++;
+        cursor.continue();
+      };
+      req.onerror = () => {
+        console.warn('[DBCache] 过期缓存清理失败');
+      };
+    } catch (e) {
+      console.warn('[DBCache] 过期缓存清理异常:', e);
+    }
+  }, 5000);
+}
+
 export function buildSentenceCacheKey(
   targetLang: string,
   text: string,
   scenario = 'general',
   reasoning = 'low',
-  service = 'google'
+  service = 'google',
+  modelName = ''
 ): string {
-  return `${service}:${scenario}:${reasoning}:${targetLang}:${text.trim().toLowerCase()}`;
-}
-
-export function buildVideoCacheKey(
-  videoId: string,
-  trackLang: string,
-  targetLang: string,
-  scenario = 'general',
-  service = 'google'
-): string {
-  return `${videoId}:${trackLang}:${targetLang}:${scenario}:${service}`;
+  // 注意：不能 toLowerCase，否则仅大小写不同的句子会共用译文；
+  // modelName 必须参与 key，避免切换模型后复用旧模型译文。
+  const model = (modelName || '').trim().toLowerCase();
+  return `${service}:${model}:${scenario}:${reasoning}:${targetLang}:${text.trim()}`;
 }
 
 /**
- * 读单句缓存（先读内存，再读 IndexedDB）
- */
-export async function getCachedSentence(key: string): Promise<string | null> {
-  if (memorySentenceCache.has(key)) {
-    return memorySentenceCache.get(key)!;
-  }
-  try {
-    const db = await getDB();
-    if (!db) return null;
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_SENTENCES, 'readonly');
-      const store = tx.objectStore(STORE_SENTENCES);
-      const req = store.get(key);
-      req.onsuccess = () => {
-        if (req.result && req.result.translation) {
-          memorySentenceCache.set(key, req.result.translation);
-          resolve(req.result.translation);
-        } else {
-          resolve(null);
-        }
-      };
-      req.onerror = () => resolve(null);
-    });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 批量读取句子缓存
+ * 批量读取句子缓存（分块事务，避免一次性发起数千个 IDB 请求）
  */
 export async function getCachedSentencesBatch(keys: string[]): Promise<Map<string, string>> {
   const result = new Map<string, string>();
@@ -124,27 +151,35 @@ export async function getCachedSentencesBatch(keys: string[]): Promise<Map<strin
     const db = await getDB();
     if (!db) return result;
 
-    await new Promise<void>((resolve) => {
-      const tx = db.transaction(STORE_SENTENCES, 'readonly');
-      const store = tx.objectStore(STORE_SENTENCES);
-      let remaining = missingKeys.length;
+    const CHUNK_SIZE = 200;
+    for (let offset = 0; offset < missingKeys.length; offset += CHUNK_SIZE) {
+      const chunk = missingKeys.slice(offset, offset + CHUNK_SIZE);
+      await new Promise<void>((resolve) => {
+        try {
+          const tx = db.transaction(STORE_SENTENCES, 'readonly');
+          const store = tx.objectStore(STORE_SENTENCES);
+          let remaining = chunk.length;
 
-      for (const k of missingKeys) {
-        const req = store.get(k);
-        req.onsuccess = () => {
-          if (req.result && req.result.translation) {
-            memorySentenceCache.set(k, req.result.translation);
-            result.set(k, req.result.translation);
+          for (const k of chunk) {
+            const req = store.get(k);
+            req.onsuccess = () => {
+              if (req.result && req.result.translation) {
+                memorySet(k, req.result.translation);
+                result.set(k, req.result.translation);
+              }
+              remaining--;
+              if (remaining === 0) resolve();
+            };
+            req.onerror = () => {
+              remaining--;
+              if (remaining === 0) resolve();
+            };
           }
-          remaining--;
-          if (remaining === 0) resolve();
-        };
-        req.onerror = () => {
-          remaining--;
-          if (remaining === 0) resolve();
-        };
-      }
-    });
+        } catch (e) {
+          resolve();
+        }
+      });
+    }
   } catch {
     // 忽略异常，返回已有
   }
@@ -161,7 +196,7 @@ export async function setCachedSentencesBatch(
   if (entries.length === 0) return;
 
   for (const { key, translation } of entries) {
-    memorySentenceCache.set(key, translation);
+    memorySet(key, translation);
   }
 
   try {
@@ -175,55 +210,5 @@ export async function setCachedSentencesBatch(
     }
   } catch (e) {
     console.warn('[DBCache] setCachedSentencesBatch error:', e);
-  }
-}
-
-/**
- * 读取整部视频的全部已翻译字幕
- */
-export async function getCachedVideoSentences(
-  videoKey: string
-): Promise<Array<{ text: string; translation: string }> | null> {
-  try {
-    const db = await getDB();
-    if (!db) return null;
-    return new Promise((resolve) => {
-      const tx = db.transaction(STORE_VIDEOS, 'readonly');
-      const store = tx.objectStore(STORE_VIDEOS);
-      const req = store.get(videoKey);
-      req.onsuccess = () => {
-        if (req.result && Array.isArray(req.result.sentences)) {
-          resolve(req.result.sentences);
-        } else {
-          resolve(null);
-        }
-      };
-      req.onerror = () => resolve(null);
-    });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * 保存整部视频的全部已翻译字幕
- */
-export async function saveCachedVideoSentences(
-  videoKey: string,
-  sentences: Array<{ text: string; translation: string }>
-): Promise<void> {
-  if (!videoKey || !sentences || sentences.length === 0) return;
-  try {
-    const db = await getDB();
-    if (!db) return;
-    const tx = db.transaction(STORE_VIDEOS, 'readwrite');
-    const store = tx.objectStore(STORE_VIDEOS);
-    store.put({
-      videoKey,
-      sentences,
-      updatedAt: Date.now()
-    });
-  } catch (e) {
-    console.warn('[DBCache] saveCachedVideoSentences error:', e);
   }
 }
