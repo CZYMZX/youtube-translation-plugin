@@ -2,7 +2,7 @@
 
 Edge / Chrome 浏览器扩展（Manifest V3）。把 YouTube 自动生成字幕（ASR cue）重新组装成完整句子、补齐标点，再按句批量送翻，以双语浮层叠加在播放器上。
 
-当前版本 **0.4.0**，技术栈 WXT 0.21 + TypeScript 5.8，运行时无第三方依赖。
+当前版本 **0.4.1**，技术栈 WXT 0.21 + TypeScript 5.8，运行时无第三方依赖。
 
 ---
 
@@ -46,7 +46,7 @@ utils/
   control-bar-button.ts      控制栏按钮注入
   icons.ts                   图标资源
 types/                       共享类型
-test/                        10 个测试文件（tsx 直跑，无测试框架）
+test/                        11 个测试文件（tsx 直跑，无测试框架）
 docs/                        设计记录与专项说明
 public/                      图标与 SVG
 scripts/                     图标应用、对话导出等辅助脚本
@@ -70,7 +70,7 @@ npm run build:chrome
 # 类型检查
 npm run compile
 
-# 测试（10 个文件顺序执行，看退出码）
+# 测试（11 个文件顺序执行，看退出码）
 npm test; echo $?
 ```
 
@@ -84,8 +84,8 @@ npm test; echo $?
 
 1. **VSR 兼容**：视频浮层禁用 `backdrop-filter` / `filter`（含 `-webkit-` 前缀）。`test/test-vsr-styles.js` 断言的是样式声明数，出现即失败；文件头注释里提到该词属说明文字，不计入。
 2. **令牌一致性**：弹窗与设置页的 `:root` 逐项比对颜色、时长、缓动、圆角，防止改一边忘另一边。
-3. **测试判定看退出码**，不要 `grep` 日志。注意一处例外：`test-segmenter.js` 与 `test-scenario.js` 用 `console.assert`，断言失败不改变退出码，这两个文件要单独看输出。
-4. **断言口径**：当前 `npm test` 的打印项是 **202**（packs 53 · glossary 47 · segmenter-lang 34 · popup-ui 28 · options-ui 40），`test-scenario.js` 另打印「汇总: 13 通过」；`test-parser / test-settings / test-vsr-styles / test-segmenter / test-scenario` 中还有 45 条不打印汇总的断言（14 / 19 / 5 / 5 / 2），合计约 **260** 条。对外引用写「202 打印项 / 约 260 断言」，不要再说「共 201 项」。（`0.4.0` 发布当次实测为 201 = 53+46+34+28+40；本轮 glossary 新增 1 条、scenario 改为计数器后升到 202。）
+3. **测试判定看退出码**，不要 `grep` 日志。11 个测试文件都做了断言收口（`check()` 计数 + 末尾 `assert` 抛错，或 `assert` 直接抛），任何一条断言失败都会让 `npm test` 返回非零码。`v0.4.1` 起 `test-segmenter.js` 与 `test-scenario.js` 已从 `console.assert` 迁到抛错断言 —— `console.assert` 在 Node 里失败只打印一行、不改变退出码，「全绿」可能是假的，这个坑现在已经补上，不再有例外文件。
+4. **断言口径**：当前 `npm test` 的打印项是 **491**（packs 82 · glossary 68 · segmenter-lang 85 · scenario 94 · retry 59 · segmenter 6 · popup-ui 28 · options-ui 69），全部是 `check()` / `t()` 断言计数；`test-parser / test-settings / test-vsr-styles` 另有 38 条不打印的断言（14 / 19 / 5），合计约 **529** 条。对外引用写「491 打印项 / 约 529 断言」，不要再说「共 201/202 项」。（对照：`0.4.0` 发布当次实测 201 = 53+46+34+28+40；`0.4.1` 的增量来自 `retry 59`（新增文件）、`options-ui 40→69`（两个新选项控件）、`scenario 34→94`（提示词四层装配后按层断言）、`segmenter-lang 73→85`（方案 C 11 条 + 7c 歧义短词 17 条）、`packs 71→82`、`glossary 59→68`。日志里另有 4 行信息性 `✓`（各套件末尾的「…测试通过」提示）不计入打印项。工作区有并行改动时，数字以当次 `npm test` 实测为准。）
 
 ## 文档索引
 

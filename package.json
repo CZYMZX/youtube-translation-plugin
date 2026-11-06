@@ -1,6 +1,6 @@
 {
   "name": "yt-sub-translator",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "YouTube 自动字幕智能断句与翻译 Edge / Chrome 插件",
   "type": "module",
   "scripts": {

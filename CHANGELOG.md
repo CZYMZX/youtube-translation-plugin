@@ -8,12 +8,49 @@
 
 ---
 
-## [未发布] - 2026-11-06 (五模块复核修复)
+## [0.4.1] - 2026-11-06 (六模块：断句 / 翻译 / 术语 / 界面 / 质量)
 
-> 版本号仍为 `0.4.0`，未发新 tag：本轮只做复核修复与口径校正，是否升版待拍板。
-> 改动来自五个模块（断句 / 术语库 / 翻译与场景 / 高级设置页 / VSR）的独立复核，质量保障侧只做验收与文档口径同步。
+> 本版收口两批未发布改动：上一轮「五模块复核修复」与本轮六模块改动**一并**发布（`0.4.0` 之后无独立快照，`0.3.x` 亦无）。
+> 版本号同步点（`package.json` / `package-lock.json` / `wxt.config.ts` / 三处入口 banner / popup 与 options 页脚 / MAIN-world bridge banner）与两个构建产物目录均为 `0.4.1`；本轮只做升版与记录，提交与打 tag 由编排层统一执行。
 
-### 🐛 高级设置页（9 项实现缺陷）
+### 🧩 断句引擎
+- 歧义短词改为**如实保留**：`[音]` / `[笑]` / `SE` 这类单字、短括注不再按噪声剔除（音效长词仍剔除）。
+  判据从「字数」改成「内文能否唯一读作非言语音效」—— 短词既可能是语气也可能是音效，猜错会吃掉实义 token。
+- 新增**合并环节的时长 / 字数双上限（方案 C，默认生效）**：短碎片合并是累计过程，原先没有上限，
+  于是「7.67s 碎片 + 6.68s 句」会缝成 14.35s 的长句。现在并入后若超 `maxDurationMs` 或主循环同一口径的字数/词数上限，
+  两段各自保留为独立句（内容不丢、不新造碎片）；两条上限都取自用户设置，不新增硬编码常量。
+- **长句方案 A 保留为可选开关**（2× 天花板前置，默认关闭）；**方案 B 否决**，代码仅留作对照，生产路径永不启用。
+- 测试修正：`test-segmenter-lang.js` 里「auto 与 en 策略产生差异」原本带 `|| true`（永真、必过），改为真断言；并把第二个事件的起点 2100ms → 2200ms，让「句末助词 + 轻停顿（≥160ms）」真的触发断句。
+- 文档 / 注释口径校正：极端停顿阈值写明 `max(5s, 3×超长停顿阈值)`；守卫 B 补全格助词清单（を/が/に/は/も/で/と/へ/や）；行级 ASR token 明确按「、，,」细分。
+
+### 🌐 翻译与场景
+- 三类跨场景约束**上移到公共层**（`utils/translator.ts#COMMON_RULES`）：禁用 AI 腔、不增补原文没有的信息。
+  所有场景无条件继承（**自定义场景包同样继承**），场景包里不再各写一份 —— 原先用户上传的场景包拿不到这些约束。
+- 新增**专名括注开关** `glossaryAnnotation`（默认 `off` = 老行为）：开启后专名统一写「中文译名（日文原文）」，
+  同批首现才括注、拉丁字母原名不叠括号、译名自带括号时去重不叠括号；与术语块表头「不得加注原文」冲突处就地声明优先级。
+- 新增 **ASR 纠错两档** `asrCorrection`（默认 `normal`）：`strict` 仅当上下文能确证时才改，不确定就保留原文。
+- **失败句带前后文单独重试**（不再整轨重译）：首轮行为不变，失败句逐句重发，payload 只 1 条 `text` + `context_before/after`；
+  护栏为单句最多 2 次、总预算 8s、端点级故障立刻停手；失败不写缓存、不拿原文顶替。
+  顺带修掉 Google 通道把 `[翻译失败: …]` 当译文写进缓存的真实 bug（下次播放会命中一条假译文）。
+- 缓存键 `s2` 改为 hash **整段静态骨架**（场景包 + 公共层 + 选项层 + 推理档 + 输出契约）：任一层改字、或切换上面两个新选项即失效。
+  修掉 `s1` 只 hash 场景包、公共层文案改了旧译文不失效的漏点。
+- 场景守卫测试改为 `check()` 计数器 + 末尾汇总行（`test-scenario.js`），失败项一目了然。
+- 翻译缓存键的实际形态写进注释（`scenarioId#promptHash` + `glossaryTag`），说明改 prompt / 改术语库后旧译文如何失效。
+
+### 📚 术语库
+- 语境门控**只数普通术语**：门控词彼此不能互证（修掉「幸運 + 修繕」「トークン + 推論」两例误注入），
+  门槛改为「同句 ≥1 条普通术语」，`GLOSSARY_MATCHER_REVISION` bump 到 2。
+- 缓存标签改为**内容指纹**：每包按 `ja` / `zh` / `category` / `needsContext` 算 djb2 + FNV-1a 双散列，
+  「条数不变、只改译名」这类最常见的术语订正也能让旧译文失效；只统计已启用包；`en` / `source` 等元数据刻意不喂。
+  原「三包共用一个手工 `GLOSSARY_VERSION`、靠人记着 bump」的做法随之废止。
+- 断言收紧为精确值（不再用「存在即通过」这类宽松判断）。
+- `needsContext` 语境门控明确为**逐句**判定（按整批会被同批其他句的正常术语「救活」）。
+- 单字汉字术语匹配边界补用例：「砂漠」只命中「砂漠→沙漠」，不误命中单字「砂」。
+- 上传包规范补明 `needsContext` 仅内置包有效。
+
+### 🖥 高级设置页（2 个新控件 + 8 项缺陷修复）
+- 新增两个选项控件（二元分段，放在「术语库」分区顶部）：「ASR 纠错」常规 / 严格、「专名括注」关闭 / 开启；
+  选中态同时写入 `aria-pressed`，读屏不再只靠配色区分。
 - 「恢复默认」不再维护第二份残缺默认值副本，直接展开 `types/index.ts` 的 `DEFAULT_SETTINGS`
   （原先漏掉 `segmentationLanguage`、三种配色与 API 配置）。
 - 预览参数滞后一次输入：`applyPreview()` 改为在 `settings` 合并之后统一重画，删除 `silentPreview` 旁路。
@@ -22,32 +59,27 @@
 - 未定义令牌 `var(--ease-in-out)`（两页 `:root` 都没有，实际回落到 `ease`）改用字典里的 `--ease-standard`。
 - 目标语言补齐 `fr` / `de`，与弹窗的 9 种保持一致。
 - 「关于」页不再宣称不存在的 `Alt + T` 快捷键（`wxt.config.ts` 无 `commands` 注册、内容脚本无对应 keydown），改为如实描述点击工具栏图标打开快捷面板。
-
-### 🧩 断句引擎
-- 文档 / 注释口径校正：极端停顿阈值写明 `max(5s, 3×超长停顿阈值)`；守卫 B 补全格助词清单（を/が/に/は/も/で/と/へ/や）；行级 ASR token 明确按「、，,」细分。
-- 测试修正：`test-segmenter-lang.js` 里「auto 与 en 策略产生差异」原本带 `|| true`（永真、必过），改为真断言；并把第二个事件的起点 2100ms → 2200ms，让「句末助词 + 轻停顿（≥160ms）」真的触发断句。
-
-### 📚 术语库
-- `needsContext` 语境门控明确为**逐句**判定（按整批会被同批其他句的正常术语「救活」）。
-- 单字汉字术语匹配边界补用例：「砂漠」只命中「砂漠→沙漠」，不误命中单字「砂」。
-- `GLOSSARY_VERSION` 注释补明三包共用一个版本号、任一包内容变动必须 bump；上传包规范补 `needsContext` 仅内置包有效。
-
-### 🌐 翻译与场景
-- 场景守卫测试改为 `check()` 计数器 + 末尾汇总行（`test-scenario.js`），失败项一目了然；仍保留 `console.assert` 约定，**不改变退出码**。
-- 翻译缓存键的实际形态写进注释（`scenarioId#promptHash` + `glossaryTag`），说明改 prompt / 改术语库后旧译文如何失效。
+- 防抖窗口内连改两个开关时，只写最后一个 patch、前一个被静默丢弃：改为累积 `pendingPatch` 后一次落盘。
 
 ### 🎬 弹窗
 - 删除 `scenarioBadge` 及其 `updateScenarioBadge()`：`popup/index.html` 已无 `#scenario-badge`，属死代码。
 
-### 🖥 VSR 红线
+### 🧪 质量保障
+- `test-segmenter.js` 与 `test-scenario.js` 从 `console.assert` 迁到**抛错断言**：失败即非零退出码，消除「EXIT=0 但其实是假绿」。
+  `console.assert` 在 Node 里失败只打印一行、不改变退出码，这个坑从此不再有例外文件。
+- 新增 `test/test-retry.js`（59 条断言，注入假通道、不联网），并串入 `package.json` 的 `test` 脚本。
+
+### 🎯 VSR 红线
 - `test-vsr-styles.js` 由「正则找关键词」改为「数样式声明数」：`backdrop-filter` / `-webkit-backdrop-filter` 声明数必须为 0；`filter` / `-webkit-filter` 禁令扩到**全部** filter 声明（blur / drop-shadow / grayscale 都会强制离屏合成）。红线是强化，不是放宽。
 
 ### ✅ 验证
-- `npm test` EXIT=0，逐套件：packs 53 · glossary 47 · segmenter 34 · popup-ui 28 · options-ui 40（共 202 打印项，`test-scenario` 另打「汇总: 13 通过」）。
-- `console.assert` 文件单独核过：`test-segmenter` 5 条断言 0 失败、`test-scenario` 2 条断言 0 失败 + 13 项 check 全通过（退出码对它们无效）。
+- `npm test` **EXIT=0**（按退出码判定，未用 grep）。逐套件实测：packs 82 · glossary 68 · segmenter 6 · segmenter-lang 85 · scenario 94 · retry 59 · popup-ui 28 · options-ui 69 —— **491 打印项，0 失败**。
+- `test-parser` / `test-settings` / `test-vsr-styles` 不打印逐条汇总，另有 38 条断言（14 / 19 / 5），合计约 **529** 条断言。
+  日志中 495 行 `✓` 里有 4 行是各套件末尾的信息性提示（如 segmenter 的「疑问句自动补问号测试通过」），不计入打印项。
+- 两个原 `console.assert` 文件已改为抛错断言（`test-segmenter` / `test-scenario`），退出码对它们**开始有效**；本轮不再有「EXIT=0 但断言失败」的例外文件。
 - `npx tsc --noEmit` EXIT=0。
-- `npm run build:edge` EXIT=0，产物 `.output/edge-mv3`，manifest `version = 0.4.0`（产物不入库）。
-- 断言口径更新为「202 打印项 / 约 260 断言」（0.4.0 发布当次为 201 / 约 246）。
+- `npm run build:edge` EXIT=0 → `.output/edge-mv3`，manifest `version = 0.4.1`；`npm run build:chrome` EXIT=0 → `.output/chrome-mv3`，manifest `version = 0.4.1`（双平台同版本，产物不入库）。
+- 断言口径由「311 打印项 / 约 349 断言」更新为「**491 打印项 / 约 529 断言**」（`0.4.0` 发布当次为 201 / 约 246）。
 
 ---
 
