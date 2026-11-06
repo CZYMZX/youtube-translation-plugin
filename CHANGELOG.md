@@ -8,6 +8,49 @@
 
 ---
 
+## [未发布] - 2026-11-06 (五模块复核修复)
+
+> 版本号仍为 `0.4.0`，未发新 tag：本轮只做复核修复与口径校正，是否升版待拍板。
+> 改动来自五个模块（断句 / 术语库 / 翻译与场景 / 高级设置页 / VSR）的独立复核，质量保障侧只做验收与文档口径同步。
+
+### 🐛 高级设置页（9 项实现缺陷）
+- 「恢复默认」不再维护第二份残缺默认值副本，直接展开 `types/index.ts` 的 `DEFAULT_SETTINGS`
+  （原先漏掉 `segmentationLanguage`、三种配色与 API 配置）。
+- 预览参数滞后一次输入：`applyPreview()` 改为在 `settings` 合并之后统一重画，删除 `silentPreview` 旁路。
+- 预览背景色恒为默认色：`hexToRgba` 第三个捕获组 `[a-fd]` 漏 `\d`，蓝通道含数字的色值静默回退，已改正则。
+- 7 个 `aria-labelledby="nav-*"` 悬空：导航按钮补 `id` 与 `aria-controls`，读屏可拿到分区名。
+- 未定义令牌 `var(--ease-in-out)`（两页 `:root` 都没有，实际回落到 `ease`）改用字典里的 `--ease-standard`。
+- 目标语言补齐 `fr` / `de`，与弹窗的 9 种保持一致。
+- 「关于」页不再宣称不存在的 `Alt + T` 快捷键（`wxt.config.ts` 无 `commands` 注册、内容脚本无对应 keydown），改为如实描述点击工具栏图标打开快捷面板。
+
+### 🧩 断句引擎
+- 文档 / 注释口径校正：极端停顿阈值写明 `max(5s, 3×超长停顿阈值)`；守卫 B 补全格助词清单（を/が/に/は/も/で/と/へ/や）；行级 ASR token 明确按「、，,」细分。
+- 测试修正：`test-segmenter-lang.js` 里「auto 与 en 策略产生差异」原本带 `|| true`（永真、必过），改为真断言；并把第二个事件的起点 2100ms → 2200ms，让「句末助词 + 轻停顿（≥160ms）」真的触发断句。
+
+### 📚 术语库
+- `needsContext` 语境门控明确为**逐句**判定（按整批会被同批其他句的正常术语「救活」）。
+- 单字汉字术语匹配边界补用例：「砂漠」只命中「砂漠→沙漠」，不误命中单字「砂」。
+- `GLOSSARY_VERSION` 注释补明三包共用一个版本号、任一包内容变动必须 bump；上传包规范补 `needsContext` 仅内置包有效。
+
+### 🌐 翻译与场景
+- 场景守卫测试改为 `check()` 计数器 + 末尾汇总行（`test-scenario.js`），失败项一目了然；仍保留 `console.assert` 约定，**不改变退出码**。
+- 翻译缓存键的实际形态写进注释（`scenarioId#promptHash` + `glossaryTag`），说明改 prompt / 改术语库后旧译文如何失效。
+
+### 🎬 弹窗
+- 删除 `scenarioBadge` 及其 `updateScenarioBadge()`：`popup/index.html` 已无 `#scenario-badge`，属死代码。
+
+### 🖥 VSR 红线
+- `test-vsr-styles.js` 由「正则找关键词」改为「数样式声明数」：`backdrop-filter` / `-webkit-backdrop-filter` 声明数必须为 0；`filter` / `-webkit-filter` 禁令扩到**全部** filter 声明（blur / drop-shadow / grayscale 都会强制离屏合成）。红线是强化，不是放宽。
+
+### ✅ 验证
+- `npm test` EXIT=0，逐套件：packs 53 · glossary 47 · segmenter 34 · popup-ui 28 · options-ui 40（共 202 打印项，`test-scenario` 另打「汇总: 13 通过」）。
+- `console.assert` 文件单独核过：`test-segmenter` 5 条断言 0 失败、`test-scenario` 2 条断言 0 失败 + 13 项 check 全通过（退出码对它们无效）。
+- `npx tsc --noEmit` EXIT=0。
+- `npm run build:edge` EXIT=0，产物 `.output/edge-mv3`，manifest `version = 0.4.0`（产物不入库）。
+- 断言口径更新为「202 打印项 / 约 260 断言」（0.4.0 发布当次为 201 / 约 246）。
+
+---
+
 ## [0.4.0] - 2026-11-05 (独立高级设置页)
 
 ### 🖥 新界面

@@ -85,7 +85,7 @@ npm test; echo $?
 1. **VSR 兼容**：视频浮层禁用 `backdrop-filter` / `filter`（含 `-webkit-` 前缀）。`test/test-vsr-styles.js` 断言的是样式声明数，出现即失败；文件头注释里提到该词属说明文字，不计入。
 2. **令牌一致性**：弹窗与设置页的 `:root` 逐项比对颜色、时长、缓动、圆角，防止改一边忘另一边。
 3. **测试判定看退出码**，不要 `grep` 日志。注意一处例外：`test-segmenter.js` 与 `test-scenario.js` 用 `console.assert`，断言失败不改变退出码，这两个文件要单独看输出。
-4. **断言口径**：`npm test` 打印的「201 项」是 5 个带汇总行套件之和；另有约 45 条断言不打印，实际约 246 条。
+4. **断言口径**：当前 `npm test` 的打印项是 **202**（packs 53 · glossary 47 · segmenter-lang 34 · popup-ui 28 · options-ui 40），`test-scenario.js` 另打印「汇总: 13 通过」；`test-parser / test-settings / test-vsr-styles / test-segmenter / test-scenario` 中还有 45 条不打印汇总的断言（14 / 19 / 5 / 5 / 2），合计约 **260** 条。对外引用写「202 打印项 / 约 260 断言」，不要再说「共 201 项」。（`0.4.0` 发布当次实测为 201 = 53+46+34+28+40；本轮 glossary 新增 1 条、scenario 改为计数器后升到 202。）
 
 ## 文档索引
 
