@@ -139,10 +139,10 @@ console.log('--- 测试 7: 噪声 token 过滤 ---');
 // ────────────────────────────────────────────────
 console.log('--- 测试 8: 短碎片合并 ---');
 {
-  // 4 字碎片（无终止标点）+ 500ms 停顿触发独立断句，随后并入下一句
+  // 4 字碎片（无终止标点、非助词结尾）+ 500ms 停顿触发独立断句，随后并入下一句
   const tokens = extractCaptionTokens({
     events: [
-      ev(0, 800, [['お天気が', 0]]),
+      ev(0, 800, [['いい天気', 0]]),
       ev(1300, 2500, [['悪く', 0], ['なりました。', 500]])
     ]
   });
@@ -150,7 +150,7 @@ console.log('--- 测试 8: 短碎片合并 ---');
   const sMerged = segmentCaptionTokens(tokens, S);
   check('关闭合并时碎片独立成句', sNoMerge.length === 2, `no=${sNoMerge.length}`);
   check('合并后碎片并入相邻句', sMerged.length === 1, `merge=${sMerged.length}`);
-  check('合并文本完整', sMerged[0] && /お天気が/.test(sMerged[0].text) && /なりました/.test(sMerged[0].text), sMerged[0]?.text);
+  check('合并文本完整', sMerged[0] && /いい天気/.test(sMerged[0].text) && /なりました/.test(sMerged[0].text), sMerged[0]?.text);
   const frag = sMerged.filter((x) => [...x.text].length < 6 && !/[.!?。！？…]$/.test(x.text));
   check('合并后无无标点短碎片', frag.length === 0, JSON.stringify(frag.map((x) => x.text)));
 }
@@ -233,6 +233,72 @@ console.log('--- 测试 14: 语言策略设置可感知 ---');
   const sEn = segmentCaptionTokens(jaTokens, { ...S, segmentationLanguage: 'en' });
   check('auto 与 en 策略产生差异（策略生效）', sAuto.length !== sEn.length || true, `auto=${sAuto.length} / en=${sEn.length}`);
   check('日语规则仅在 ja/auto 下启用', segmentCaptionTokens(jaTokens, { ...S, segmentationLanguage: 'zh' }).length >= 1);
+}
+
+// ────────────────────────────────────────────────
+console.log('--- 测试 15 [v0.2.7 守卫A]: 防劈词回退（「つけ」+「たんやけど」） ---');
+{
+  // 复刻 Vivi 直播 673s 真实场景：滚动字幕无停顿，28 字硬切落在「配信つけ」与「たんやけど」之间
+  const words = ['今日はね、', 'あの、', '帰ってき、', 'さっき帰ってきて', '急いで配信つけ', 'たんやけど、', 'あの、', 'パパって食べれる', 'パンみたいなのをさ、', 'ちょっと。'];
+  const events = [ev(0, 99999, words.map((w, i) => [w, i * 400]))];
+  const tokens = extractCaptionTokens({ events });
+  const s = segmentCaptionTokens(tokens, S);
+  const splitMid = s.filter(x => /^たんやけど/.test(x.text));
+  check('不得在「つけ/たんやけど」之间劈词', splitMid.length === 0, JSON.stringify(splitMid.map(x => x.text.slice(0, 16))));
+  check('文本完整保留（不丢词）', s.some(x => x.text.includes('たんやけど')), JSON.stringify(s.map(x => x.text.slice(0, 14))));
+}
+
+// ────────────────────────────────────────────────
+console.log('--- 测试 16 [v0.2.7 守卫A]: 「ローソン」+「の美味しいパン」不劈开 ---');
+{
+  const words = ['用意してて、', 'あのね、', 'もっちドーナツ', 'コシアンっていう', 'ローソン', 'の美味しいパン', 'があるの。'];
+  const events = [ev(0, 99999, words.map((w, i) => [w, i * 400]))];
+  const tokens = extractCaptionTokens({ events });
+  const s = segmentCaptionTokens(tokens, S);
+  const splitMid = s.filter(x => /^の美味しい/.test(x.text));
+  check('不得在「ローソン/の」之间劈词', splitMid.length === 0, JSON.stringify(splitMid.map(x => x.text.slice(0, 16))));
+}
+
+// ────────────────────────────────────────────────
+console.log('--- 测试 17 [v0.2.7 守卫B]: 「ガルガンダーを」悬空宾语不独立成句 ---');
+{
+  const tokens = extractCaptionTokens({
+    events: [
+      ev(0, 600, [['ガルガンダーを', 0]]),
+      ev(1200, 2000, [['捕まえるんだ。', 0]])
+    ]
+  });
+  const s = segmentCaptionTokens(tokens, S);
+  const hanging = s.filter(x => /[をがにはもでと]$/.test(x.text.replace(/[。.!？?]$/, '')));
+  check('悬空格助词不独立成句', hanging.length === 0, JSON.stringify(s.map(x => x.text)));
+  check('合并为完整句', s.some(x => x.text.includes('ガルガンダーを捕まえるんだ')), JSON.stringify(s.map(x => x.text)));
+}
+
+// ────────────────────────────────────────────────
+console.log('--- 测试 18 [v0.2.7]: 守卫不误伤正常新句开头 ---');
+{
+  const tokens = extractCaptionTokens({
+    events: [
+      ev(0, 600, [['ガルガンダーを', 0]]),
+      ev(1200, 2000, [['じゃあ、', 0], ['次に行こう。', 400]])
+    ]
+  });
+  const s = segmentCaptionTokens(tokens, S);
+  check('「じゃあ」作为合法新句开头仍可断句', s.some(x => x.text.startsWith('じゃあ')), JSON.stringify(s.map(x => x.text)));
+}
+
+// ────────────────────────────────────────────────
+console.log('--- 测试 19 [v0.2.7]: 安全阀——守卫连续生效不无限吞句 ---');
+{
+  // 连续 30 个て/で开头接续 token，无停顿无标点 → 2 倍上限（56 字）内必须被切断
+  const words = [];
+  for (let i = 0; i < 30; i++) words.push(i % 2 === 0 ? 'して' : 'でね');
+  const events = [ev(0, 99999, words.map((w, i) => [w, i * 300]))];
+  const s = segmentCaptionTokens(extractCaptionTokens({ events }), S);
+  const maxChars = Math.max(...s.map(x => [...x.text].length));
+  // 天花板 2×28=56 字，末尾短碎片合并最多再带入 ~1 个碎片（+8 字容差）
+  check(`绝对天花板生效 (最长=${maxChars}字 <= 64)`, maxChars <= 64, `maxChars=${maxChars}`);
+  check('守卫生效期间句子被合并拉长', s.length < 15, `句数=${s.length}`);
 }
 
 // ────────────────────────────────────────────────

@@ -88,6 +88,90 @@ const JAPANESE_SENTENCE_STARTERS = new Set([
 ]);
 
 /**
+ * 可独立开话轮的常见词（v0.2.7）：这些词以平假名开头但不属于接续形态，
+ * 在防劈词守卫中视为合法新句开头，不阻止断句。
+ */
+const JA_ALLOWED_SENTENCE_STARTERS = new Set([
+  ...JAPANESE_SENTENCE_STARTERS,
+  'はい', 'いいえ', 'うん', 'ううん', 'なるほど', 'やっぱ', 'やっぱり', 'ちょっと',
+  'なんて', 'なんで', 'よし', 'おい', 'わかった', 'すみません',
+  'こんにちは', 'こんばんは', 'おはよう', 'ありがとう', 'ほんま', 'せや', 'ほな'
+]);
+
+/**
+ * 接续活用形态前缀（v0.2.7）：正常日语句子不会以这些形态开头；
+ * 下一 token 以它们开头 ⇒ 上一组的切点落在词中或谓语未完成处（如「つけ」+「たんやけど」）。
+ * 仅匹配平假名开头，片假名/汉字/拉丁开头不受影响（如「ガルガンダー」不误伤）。
+ */
+const JA_CONTINUATION_PREFIXES = [
+  'たん', 'けど', 'けれど', 'ので', 'のに', 'たら', 'れば', 'ばっ', 'ても', 'でも',
+  'んで', 'でね', 'てね', 'てさ', 'でさ', 'ちゃって', 'ちゃう',
+  'が', 'の', 'に', 'を', 'は', 'も', 'で', 'て', 'と', 'ば', 'し', 'っ', 'や', 'ね', 'な', 'わ', 'け'
+];
+
+/**
+ * v0.2.7 守卫 A：判断下一 token 是否以接续活用形态开头（切点劈词信号）。
+ * 结构性规则（针对单字粒度 ASR 流）：≤2 字纯平假名 token 且不是已知话轮词 ⇒ 接续
+ * （正常日语新句几乎不会以 ≤2 字平假名开头）；更长 token 退回前缀表匹配。
+ */
+function startsWithJapaneseContinuation(text: string): boolean {
+  const clean = text.trim().replace(/^[。！？…、，,.!?]+/, '');
+  if (!clean || !/^[ぁ-ゖー]/.test(clean)) {
+    return false;
+  }
+  if (JA_ALLOWED_SENTENCE_STARTERS.has(clean)) {
+    return false;
+  }
+  // 短平假名 token 中可独立成话轮的词（单字 ASR 流常见）
+  if (/^(えー?|んー?|はい|うん|ううん|おい|ほら|なに|まじ|それ|これ|あれ|どれ|ここ|そこ|どこ|だれ|だめ|まだ|また|まで|もう|もし|やば|やっば|やれ|たぶん|できる|がんば|つぎ|よく|こら)$/.test(clean)) {
+    return false;
+  }
+  if (/^[ぁ-ゖー]+$/.test(clean) && [...clean].length <= 2) {
+    // ≤2 字纯平假名且不是任何已知话轮词 ⇒ 接续形态（「ん」「や」「けど」「て」等）
+    return true;
+  }
+  // 多字 token：豁免以活用尾开头的完整词
+  if (/^(たぶん|だめ|できる|どこ|どっち|どう|ちょっと|ありがとう|がんば|けっこう|つぎ|まだ|また|まで|もう|もし|やっぱ|よく|わざと)/.test(clean)) {
+    return false;
+  }
+  for (const p of JA_CONTINUATION_PREFIXES) {
+    if (clean.startsWith(p)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * v0.2.7 守卫 A（双向）：判断当前组末 token 是否停在未完成活用形上
+ * （≤2 字纯平假名且末字不是终止/终助词 ⇒ 谓语未完成，如「つけ」「た」「ん」）。
+ * 单字粒度 ASR 下「た」+「ん」+「やけど」被逐字输出，仅有 next 侧信号会漏防。
+ */
+const JA_TERMINAL_ENDING_HIRAGANA = new Set(['ね', 'よ', 'な', 'か', 'わ', 'ぞ', 'さ', 'け', 'え']);
+function endsWithUnfinishedForm(text: string): boolean {
+  const clean = text.trim().replace(/[。！？…、，,.!?]+$/, '');
+  if (!clean || !/^[ぁ-ゖー]+$/.test(clean) || [...clean].length > 2) {
+    return false;
+  }
+  const last = clean.charAt(clean.length - 1);
+  return !JA_TERMINAL_ENDING_HIRAGANA.has(last);
+}
+
+/**
+ * v0.2.7 守卫 B：判断当前组末 token 是否以裸格助词结尾（SOV 悬空宾语信号）。
+ * 剥离尾部标点后以单个格助词收尾 ⇒ 宾语尚未落到动词上，不宜在此切分。
+ * 权衡：疑问终助词「の」等完整句形态也会被延迟切分，但规则 1（源标点）
+ * 与规则 2a（极端停顿）不受此守卫约束，过度合并的代价可控。
+ */
+function endsWithBareCaseParticle(text: string): boolean {
+  const clean = text.trim().replace(/[。！？…、，,.!?「」『』（）()]+$/, '');
+  if (!clean) {
+    return false;
+  }
+  return /[をがにはもでとへや]$/.test(clean);
+}
+
+/**
  * 日文疑问句末尾「か」的排除名单（避免陈述句误判为疑问）
  */
 const JA_QUESTION_EXCLUSIONS = ['かも', 'から', 'かしら', 'かな', 'だろう', 'でしょう', 'かもね'];
@@ -279,13 +363,16 @@ function endsWithJapaneseConnector(text: string): boolean {
 function splitRawSegmentByPunctuation(
   text: string,
   start: number,
-  end: number
+  end: number,
+  splitOnCommas = false
 ): Array<{ text: string; start: number; end: number }> {
   const clean = text.replace(/[\r\n]+/g, ' \n ').trim();
   if (!clean) return [];
 
   // 标点分割正则（保留分隔符；省略号也参与分割）
-  const parts = clean.split(/([。！？!?\n…]+)/);
+  // v0.2.7：splitOnCommas 时「、」也参与拆分——行级 ASR token（整行输出）依赖此路径细分
+  const commaClass = splitOnCommas ? '、，,' : '';
+  const parts = clean.split(new RegExp(`([。！？!?\\n…${commaClass}]+)`));
   if (parts.length <= 1) {
     return [{ text: clean.replace(/\n/g, ''), start, end }];
   }
@@ -304,7 +391,8 @@ function splitRawSegmentByPunctuation(
     currentSubText += part;
 
     // 如果当前部分是标点或者到了末尾，输出一个子句
-    if (/[。！？!?\n…]+/.test(part) || i === parts.length - 1) {
+    const punctRe = new RegExp(`[。！？!?\\n…${commaClass}]+`);
+    if (punctRe.test(part) || i === parts.length - 1) {
       const trimmed = currentSubText.trim();
       if (trimmed) {
         const charStartRatio = subStartChar / fullLength;
@@ -376,8 +464,10 @@ export function extractCaptionTokens(captionData: Json3CaptionData | any): Capti
       }
 
       // 如果当前 seg 自身含有换行或明确标点，则进行子分词拆分
-      if (/[。！？!?\n…]/.test(text)) {
-        const subTokens = splitRawSegmentByPunctuation(text, segStart, segEnd);
+      // v0.2.7：行级 ASR token（整行 >40 字且无句读、只有顿号）也按顿号细分
+      const isLongLineToken = [...text].length > 40 && /[、，,]/.test(text);
+      if (/[。！？!?\n…]/.test(text) || isLongLineToken) {
+        const subTokens = splitRawSegmentByPunctuation(text, segStart, segEnd, isLongLineToken);
         for (const sub of subTokens) {
           if (!isNoiseToken(sub.text)) {
             rawTokens.push(sub);
@@ -469,6 +559,9 @@ function polishSentenceText(
   }
   rawJoined = rawJoined.trim().replace(/\s{2,}/g, ' ');
 
+  // v0.2.7：清理句首顿号/逗号伪影（ASR token 边界常把「、」放在下一 token 开头）
+  rawJoined = rawJoined.replace(/^[、，,]+/, '');
+
   if (!autoPunctuation) {
     return rawJoined;
   }
@@ -554,6 +647,8 @@ export function segmentCaptionTokens(
 
   // 超长停顿硬断阈值：不小于 800ms 且不低于 2× 用户停顿阈值
   const hardPauseMs = Math.max(800, pauseThreshold * 2);
+  // v0.2.7 极端停顿阈值：达到该值无条件切断（即使劈词/悬空助词——说话人确实停了很久）
+  const hardPauseExtremeMs = Math.max(5000, hardPauseMs * 3);
 
   // CJK 字符上限：用户可调（v0.2.6 前为硬编码 24/32）
   const cjkCharHardLimit = Math.max(12, Math.min(80, maxCharsPerSentence));
@@ -635,29 +730,54 @@ export function segmentCaptionTokens(
     const unitHardLimit = profile.charBased ? cjkCharHardLimit : maxWordsPerSentence;
 
     const nextWordLower = nextToken.text.trim().toLowerCase().replace(/[^a-z]/g, '');
-    const nextRaw = nextToken.text.trim().replace(/^[。！？…、，,.!?]+/, '');
+    const nextRaw = nextToken.text.trim().replace(/^[。！？…、，,.!?]+/, '').replace(/[、，,]+$/, '');
     const isNextCjkStarter = profile.useJapaneseGrammar && JAPANESE_SENTENCE_STARTERS.has(nextRaw);
+
+    // v0.2.7 语序/防劈词守卫（约束硬切与常规停顿；源标点与极端停顿不受限）：
+    // A. 防劈词回退——下一 token 以接续形态开头，或当前组末 token 停在未完成活用形上
+    //    （单字粒度 ASR：…「つけ」「た」「ん」「やけど」逐字输出，切哪一刀都在词内），不切；
+    // B. 悬空格助词防断——当前组以格助词（を/が/に…）结尾时，切开会产出 SOV 悬空宾语行，不切；
+    //    但下一 token 是合法新句开头（じゃあ/はい/でも…）时除外——那是说话人另起话轮。
+    const nextIsContinuation = startsWithJapaneseContinuation(nextToken.text);
+    const prevEndsUnfinished = endsWithUnfinishedForm(token.text);
+    const nextIsSentenceStart = profile.useJapaneseGrammar && JA_ALLOWED_SENTENCE_STARTERS.has(nextRaw);
+    const wordSplitGuard = nextIsContinuation || prevEndsUnfinished;
+    const groupEndsHanging = endsWithBareCaseParticle(token.text) && !nextIsSentenceStart;
 
     let shouldBreak = false;
 
-    // ── 规则 1: 句末终止标点（。！？… ；英语含缩写保护） ──
+    // ── 规则 1: 句末终止标点（。！？… ；英语含缩写保护；忠实源标点不守卫） ──
     if (hasSentenceTerminalPunctuation(token.text, lang)) {
       shouldBreak = true;
     }
-    // ── 规则 2【硬】: 超长停顿无条件断句（33 秒静音不再被吞） ──
-    else if (gap >= hardPauseMs) {
+    // ── 规则 2a【硬】: 极端停顿（>=5s）无条件断句——说话人确实长时间停顿，劈词也要切 ──
+    else if (gap >= hardPauseExtremeMs) {
       shouldBreak = true;
     }
-    // ── 规则 3【硬】: 单句时长达到上限强制切断 ──
-    else if (currentDuration >= maxDurationMs) {
+    // ── 规则 2b【硬】: 超长停顿断句（守卫生效时延后：词中换气不劈词） ──
+    else if (gap >= hardPauseMs && !wordSplitGuard && !groupEndsHanging) {
       shouldBreak = true;
     }
-    // ── 规则 4【硬】: 长度达到上限强制切断（CJK 字数 / 拉丁词数） ──
-    else if (unitCount >= unitHardLimit) {
+    // ── 规则 3【硬】: 单句时长达到上限强制切断（守卫生效时延后） ──
+    // 安全阀：守卫连续生效导致时长/长度达到 2 倍上限时，无视守卫强制切断，避免无限吞句
+    else if (currentDuration >= maxDurationMs * 2) {
+      shouldBreak = true;
+    } else if (currentDuration >= maxDurationMs && !wordSplitGuard && !groupEndsHanging) {
       shouldBreak = true;
     }
-    // ── 规则 5: 常规停顿（换气）+ 最小单位数 ──
-    else if (gap >= pauseThreshold && unitCount >= profile.minBreakUnits) {
+    // ── 规则 4【硬】: 长度达到上限强制切断（守卫生效时延后；2 倍上限为绝对天花板） ──
+    else if (unitCount >= unitHardLimit * 2) {
+      shouldBreak = true;
+    } else if (unitCount >= unitHardLimit && !wordSplitGuard && !groupEndsHanging) {
+      shouldBreak = true;
+    }
+    // ── 规则 5: 常规停顿（换气）+ 最小单位数（守卫生效时延后） ──
+    else if (
+      gap >= pauseThreshold &&
+      unitCount >= profile.minBreakUnits &&
+      !wordSplitGuard &&
+      !groupEndsHanging
+    ) {
       shouldBreak = true;
     }
     // ── 规则 6 (日语专属): 句末助词/敬语结语 + 轻停顿或新句叹词 ──

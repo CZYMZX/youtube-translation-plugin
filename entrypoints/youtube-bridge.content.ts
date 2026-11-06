@@ -6,7 +6,7 @@ export default defineContentScript({
   runAt: 'document_start',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.2.6]%c MAIN-world bridge loaded (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.2.7]%c MAIN-world bridge loaded (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
