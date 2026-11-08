@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - 播放器覆盖层与交互核心 (SubtitleOverlay)
- * 当前版本: v0.4.1 (VSR 红线约束下的浮层实现)
+ * 当前版本: v0.4.3 (VSR 红线约束下的浮层实现)
  *
  * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
  * 1. 纯净黑白毛玻璃视觉体系：除字幕框和译文颜色允许用户自由调色外，所有控制面板、
@@ -22,7 +22,6 @@ import {
   ICON_TIME,
   ICON_SETTING,
   ICON_ALIGN,
-  ICON_THEATER,
   ICON_BRAIN,
   ICON_LEFT,
   ICON_RIGHT,
@@ -1128,25 +1127,7 @@ export class SubtitleOverlay {
       offsetVal.textContent = syncOffsetMs > 0 ? `+${syncOffsetMs}ms` : `${syncOffsetMs}ms`;
     }
 
-    // 3. 同步翻译场景 (Smooth Option Switcher + Badge)
-    const curScenario = this.settings.scenario || 'vtuber';
-    const scenarioBadge = this.shadow.querySelector('#qp-badge-scenario') as HTMLElement;
-    if (scenarioBadge) {
-      scenarioBadge.textContent = curScenario === 'vtuber' ? 'VTuber直播' : '通用日常';
-    }
-    const scenSwitcher = this.shadow.querySelector('.qp-smooth-switcher[data-switcher="scenario"]') as HTMLElement;
-    if (scenSwitcher) {
-      const items = Array.from(scenSwitcher.querySelectorAll('.switcher-item'));
-      items.forEach((item, idx) => {
-        const isTarget = item.getAttribute('data-scenario') === curScenario;
-        item.classList.toggle('active', isTarget);
-        if (isTarget) {
-          scenSwitcher.style.setProperty('--active-index', String(idx));
-        }
-      });
-    }
-
-    // 4. 同步推理思考深度 (Smooth Option Switcher + Badge)
+    // 3. 同步推理思考深度 (Smooth Option Switcher + Badge)
     const curReasoning = this.settings.reasoningEffort || 'low';
     const reasoningBadge = this.shadow.querySelector('#qp-badge-reasoning') as HTMLElement;
     if (reasoningBadge) {
@@ -1324,29 +1305,7 @@ export class SubtitleOverlay {
       updateOffset(200);
     });
 
-    // 1.3 翻译场景 (Smooth Option Switcher 物理弹性横滑)
-    const scenSwitcher = this.shadow.querySelector('.qp-smooth-switcher[data-switcher="scenario"]');
-    if (scenSwitcher) {
-      const scenItems = scenSwitcher.querySelectorAll('.switcher-item');
-      scenItems.forEach((btn, index) => {
-        btn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          scenItems.forEach((b) => b.classList.remove('active'));
-          btn.classList.add('active');
-          (scenSwitcher as HTMLElement).style.setProperty('--active-index', String(index));
-
-          const scenario = btn.getAttribute('data-scenario') as any;
-          this.updateAndNotify({ scenario });
-          const text = scenario === 'vtuber' ? 'VTuber直播' : '通用日常';
-          this.showToast(`切换场景：${text}`);
-
-          const badge = this.shadow?.querySelector('#qp-badge-scenario');
-          if (badge) badge.textContent = text;
-        });
-      });
-    }
-
-    // 1.4 推理思考深度 (Smooth Option Switcher 物理弹性横滑)
+    // 1.3 推理思考深度 (Smooth Option Switcher 物理弹性横滑)
     const resSwitcher = this.shadow.querySelector('.qp-smooth-switcher[data-switcher="reasoning"]');
     if (resSwitcher) {
       const resItems = resSwitcher.querySelectorAll('.switcher-item');
@@ -1890,30 +1849,7 @@ export class SubtitleOverlay {
               </div>
             </div>
 
-            <!-- 折叠模块 3：翻译场景 (2段平滑滑块) -->
-            <div class="qp-accordion-item" data-accordion="scenario">
-              <button type="button" class="qp-accordion-header" title="点击展开/收起翻译场景">
-                <div class="qp-accordion-header-left">
-                  <span class="qp-accordion-icon" style="display:inline-flex;width:14px;height:14px;align-items:center;color:#d4d4d8;">${ICON_THEATER}</span>
-                  <span class="qp-accordion-title">翻译场景</span>
-                </div>
-                <div class="qp-accordion-header-right">
-                  <span class="qp-accordion-badge" id="qp-badge-scenario">VTuber直播</span>
-                  <span class="qp-accordion-arrow">▸</span>
-                </div>
-              </button>
-              <div class="qp-accordion-body">
-                <div class="qp-accordion-body-inner">
-                  <div class="smooth-switcher qp-smooth-switcher" data-switcher="scenario" data-count="2" style="--count: 2; --active-index: 0;">
-                    <div class="switcher-glider" aria-hidden="true"></div>
-                    <button type="button" class="switcher-item active" data-scenario="vtuber">VTuber 直播</button>
-                    <button type="button" class="switcher-item" data-scenario="general">通用日常</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <!-- 折叠模块 4：推理思考深度 (3段平滑滑块) -->
+            <!-- 折叠模块 3：推理思考深度 (3段平滑滑块) -->
             <div class="qp-accordion-item" data-accordion="reasoning">
               <button type="button" class="qp-accordion-header" title="点击展开/收起推理深度">
                 <div class="qp-accordion-header-left">

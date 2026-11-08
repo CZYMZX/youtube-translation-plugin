@@ -35,14 +35,75 @@ console.log('--- 测试 1: 内置场景与术语库 ---');
 {
   check('内置场景 5 个', BUILTIN_SCENES.length === 5, String(BUILTIN_SCENES.length));
   check('vtuber/general 有提示词', ['vtuber', 'general'].every((id) => (BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '').length > 50));
-  check('科普/音乐/游戏实况为占位（空提示词）', ['science', 'music', 'gaming'].every((id) => (BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '') === ''));
+  // 任务二 · 需求 2：三个「空壳」场景补齐提示词（原先 prompt 为空 → resolveScenePrompt 回落 general）
+  check(
+    '五个内置场景提示词全部非空',
+    BUILTIN_SCENES.every((s) => (s.prompt || '').trim().length > 0),
+    BUILTIN_SCENES.filter((s) => !(s.prompt || '').trim()).map((s) => s.id).join(',')
+  );
+  check(
+    '五个内置场景提示词长度均在 20~4000（validateScenePack 的合法区间）',
+    BUILTIN_SCENES.every((s) => s.prompt.length >= 20 && s.prompt.length <= 4000),
+    BUILTIN_SCENES.map((s) => `${s.id}:${s.prompt.length}`).join(' ')
+  );
   // v0.4.2：三类跨场景通用约束已上移到 utils/translator.ts（公共层 + 选项层），场景包内不得重复
   const vtuberPrompt = BUILTIN_SCENES.find((s) => s.id === 'vtuber')?.prompt || '';
   const generalPrompt = BUILTIN_SCENES.find((s) => s.id === 'general')?.prompt || '';
-  const scenePrompts = [vtuberPrompt, generalPrompt];
+  const sciencePrompt = BUILTIN_SCENES.find((s) => s.id === 'science')?.prompt || '';
+  const musicPrompt = BUILTIN_SCENES.find((s) => s.id === 'music')?.prompt || '';
+  const gamingPrompt = BUILTIN_SCENES.find((s) => s.id === 'gaming')?.prompt || '';
+  const scenePrompts = [vtuberPrompt, generalPrompt, sciencePrompt, musicPrompt, gamingPrompt];
   check('场景包内不再写 AI 腔清单（已上移公共层）', scenePrompts.every((p) => !p.includes('值得注意的是')));
   check('场景包内不再写 ASR 纠错授权（已移入 asrCorrection 选项）', scenePrompts.every((p) => !/ASR/.test(p)));
   check('场景包内不再写括注规则（已移入 glossaryAnnotation 选项）', scenePrompts.every((p) => !/括注/.test(p)));
+
+  // 五要素覆盖（身份与受众 / 语气与术语策略 / 格式与数字 / 明确禁止 / 边界情况）
+  const FIVE_ASPECTS = {
+    science: [
+      ['身份与受众', /字幕译者[\s\S]*读者/],
+      ['术语策略', /通行中文译名[\s\S]*沿用缩写/],
+      ['数字与单位', /数值[\s\S]*单位/],
+      ['明确禁止', /不得自己发明通俗化类比/],
+      ['边界情况（口播口误与改口）', /改口/]
+    ],
+    music: [
+      ['身份与受众', /歌词译者[\s\S]*听众/],
+      ['押韵与字数优先', /押韵[\s\S]*音节数/],
+      ['格式（行对行 / 重复段逐次写全）', /行对行[\s\S]*副歌/],
+      ['明确禁止', /不得为押韵编造/],
+      ['边界情况（哼唱 / 无意义音节）', /哼唱[\s\S]*ラララ/]
+    ],
+    gaming: [
+      ['身份与受众', /字幕译者[\s\S]*观众/],
+      ['术语策略（圈内通行 / 官方优先）', /圈内通行译法[\s\S]*官方中文版/],
+      ['数字与口径（一波 / 一套）', /量词用圈内说法[\s\S]*一波/],
+      ['明确禁止', /说明书腔/],
+      ['边界情况（多人同时说话）', /多人同时说话/]
+    ]
+  };
+  for (const [id, aspects] of Object.entries(FIVE_ASPECTS)) {
+    const prompt = BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '';
+    for (const [label, re] of aspects) check(`${id} 覆盖五要素·${label}`, re.test(prompt));
+  }
+  check(
+    '三个新场景体量在 400~1200 字（不是三五行的占位）',
+    [sciencePrompt, musicPrompt, gamingPrompt].every((p) => p.length >= 400 && p.length <= 1200),
+    [sciencePrompt, musicPrompt, gamingPrompt].map((p) => p.length).join('/')
+  );
+  check(
+    '三个新场景提示词都不等于 general（防复制粘贴凑数）',
+    [sciencePrompt, musicPrompt, gamingPrompt].every((p) => p !== generalPrompt && p.length > 0)
+  );
+  check('三条新提示词两两互不相同', new Set([sciencePrompt, musicPrompt, gamingPrompt]).size === 3);
+  // 关键取舍不串场：科普讲单位、歌词讲押韵、实况讲技能装备，互不套用
+  check('科普不写押韵条款', !/押韵/.test(sciencePrompt));
+  check('歌词不写技能 / 装备条款', !/技能名|装备名/.test(musicPrompt));
+  check('实况不写实验 / 样本条款', !/实验对象|样本量/.test(gamingPrompt));
+  // 钉死两条老提示词：进缓存指纹，改一个字 = 全量用户重译，这里防误改
+  check('vtuber prompt 哈希未变（钉死）', hashPrompt(vtuberPrompt) === '5o1pq3', hashPrompt(vtuberPrompt));
+  check('general prompt 哈希未变（钉死）', hashPrompt(generalPrompt) === '14genln', hashPrompt(generalPrompt));
+  check('vtuber prompt 长度未变（864）', vtuberPrompt.length === 864, String(vtuberPrompt.length));
+  check('general prompt 长度未变（489）', generalPrompt.length === 489, String(generalPrompt.length));
   check('内置术语库 3 个', BUILTIN_GLOSSARY_PACKS.length === 3);
   check('VTuber 术语库 146 条', BUILTIN_GLOSSARY_PACKS[0].entries.length === 146, String(BUILTIN_GLOSSARY_PACKS[0].entries.length));
   const mcPack = BUILTIN_GLOSSARY_PACKS.find((p) => p.id === 'mc');
@@ -165,9 +226,17 @@ console.log('--- 测试 4: 启用包合并与场景解析 ---');
   check('仅启用 AI 包时 35 条', aiEnabled.length === 35, String(aiEnabled.length));
 
   check('内置场景解析 vtuber', resolveScenePrompt('vtuber', custom).name === 'VTuber 直播');
-  check('占位场景回落 general', resolveScenePrompt('science', custom).name === '通用日常');
+  // 任务二 · 需求 2：三个场景不再回落 general —— 返回自己的 name 与自己的 prompt
+  const generalOwn = BUILTIN_SCENES.find((s) => s.id === 'general')?.prompt || '';
+  for (const [id, name] of [['science', '科普视频'], ['music', '音乐视频'], ['gaming', '游戏实况']]) {
+    const own = BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '';
+    const got = resolveScenePrompt(id, custom);
+    check(`内置场景解析 ${id}：name 是场景自己的`, got.name === name, got.name);
+    check(`内置场景解析 ${id}：prompt 是场景自己的（不是 general 的）`, got.prompt === own && got.prompt !== generalOwn);
+  }
   check('自定义场景可解析', resolveScenePrompt('custom-science-1', custom).name === '科普自定义');
   check('未知场景回落 general', resolveScenePrompt('not-exist', custom).name === '通用日常');
+  check('未知场景回落的是 general 的 prompt', resolveScenePrompt('not-exist', custom).prompt === generalOwn);
 
   check('提示词指纹稳定', hashPrompt('abc') === hashPrompt('abc'));
   check('提示词变化指纹变化', hashPrompt('abc') !== hashPrompt('abd'));

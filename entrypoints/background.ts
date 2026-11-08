@@ -53,7 +53,7 @@ async function fetchWithTimeout(
 
 export default defineBackground(() => {
   console.log(
-    '%c[YT-Sub-Translator v0.4.1]%c Background service worker active (Immersive Translate Mode)',
+    '%c[YT-Sub-Translator v0.4.3]%c Background service worker active (Immersive Translate Mode)',
     'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
     'color:#16a34a;font-weight:bold;margin-left:4px'
   );
@@ -211,8 +211,10 @@ export default defineBackground(() => {
       }
 
       case 'TRANSLATE_BATCH': {
-        const { texts, targetLang, settings, noFallback, bypassCache } = message.payload;
-        translateSentenceBatch(texts, targetLang, settings, { noFallback, bypassCache })
+        // contextBefore（需求 7）：续翻时紧邻上文的原文+已有译文，原样透传给翻译层，
+        // 后台不做任何加工 —— 它只影响 user 消息，不进缓存键。
+        const { texts, targetLang, settings, noFallback, bypassCache, contextBefore } = message.payload;
+        translateSentenceBatch(texts, targetLang, settings, { noFallback, bypassCache, contextBefore })
           .then((translations) => {
             sendResponse({ success: true, translations, service: settings?.service });
           })

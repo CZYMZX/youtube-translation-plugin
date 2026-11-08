@@ -9,8 +9,13 @@
   第一~四节里「条款写在场景包第 N 条」的描述已被第五节取代，仅作变更留痕。
 - **第六节（v0.4.4）**：on 档「译名自带括号注释不叠双层」去重约定（闭合 5.6 遗留风险第 2 条）；
   同时按任务四 UI 落地实况校正 5.5 的分区措辞。
+- **第七节（任务二 · 分层模型）**：把提示词抽成可复用的纯函数层模型（`utils/prompt-layers.ts`），
+  供设置页分区展示；`composeSystemPrompt` 改为消费该模型，输出**逐字节不变**。本轮只做数据与函数层，未碰 UI。
+- **第八节（任务二 · 需求 2）**：补齐 `science` / `music` / `gaming` 三个空壳场景的提示词
+  （原为空串 → 实际注入 general 人设）；vtuber / general 两条一个字未动。
 
 以上各轮均**未**改动 `package.json` 版本号、未构建产物、未提交。
+（第七节唯一动到 `package.json` 的地方是把 `test/test-prompt-layers.js` 加进 `npm test` 脚本，版本号仍 0.4.1。）
 
 ## 一、三条规则的落点
 
@@ -237,4 +242,226 @@
    本轮不加条款（避免又一条公共约束），根治办法是 glossary 侧把分类标签改成行内前缀（如 `[用语] - ja → zh`），属 `glossary-keeper`。
 5. **未跑真实模型**：以上全是静态守卫，`SC（醒目留言）` 的最终吐字仍需接模型抽检（建议抽 hololive 打赏切片）。
 6. **第六节的 v0.4.4 是工作轮次标签**，不是 `package.json` 版本号（仍 0.4.0）。
+
+---
+
+# 第七节 · 任务二：把分层结构抽成可复用的纯函数
+
+需求原文：「同一场景下不同类型的提示词需在 UI 上分区展示，并附说明，让用户理解各提示词的作用。」
+关键字是**分区 + 说明**——界面要能逐层讲清楚，就不能只拿到一个长字符串。本轮只做数据与函数层，
+界面由后续子智能体做；未改 `entrypoints/*`、未改版本号、未构建、未提交。
+
+## 7.1 改法：文案搬家 + 装配提纯
+
+| 文件 | 改动 |
+|---|---|
+| `utils/prompt-layers.ts`（新建） | 层模型 + 每层文案（`COMMON_RULES` / `buildAnnotationRule` / `buildAsrRule` / `buildReasoningGuidance` / `buildOutputContract` / `ANNOTATION_OVERRIDE` 从 translator 搬来）+ `buildPromptLayers()` + `assemblePromptLayers()` |
+| `utils/translator.ts` | 删掉上述文案定义（改为 `export {...} from './prompt-layers'` 转发，老 import 路径不变），`composeSystemPrompt()` 收敛成一行：`assemblePromptLayers(buildPromptLayers(...))` |
+| `test/test-prompt-layers.js`（新建） | 67 条断言：字节等价矩阵 + 结构契约 + 选项联动 + 纯函数性 |
+| `package.json` | `npm test` 里加一个新测试文件（版本号未动） |
+
+原则是「一处定义、两处消费」：界面拿到的 `body` 就是真正发给模型的文案，不存在「界面看到的说明」
+和「实际注入的条款」各写一份、日后不同步的问题。
+
+## 7.2 数据结构
+
+```ts
+interface PromptLayer {
+  key: 'scene' | 'common' | 'annotation' | 'asr' | 'reasoning' | 'glossary' | 'output';
+  title: string;      // 分区标题
+  summary: string;    // 一句话说明（≤40 字）
+  detail?: string;    // 更细说明 / 改了会怎样
+  body: string;       // 实际注入的正文
+  editable: boolean;  // 只有 scene 为 true
+}
+```
+
+配套常量：`PROMPT_LAYER_ORDER`（7 个 key 的渲染顺序）、`PROMPT_SKELETON_LAYERS`（进缓存指纹的 6 层，
+不含 glossary）。纯函数口径：不 import 任何运行时模块（只有 `import type`），不碰 chrome / storage。
+
+## 7.3 七层一览
+
+| # | key | title | summary | editable | 正文来源 | 何时为空 |
+|---|---|---|---|---|---|---|
+| 1 | scene | 场景人设 | 这个场景该怎么译：风格、圈内用语、人称、敬语、方言 | **是** | 调用方传入（`resolveScenePrompt` 取） | 占位场景回落 general，实际不为空 |
+| 2 | common | 通用硬规则 | 所有场景都继承的硬约束：禁 AI 腔、不增补原文没有的信息 | 否 | `COMMON_RULES` | 不会 |
+| 3 | annotation | 专名括注 | 专名是否附日文原文：关＝只给译名，开＝译名（日文原文） | 否 | `buildAnnotationRule(glossaryAnnotation)` | 不会 |
+| 4 | asr | ASR 纠错授权 | 能否纠正语音识别的同音误转：常规可改、严格需可确证 | 否 | `buildAsrRule(asrCorrection)` | 不会 |
+| 5 | reasoning | 推理深度 | 推理档位（极速 / 轻度 / 深度）对译文的具体约束 | 否 | `buildReasoningGuidance(reasoningEffort)` | 档位函数返回空串时（目前三档都有文案） |
+| — | glossary | 本批命中术语 | 本批原文实际命中的术语译名（≤40 条），每批都不同 | 否 | `glossaryBlock`（+ on 档的括注覆盖声明） | **只在传入术语块时出现** |
+| 6 | output | 输出契约 | 输出格式约定：纯 JSON 数组、按 id 对齐，不可修改 | 否 | `buildOutputContract(targetLang)` | 不会 |
+
+「改了会怎样」这类说明写在 `detail` 里，例如 annotation 层写「关＝专名只给一个中文译名，禁括号原文 /
+罗马字 / 英文；开＝统一『中文译名（日文原文）』…切换会让已有字幕按新格式重译一次」，
+测试里钉住了「两档口径 + 受哪个设置项控制」必须都出现在说明文本中。
+
+## 7.4 空白行的归属：为什么覆盖声明进了 glossary 层
+
+旧实现对术语块的处理是不对称的：
+
+```
+无术语块： 骨架 + '\n\n' + 输出契约
+有术语块： 骨架 + '\n【括注已开启】…' + '\n\n' + 术语块 + '\n\n' + 输出契约
+```
+
+即「覆盖声明自带前导换行、**顶替**了那个空行」。层 key 是固定的 7 个，覆盖声明只能落在
+annotation 层或 glossary 层的 `body` 里；落在 annotation 层会把不属于括注条款的句子塞进括注分区
+（且它在无术语块时不该出现），所以放进 glossary 层正文开头——语义上也正好：那句话讲的是
+「术语块表头不适用」。装配器据此用 `startsWith(ANNOTATION_OVERRIDE)` 选择分隔符（`\n` 或 `\n\n`），
+换来的好处是每层的 `body` 前后都不带空行，界面直接渲染即可。
+
+## 7.5 空层口径：不剔除，返回 `body: ''`
+
+选定「保留层 + 空正文，界面按 `body` 判空隐藏」，理由是层集合与顺序恒定：
+界面按 `PROMPT_LAYER_ORDER` 渲染时不会出现「这一档有推理层、那一档没有」的跳变；
+装配器里已按 `trim()` 过滤空正文（等价于旧实现的 `.filter(part => !!part && !!part.trim())`），
+所以空层对注入字节零影响（有断言守住「空层不留下多余换行」）。
+例外是 glossary：它代表「这一批的额外注入」，没命中术语时本就不存在，不给用户看空壳。
+
+## 7.6 字节等价（硬要求）与缓存影响
+
+改 prompt = 改缓存指纹 = 全量用户重译。因此本轮**要求输出一个字节都不变**，并用两道验证卡住：
+
+1. **改前改后快照比对**：改前先跑一遍把 `composeSystemPrompt` / `buildPromptSkeleton` 的输出
+   连同指纹存成字符串快照（8 组参数，含 vtuber off/normal、vtuber on/strict/high、general、
+   自定义 persona、on+术语块、off+术语块、strict+术语块、纯空白术语块），改后重跑再逐字节比：
+   两份文件 SHA256 相同（`52604E96…6E3A0D02`，92022 字节），40 个字符串全等。
+2. **测试内永久标尺**：`test/test-prompt-layers.js` 内联一份「旧拼装」参考实现，
+   对 288 组参数（场景 4 × 括注 2 × ASR 2 × 推理 3 × 术语 3 × 语言 2）断言
+   `assemblePromptLayers(buildPromptLayers(...))` 与 `composeSystemPrompt(...)` 都逐字节等于旧拼装。
+
+缓存影响：**无**。默认档指纹仍是 `s2.vtuber#1ico9el`（改前改后一致），用户已翻内容继续命中，
+不需要做任何操作。本轮也没有动 `types/index.ts` / `utils/storage.ts`，设置项与清洗逻辑零变化。
+
+## 7.7 测试
+
+`npm test` 退出码 0；`test-scenario.js` 94 通过 / 0 失败（未改一行，证明转发与装配等价）；
+新增 `test-prompt-layers.js` 67 通过 / 0 失败；`npx tsc --noEmit` 0 error。
+
+## 7.8 留给界面层的调用示例
+
+```ts
+import { buildPromptLayers, PROMPT_LAYER_ORDER } from '../../utils/prompt-layers';
+import { resolveScenePrompt } from '../../utils/packs';
+
+const persona = resolveScenePrompt(settings.scenario, customPacks).prompt; // 场景层文案
+for (const layer of buildPromptLayers(persona, settings, settings.targetLang)) {
+  if (!layer.body.trim()) continue;                       // 空层不渲染
+  renderCard(layer.title, layer.summary, layer.detail, layer.editable);
+}
+```
+
+## 7.9 未定项（需其他角色拍板，本轮不做）
+
+1. **场景层「可编辑」怎么落库**：`editable: true` 只说明 UI 可以给输入框，但内置场景文案的
+   覆盖存哪（chrome.storage 覆盖表？还是复制成自定义场景包？）属 `utils/packs.ts` / 存储层范围。
+2. **glossary 层要不要展示**：最多 40 行，建议默认折叠、只显示条数与「只读」。
+3. **目标语言是否独立成层**：目前嵌在 output 契约里，若要让用户单独改，需要拆层（会动层 key 与指纹口径）。
+4. **覆盖声明是否单独成层**：若界面希望它独立一栏，需扩展 `PromptLayerKey` 枚举。
+5. **分层模型与 UI 的 title/summary 文案归属**：本轮写在 `prompt-layers.ts`（和数据同源）；
+   若 UI 侧要走 i18n，需要改成由界面提供文案、模型只给 key。
+
+---
+
+# 第八节 · 任务二 · 需求 2：补齐三个「空壳」内置场景的提示词
+
+## 8.1 问题与口径
+
+`BUILTIN_SCENES` 里 `science`（科普视频）/ `music`（音乐视频）/ `gaming`（游戏实况）的 `prompt` 是空字符串。
+`resolveScenePrompt()` 对空 prompt 整体回退 general（prompt 与 name 都取 general），
+所以用户在「常规」里选这三个场景时，**卡片上写的是科普 / 歌词 / 实况，实际注入的却是「通用日常」的人设**；
+设置页场景卡也按 `scene.prompt ? hint : '待上传场景包'` 显示成「待上传场景包」。本轮只做一件事：把这三段写出来。
+
+红线（本轮遵守）：**vtuber / general 两条现有提示词一个字符都没动**——它们进缓存指纹，
+改一个字就是全体用户重译。本轮只填空的三个。
+
+## 8.2 三条 prompt 的设计取舍（和 general 的差别在哪）
+
+| 场景 | 角色与受众 | 最关键的一条取舍 | 和 general 的差别 |
+|---|---|---|---|
+| science | 科普视频中文引进译者 → 没有专业背景的普通读者（高中生 / 上班族 / 路人） | **保条件先于求通顺**：实验对象、样本量、方法、适用范围必须译出，不得压缩成「实验证明」「研究表明」；推测（〜と考えられています）不得升级成定论 | general 只在「讲解层」说「术语用通用译名、不加因为所以」，没有「限定条件不得丢」和「推测强度不得升级」这两条科普特有的失真防线 |
+| music | 歌词译者 → 边听原唱边看字幕的听众 | **押韵与字数优先于字面**：句尾尽量押韵、字数贴近音节数，可为押韵调整语序，但人称 / 时态 / 情绪 / 意象不许挪 | general 的「口语化 / 书面化」二分对歌词完全无效；歌词的核心是行位与旋律对位，general 没有任何关于行、重复段、哼唱的规定 |
+| gaming | 游戏实况 / 攻略解说字幕译者 → 想学操作与来看热闹的玩家 | **术语用圈内通行译法 + 操作口语利落**：官方中文优先，无官方用社区叫法，同片一致；量词走「一波 / 一发 / 一套」，不写成「一次进攻机会」 | general 没有游戏术语一致性要求，也不会要求把一口气的操作压成短句；实况的多人抢话与喊叫在 general 里没有对应条款 |
+
+三条共同遵守的分层纪律：**不重复公共层的三件事**（禁 AI 腔清单 / 不增补 / 输出契约），
+只写场景特有的、更严格或更具体的要求；专名书写一律写「按本 prompt 的专名条款执行」，
+不越位去规定括号格式（那是 `glossaryAnnotation` 选项层的事）。
+
+## 8.3 五要素覆盖表
+
+| 要素 | science | music | gaming |
+|---|---|---|---|
+| a) 身份与受众 | 科普引进译者 / 无专业背景的普通读者 | 歌词译者 / 边听边看的听众 | 实况·攻略解说译者 / 学操作与看热闹的玩家 |
+| b) 语气与术语策略 | 讲解体不念稿；通行中文译名，DNA / CPU / pH 直接沿用缩写 | 保留敬体常体、性别口吻、古语方言；拟声拟态按情绪译 | 圈内通行译法（官方优先）；CD / DPS / RTA / Gank 直接沿用；操作口语利落 |
+| c) 格式与数字 | 数值量级照原文、不擅自换算（3 割→三成）；一句一块不换行 | 行对行、副歌逐次写全；字数贴近音节数（±2 字） | 伤害 / 血量 / 帧数照原文；量词用「一波 / 一发 / 一套 / 一轮」 |
+| d) 明确禁止 | 不得自造通俗类比替换术语、不得把完整讲解拆成碎片、不得为显专业改写成术语 | 不得为押韵编造情节情绪、不得音译硬凑、不得改写成散文、不得加译者注 | 不得译本说明书腔、不得把圈内术语泛化、不得把喊叫笑场失误当噪声删句 |
+| e) 边界情况 | 说话人说错又当场改口：两半照原样保留，不得只留改正后的说法 | 哼唱与无意义音节（ラララ / Yeah yeah）按音节保留、不译义、不删行 | 多人同时说话按「谁在说什么」分句，听不清的保持残缺不补内容 |
+
+## 8.4 体量、哈希与缓存影响
+
+字符数 = `prompt.length`（UTF-16 码元）；哈希 = `hashPrompt(prompt)`。
+
+| 场景 | 改前 | 改后 | 哈希 |
+|---|---|---|---|
+| vtuber | 864 字 | **864 字（未动）** | `5o1pq3` → `5o1pq3` |
+| general | 489 字 | **489 字（未动）** | `14genln` → `14genln` |
+| science | 0（回落 general） | 854 字 | `45h` → `h0prml` |
+| music | 0（回落 general） | 686 字 | `45h` → `1wv8pzj` |
+| gaming | 0（回落 general） | 870 字 | `45h` → `1jqjwsr` |
+
+静态骨架指纹（默认设置下的 `buildScenarioTag`，本轮实测）：
+
+| scenario | 改前 | 改后 | 是否失效 |
+|---|---|---|---|
+| vtuber | `s2.vtuber#1jyabs8` | 同左 | **不失效** |
+| general | `s2.general#h6abhk` | 同左 | **不失效** |
+| science | `s2.science#h6abhk` | `s2.science#1vunhje` | 失效（重译一次） |
+| music | `s2.music#h6abhk` | `s2.music#1cfyb3w` | 失效（重译一次） |
+| gaming | `s2.gaming#h6abhk` | `s2.gaming#1sw5gu0` | 失效（重译一次） |
+
+- 改前三个场景的骨架 hash **完全相同**（`h6abhk`），正是「选了三个场景、注入的都是 general」的直接证据。
+- **只有主动选了 science / music / gaming 的用户会重译一次**；选 vtuber（默认）与 general 的用户零感知。
+- 术语库标签 `g1.…` 不变；自定义场景包不受影响（它们用自己的 prompt，没走回落）。
+- 旧条目由 IndexedDB 30 天 TTL 自然淘汰；想立刻回收空间可在高级设置「清空翻译缓存」。
+- 顺带把三条 `description` 里的「（待上传场景包）」去掉（卡片不再宣传一个已不需要的动作）；
+  `name` / `id` / `hint` 一个字没动（`id` 是设置项取值与缓存键的一部分）。
+
+> 注：表中 `s2.*` 绝对值是在本轮工作区（含其他子智能体未提交改动）实测的，与第六节的 `1ico9el` 不可直接比；
+> 本轮真正要说明的是「前后同一工作区内 vtuber / general 不变、三个新场景变」。
+
+## 8.5 测试
+
+`test/test-packs.js` 新增 32 条断言（82 → 114 通过 / 0 失败），覆盖：
+
+- 五个内置场景 prompt 全部非空、长度均在 20~4000（`validateScenePack` 的合法区间）；
+- 三个新场景体量 400~1200 字（防「三五行的占位」）；
+- 三条都不等于 general 的 prompt、且两两互不相同（防复制粘贴凑数）；
+- 关键取舍不串场：科普不写押韵、歌词不写技能装备、实况不写实验样本；
+- 五要素×三场景 = 15 条逐项断言（身份受众 / 术语策略 / 数字格式 / 明确禁止 / 边界情况）；
+- `resolveScenePrompt('science'|'music'|'gaming')` 返回**场景自己的** name 与 prompt（不再回落 general），
+  且未知 id 仍回落 general 的 **prompt**；
+- **钉死两条老提示词**：`hashPrompt(vtuber) === '5o1pq3'`、`hashPrompt(general) === '14genln'`，
+  长度 864 / 489 —— 以后谁误改一个字，测试直接红；
+- 原有「场景包内不写 AI 腔 / ASR / 括注」三条断言从 2 条 prompt 扩到 **5 条**，新文案一并受管。
+
+结果：`npm test` 退出码 0；`test-packs.js` 114 通过 / 0 失败（改前 82）、
+`test-scenario.js` 94 通过 / 0 失败（未改一行，未动）、`test-prompt-layers.js` 67 通过 / 0 失败（未动）；
+`npx tsc --noEmit` 0 error。
+
+## 8.6 遗留与待拍板
+
+1. **歌词为押韵改语义的边界**：现文案允许「调整语序 / 拆合短语」，明确禁止「编造原文没有的情节情绪」。
+   中间的灰区（为押韵把「君」改成「你」以外的第三人称、把否定换成正说）没有更细的量化口径，需产品拍板。
+2. **游戏是否绑定具体游戏术语库**：实况 prompt 现在只要求「官方中文优先、社区通行其次、同片一致」，
+   不绑定任何一款游戏；若要绑定，做法应是选场景时联动启用对应术语库包（`glossary-keeper` 范围），
+   而不是把译名写进 prompt（红线：术语译名不得写死在 prompt）。
+3. **科普的英文缩写与 `glossaryAnnotation=on` 的张力**：on 档要求专名写成「中文译名（日文原文）」，
+   而科普 prompt 说 DNA / CPU 这类直接沿用缩写。判定落在「缩写是不是专名」这一层，靠模型自行区分；
+   若要硬性分开，需在选项层加一条「拉丁字母缩写不括注」的例外（属 `translator.ts` / `prompt-layers.ts` 范围，本轮禁改）。
+4. **未跑真实模型**：以上全是静态守卫（规则在不在、边界守没守住），三段的实际译文质量仍需接模型抽检，
+   建议抽检样本：TED-Ed 一条科普、一首带副歌与ラララ的 MV、一段多人联机速通。
+5. **`test-scenario.js` 第 7 节的用例标题仍写着「占位场景（science）回落 general 文案」**：
+   断言本身是「用 `buildPromptSkeleton` 现算再比对」，所以照样通过、不会误报；
+   但标题已与事实不符，本轮按纪律未改该文件，留待下一轮同步。
+
 

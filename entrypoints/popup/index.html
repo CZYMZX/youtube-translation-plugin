@@ -88,12 +88,12 @@
 
       <div class="form-group">
         <label for="service-select">翻译服务引擎</label>
-        <select id="service-select" class="form-select">
-          <option value="google">Google 免费翻译 (无需 Key，免配置)</option>
-          <option value="deepseek">DeepSeek API (大模型智能语境)</option>
-          <option value="openai">OpenAI API (GPT-4o-mini 等)</option>
-          <option value="gemini">Google Gemini API</option>
-        </select>
+        <!-- 8 个通道由 main.ts 从 utils/models.ts#PROVIDERS 动态填充（首项 Google 免费翻译），
+             这里不再硬编码任何 option：清单只有一份，写死在 HTML 里必然会跟设置页跑偏 -->
+        <div class="select-with-icon">
+          <span id="service-icon" class="provider-icon-slot" aria-hidden="true"></span>
+          <select id="service-select" class="form-select"></select>
+        </div>
       </div>
 
       <!-- AI 配置扩展区域 (折叠手风琴卡片) -->
@@ -147,9 +147,9 @@
               </button>
             </div>
             <select id="model-select" class="form-select" style="margin-bottom: 6px;">
-              <option value="">-- 请选择模型或点击右上角获取 --</option>
+              <option value="">-- 点右上角「获取模型列表」拉取可用模型 --</option>
             </select>
-            <input type="text" id="model-name" class="form-input" placeholder="如 deepseek-chat、gemini-3.8-flash 或 gpt-4o-mini">
+            <input type="text" id="model-name" class="form-input" placeholder="也可直接手填服务商支持的 model id">
             <div id="fetch-models-status" class="sub-status-msg"></div>
           </div>
 
@@ -186,48 +186,79 @@
       <select id="scenario-select" class="visually-hidden">
         <option value="vtuber">VTuber 虚拟主播直播</option>
         <option value="general">通用日常与访谈</option>
+        <option value="science">科普视频</option>
+        <option value="music">音乐视频</option>
+        <option value="gaming">游戏实况</option>
       </select>
 
-      <!-- 翻译场景 -->
-      <div class="section-head">
-        <span class="section-title">翻译场景</span>
-        <div class="section-head-right">
-          <span class="badge badge-accent" id="scene-active-badge">VTuber 直播</span>
-          <button type="button" class="btn-chip" id="btn-upload-scene">＋ 上传场景</button>
-        </div>
-      </div>
-      <div class="pack-list" id="scene-list"></div>
-      <details class="spec-details">
-        <summary>翻译场景上传规范</summary>
-        <div class="spec-body">
-          <p>JSON 对象，必填 <code>name</code>（≤40 字）与 <code>prompt</code>（20~4000 字）：</p>
-          <pre>{
+      <!-- 翻译场景：可折叠分区（v0.4.2 问题 3）
+           收起时只留一行摘要（当前场景名 + 共 N 个），点标题展开完整列表；
+           折叠状态存 chrome.storage.local 的 yt_sub_popup_pack_sections，不进设置对象。
+           展开动画与设置页两个 .fold 同口径：grid-template-rows 0fr → 1fr + opacity。 -->
+      <section class="pack-section" id="section-scene">
+        <button type="button" class="section-toggle" id="section-scene-toggle"
+          aria-expanded="false" aria-controls="section-scene-body">
+          <span class="section-toggle-main">
+            <span class="section-title">翻译场景</span>
+            <span class="section-summary">
+              <span class="badge badge-accent" id="scene-active-badge">VTuber 直播</span>
+              <span class="section-count" id="scene-section-count">共 0 个</span>
+            </span>
+          </span>
+          <span class="section-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="section-body" id="section-scene-body" hidden>
+          <div class="section-body-inner">
+            <div class="section-head">
+              <span class="section-hint">点卡片即切换；「上传」可导入自定义场景包。</span>
+              <button type="button" class="btn-chip" id="btn-upload-scene">＋ 上传场景</button>
+            </div>
+            <div class="pack-list" id="scene-list"></div>
+            <details class="spec-details">
+              <summary>翻译场景上传规范</summary>
+              <div class="spec-body">
+                <p>JSON 对象，必填 <code>name</code>（≤40 字）与 <code>prompt</code>（20~4000 字）：</p>
+                <pre>{
   "version": 1,
   "name": "科普视频",
   "description": "科学解说 / 教育内容",
   "hint": "例：TED-Ed、物理讲解",
   "prompt": "你是一位科普字幕译者。要求：术语准确、逻辑清晰、保留公式与单位……"
 }</pre>
-          <p>prompt 会作为 system prompt 的场景段注入；请写明受众、语气、术语处理与禁止事项。上传后立即出现在场景列表，选中即生效。</p>
+                <p>prompt 会作为 system prompt 的场景段注入；请写明受众、语气、术语处理与禁止事项。上传后立即出现在场景列表，选中即生效。</p>
+              </div>
+            </details>
+          </div>
         </div>
-      </details>
+      </section>
 
-      <!-- 术语库 -->
-      <div class="section-head">
-        <span class="section-title">术语库</span>
-        <div class="section-head-right">
-          <label class="pack-toggle"><input type="checkbox" id="glossary-enabled" checked> 注入</label>
-          <span class="badge" id="glossary-total-badge">0 条</span>
-          <button type="button" class="btn-chip" id="btn-upload-glossary">＋ 上传术语库</button>
-        </div>
-      </div>
-      <div class="pack-list" id="glossary-pack-list"></div>
-      <div class="pack-preview hidden" id="pack-preview"></div>
-      <details class="spec-details">
-        <summary>术语库上传规范</summary>
-        <div class="spec-body">
-          <p>JSON 对象，必填 <code>name</code> 与非空 <code>entries</code> 数组（≤2000 条）：</p>
-          <pre>{
+      <!-- 术语库：同样可折叠；摘要显示「注入」状态 + 总条数 + 库数量 -->
+      <section class="pack-section" id="section-glossary">
+        <button type="button" class="section-toggle" id="section-glossary-toggle"
+          aria-expanded="false" aria-controls="section-glossary-body">
+          <span class="section-toggle-main">
+            <span class="section-title">术语库</span>
+            <span class="section-summary">
+              <span class="badge" id="glossary-section-state">注入开</span>
+              <span class="badge" id="glossary-total-badge">0 条</span>
+              <span class="section-count" id="glossary-pack-count">0 个库</span>
+            </span>
+          </span>
+          <span class="section-chevron" aria-hidden="true"></span>
+        </button>
+        <div class="section-body" id="section-glossary-body" hidden>
+          <div class="section-body-inner">
+            <div class="section-head">
+              <label class="pack-toggle"><input type="checkbox" id="glossary-enabled" checked> 注入</label>
+              <button type="button" class="btn-chip" id="btn-upload-glossary">＋ 上传术语库</button>
+            </div>
+            <div class="pack-list" id="glossary-pack-list"></div>
+            <div class="pack-preview hidden" id="pack-preview"></div>
+            <details class="spec-details">
+              <summary>术语库上传规范</summary>
+              <div class="spec-body">
+                <p>JSON 对象，必填 <code>name</code> 与非空 <code>entries</code> 数组（≤2000 条）：</p>
+                <pre>{
   "version": 1,
   "name": "MC 游戏术语库",
   "description": "Minecraft 方块 / 生物 / 机制",
@@ -236,9 +267,12 @@
       "source": "https://zh.minecraft.wiki/", "sourceType": "wiki" }
   ]
 }</pre>
-          <p>每条必填 <code>ja</code>（日文原词）与 <code>zh</code>（中文译名）；<code>category</code> 可选 talent/group/game/song/term，缺省按 term 处理。翻译时只注入本批文本命中的术语。</p>
+                <p>每条必填 <code>ja</code>（日文原词）与 <code>zh</code>（中文译名）；<code>category</code> 可选 talent/group/game/song/term，缺省按 term 处理。翻译时只注入本批文本命中的术语。</p>
+              </div>
+            </details>
+          </div>
         </div>
-      </details>
+      </section>
 
       <div id="pack-status" class="status-msg"></div>
 
@@ -472,7 +506,7 @@
         </svg>
         高级设置
       </button>
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.4.1</span>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.4.3</span>
     </footer>
   </div>
 

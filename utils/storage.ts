@@ -1,7 +1,42 @@
-import { DEFAULT_SETTINGS, type ExtensionSettings } from '../types';
+import {
+  DEFAULT_SETTINGS,
+  type CustomModelEntry,
+  type CustomModelService,
+  type ExtensionSettings
+} from '../types';
+/* 图标白名单与自定义条目的取值域都只有一份，放在 utils/models.ts */
+import {
+  CUSTOM_MODEL_SERVICES,
+  MAX_CUSTOM_MODELS,
+  PROVIDER_IDS,
+  getProvider,
+  isModelIconKey,
+  resolveProviderByService
+} from './models';
 
 const STORAGE_KEY = 'yt_sub_translator_settings';
+/**
+ * 敏感字段（Key）单独存 local，用这个键。
+ * 为什么不能继续放 sync：`chrome.storage.sync` 会随浏览器账号同步到云端，
+ * 与「Key 仅保存在本地」直接冲突。非敏感设置仍走 sync（跨设备同步是原有特性）。
+ */
+const SECRETS_KEY = 'yt_sub_translator_secrets';
+/** 只允许落在 local 的字段；serviceKeys 是 v0.4.2 之前「按服务商记 Key」的残留 */
+const SECRET_FIELDS = ['apiKey', 'providerKeys', 'serviceKeys'] as const;
 const READ_TIMEOUT_MS = 1500;
+
+/** 一份密钥集合：当前生效的 Key + 按厂牌分格的 Key */
+interface SecretState {
+  apiKey?: string;
+  providerKeys?: Record<string, string>;
+}
+
+/* API Key 与其按服务商分格保存的副本共用一个长度上限（v0.4.2） */
+const MAX_SECRET_LENGTH = 400;
+const MAX_MODEL_ID_LENGTH = 120;
+const MAX_MODEL_LABEL_LENGTH = 40;
+/* Base URL 与其按服务商分格保存的副本共用上限（任务四）：够放长路径，又不至于存进一段正文 */
+const MAX_BASE_URL_LENGTH = 300;
 
 const VALID_SERVICES = ['google', 'gemini', 'openai', 'deepseek'] as const;
 const VALID_REASONING = ['none', 'low', 'high'] as const;
@@ -11,6 +46,9 @@ const VALID_SEGMENTATION_LANGS = ['auto', 'ja', 'zh', 'en', 'generic'] as const;
 /* v0.4.2 两个新增选项的合法取值（非法值一律回落默认，避免脏数据进 prompt 装配） */
 const VALID_GLOSSARY_ANNOTATION = ['off', 'on'] as const;
 const VALID_ASR_CORRECTION = ['strict', 'normal'] as const;
+/* 需求 7：AI 精翻字幕保留时长（小时，0 = 永久）与续翻模式 */
+const VALID_AI_CACHE_TTL_HOURS = [24, 168, 720, 0] as const;
+const VALID_AI_RESUME_MODES = ['auto', 'manual'] as const;
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {
   const num = typeof value === 'number' ? value : Number(value);
@@ -20,6 +58,142 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 
 function sanitizeColor(value: unknown, fallback: string): string {
   return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+}
+
+/**
+ * 自定义模型：逐条校验，**非法/超限条目单独丢弃**（不整份重置，用户不丢已配好的那条）。
+ * - id 必填且截断到 120 字符；label 缺省回落 id；
+ * - service 必须是白名单值，否则整条丢（不知道该往哪个端点发）；
+ * - providerId 必须是厂牌白名单值；老条目没有这个字段时按 service 的主厂牌补上，
+ *   这样它还会出现在原来那个厂牌的列表里，不会凭空消失；
+ * - icon 只接受白名单（历史值 ∪ 厂牌 key），非法回落 'generic'。
+ */
+function sanitizeCustomModels(value: unknown): CustomModelEntry[] {
+  if (!Array.isArray(value)) return [];
+  const out: CustomModelEntry[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of value) {
+    if (!raw || typeof raw !== 'object') continue;
+    const item = raw as Partial<CustomModelEntry>;
+    const id = typeof item.id === 'string' ? item.id.trim().slice(0, MAX_MODEL_ID_LENGTH) : '';
+    if (!id) continue;
+    if (!CUSTOM_MODEL_SERVICES.includes(item.service as CustomModelService)) continue;
+
+    const service = item.service as CustomModelService;
+    const providerId = typeof item.providerId === 'string' && PROVIDER_IDS.includes(item.providerId)
+      ? item.providerId
+      : resolveProviderByService(service === 'custom' ? 'openai' : service).id;
+    /* 去重键带上厂牌：同一个 id 在两个厂牌下是两条不同的配置（端点与 Key 都不同） */
+    const dedupe = `${providerId}|${id}`;
+    if (seen.has(dedupe)) continue;
+    seen.add(dedupe);
+
+    const label = typeof item.label === 'string' ? item.label.trim().slice(0, MAX_MODEL_LABEL_LENGTH) : '';
+    out.push({
+      id,
+      label: label || id,
+      service,
+      icon: isModelIconKey(item.icon) ? item.icon : 'generic',
+      providerId
+    });
+    if (out.length >= MAX_CUSTOM_MODELS) break;
+  }
+
+  return out;
+}
+
+/** 按厂牌记的 Key：键做白名单过滤，值 trim + 截断（与 apiKey 同一个上限） */
+function sanitizeProviderKeys(value: unknown): Record<string, string> {
+  return sanitizeProviderMap(value, MAX_SECRET_LENGTH);
+}
+
+/** 按厂牌记的 Base URL：与 providerKeys 同规则——键白名单、值 trim + 截断、空串不占格 */
+function sanitizeProviderBaseUrls(value: unknown): Record<string, string> {
+  return sanitizeProviderMap(value, MAX_BASE_URL_LENGTH);
+}
+
+/**
+ * 降级顺序上限（v0.4.2）。
+ * 每多一级就多一次真实请求，而「全都不可用」时多配几级也解决不了问题；
+ * 8 这个数字同时覆盖「全部 7 个大模型厂牌 + Google 免费」的极端排法。
+ */
+export const MAX_FALLBACK_ORDER = 8;
+
+/**
+ * 降级顺序清洗（v0.4.2）：只留**合法厂牌 id**（以 utils/models.ts#PROVIDERS 为准）、
+ * 去重、保持用户设定的相对顺序、最多 MAX_FALLBACK_ORDER 个。
+ *
+ * 三条口径：
+ * - 非法值（未知 id / 非字符串 / 空串）整条丢弃，不占位 —— 与需求「丢弃未知 id」一致；
+ * - 重复项只留第一次出现的位置（顺序即优先级，后出现的那次没有意义）；
+ * - 不是数组（老数据没这个字段、或存成字符串）→ `[]`，等于「保持现有行为」，不报错。
+ *
+ * 刻意**不校验**「该厂牌是否配了 Key」：Key 可以事后补，顺序是用户的偏好，
+ * 不该因为当下没配 Key 就被存储层悄悄改掉（运行时由 utils/translator.ts 跳过无 Key 的级）。
+ */
+export function sanitizeFallbackOrder(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const raw of value) {
+    if (typeof raw !== 'string') continue;
+    const id = raw.trim();
+    if (!PROVIDER_IDS.includes(id)) continue;
+    if (out.includes(id)) continue;
+    out.push(id);
+    if (out.length >= MAX_FALLBACK_ORDER) break;
+  }
+  return out;
+}
+
+/**
+ * 按厂牌记的「上次选的模型」（v0.4.2）：键白名单 + 值 trim + 模型 id 长度上限。
+ * 刻意**不校验这个 id 是否还在该厂牌的清单里** —— 手填的自定义 id、厂商已下架的
+ * 型号都要能被恢复；清单本身只是内部参考（默认值 / 归属判断），不是白名单。
+ */
+function sanitizeProviderModelSelections(value: unknown): Record<string, string> {
+  return sanitizeProviderMap(value, MAX_MODEL_ID_LENGTH);
+}
+
+function sanitizeProviderMap(value: unknown, maxLength: number): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!PROVIDER_IDS.includes(key)) continue;
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim().slice(0, maxLength);
+    if (trimmed) out[key] = trimmed;
+  }
+  return out;
+}
+
+/** 按服务商记的 Key：键做白名单过滤，值 trim + 截断（与 apiKey 同一个上限） */
+function sanitizeServiceKeys(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!VALID_SERVICES.includes(key as any)) continue;
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim().slice(0, MAX_SECRET_LENGTH);
+    if (trimmed) out[key] = trimmed;
+  }
+  return out;
+}
+
+/** 按服务商记的 Base URL：与 serviceKeys 同规则——键白名单、值 trim + 截断、空串不占格 */
+function sanitizeBaseUrls(value: unknown): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return out;
+
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (!VALID_SERVICES.includes(key as any)) continue;
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim().slice(0, MAX_BASE_URL_LENGTH);
+    if (trimmed) out[key] = trimmed;
+  }
+  return out;
 }
 
 /**
@@ -61,14 +235,19 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.targetLang = typeof merged.targetLang === 'string' && merged.targetLang.trim()
     ? merged.targetLang.trim()
     : DEFAULT_SETTINGS.targetLang;
-  merged.apiKey = typeof merged.apiKey === 'string' ? merged.apiKey : '';
-  merged.apiBaseUrl = typeof merged.apiBaseUrl === 'string' ? merged.apiBaseUrl : '';
-  merged.modelName = typeof merged.modelName === 'string' ? merged.modelName : '';
+  merged.apiKey = typeof merged.apiKey === 'string' ? merged.apiKey.trim().slice(0, MAX_SECRET_LENGTH) : '';
+  merged.apiBaseUrl = typeof merged.apiBaseUrl === 'string'
+    ? merged.apiBaseUrl.trim().slice(0, MAX_BASE_URL_LENGTH)
+    : '';
+  merged.modelName = typeof merged.modelName === 'string' ? merged.modelName.trim() : '';
   merged.enabled = merged.enabled !== false;
   merged.autoHideNativeSubtitles = merged.autoHideNativeSubtitles !== false;
   merged.autoPunctuation = merged.autoPunctuation !== false;
   merged.mergeShortFragments = merged.mergeShortFragments !== false;
   merged.autoFallbackToGoogle = merged.autoFallbackToGoogle !== false;
+  /* v0.4.2：降级顺序。老数据没有这一项 / 形状不对 → []（= 保持 v0.4.1「失败直接降级 Google」）；
+     它是普通设置（不含 Key），跟着 sync 走，跨设备同步同一份优先级。 */
+  merged.fallbackOrder = sanitizeFallbackOrder(merged.fallbackOrder);
   merged.glossaryEnabled = merged.glossaryEnabled !== false;
   /* v0.2.9：术语库启用包列表（只保留字符串数组，长度与字符集受限） */
   if (Array.isArray(merged.glossaryPacks)) {
@@ -86,23 +265,94 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
     merged.asrCorrection = 'normal';
   }
 
+  /* v0.4.2：自定义模型（逐条过滤，超限截断） */
+  merged.customModels = sanitizeCustomModels(merged.customModels);
+
+  /* 需求 7：AI 精翻缓存保留时长。
+     分段控件写回来的值是字符串（'720' / '0'），所以先转数字再判白名单；
+     非 24/168/720/0 一律回落 720 —— 不做就近取整，避免存储层自己发明档位。 */
+  const ttlSource = merged.aiCacheTtlHours as unknown;
+  const ttlRaw = typeof ttlSource === 'number'
+    ? ttlSource
+    : (typeof ttlSource === 'string' && ttlSource.trim() !== '' ? Number(ttlSource) : NaN);
+  merged.aiCacheTtlHours = VALID_AI_CACHE_TTL_HOURS.includes(ttlRaw as any)
+    ? ttlRaw
+    : DEFAULT_SETTINGS.aiCacheTtlHours;
+
+  /* 需求 7：续翻模式（默认 manual = 不擅自消耗 token 续翻） */
+  if (!VALID_AI_RESUME_MODES.includes(merged.aiResumeMode as any)) {
+    merged.aiResumeMode = 'manual';
+  }
+
+  /* ══════════════════ 任务四：厂牌维度的 Key / 端点（含老数据迁移） ══════════════════
+   * 为什么要有这一层：Key 必须跟着**厂牌**走（Claude / 通义 / Kimi / GLM 的 service 都是
+   * 'openai'，只按 service 记会互相覆盖），所以存储结构从 service 维度升到 provider 维度。
+   *
+   * 迁移口径（老用户只有 service / apiKey / apiBaseUrl / serviceKeys / baseUrls）：
+   *   1. 先定「当前厂牌」：providerId 有效且与当前 service 对得上就用它；
+   *      对不上（例如弹窗只改了 service，或老数据压根没有 providerId）就按 service 的主厂牌落位；
+   *   2. serviceKeys / baseUrls 里能映射到厂牌的老值，**只在目标格为空时**并进去，不覆盖已有值；
+   *   3. 当前厂牌那一格始终以 apiKey / apiBaseUrl 为准（弹窗只写这两个字段）；
+   *   4. 迁完把 serviceKeys / baseUrls 从输出里删掉——它们只是迁移输入，不再有第二份真相。
+   */
+  merged.providerKeys = sanitizeProviderKeys(merged.providerKeys);
+  merged.providerBaseUrls = sanitizeProviderBaseUrls(merged.providerBaseUrls);
+  /* v0.4.2：按厂牌记的「上次选的模型」。老数据没有这一项 → DEFAULT 的 {} 兜住；
+     有值但形状不对（数组 / 字符串 / 未知厂牌键）→ 逐项丢弃，不整份重置。 */
+  merged.providerModelSelections = sanitizeProviderModelSelections(merged.providerModelSelections);
+
+  const requestedProvider = getProvider(typeof merged.providerId === 'string' ? merged.providerId : '');
+  const providerMatchesService = !requestedProvider
+    ? false
+    : merged.service === 'google' || requestedProvider.service === merged.service;
+  const currentProvider = providerMatchesService && requestedProvider
+    ? requestedProvider
+    : resolveProviderByService(merged.service);
+  merged.providerId = currentProvider.id;
+
+  /* 2. 老 service 维度的 Key / 端点 → 厂牌维度（不覆盖已有值） */
+  for (const [service, key] of Object.entries(sanitizeServiceKeys(merged.serviceKeys))) {
+    const pid = resolveProviderByService(service).id;
+    if (!merged.providerKeys[pid]) merged.providerKeys[pid] = key;
+  }
+  for (const [service, url] of Object.entries(sanitizeBaseUrls(merged.baseUrls))) {
+    const pid = resolveProviderByService(service).id;
+    if (!merged.providerBaseUrls[pid]) merged.providerBaseUrls[pid] = url;
+  }
+
+  /* 3. 当前厂牌那一格以 apiKey / apiBaseUrl 为准。
+     Google 免费通道（service==='google'）不参与：它不需要 Key，
+     此时 providerId 只是「上次用的那个厂牌」，不该把 apiKey 写进它的格子。 */
+  if (merged.service !== 'google') {
+    if (merged.apiKey) merged.providerKeys[currentProvider.id] = merged.apiKey;
+    else delete merged.providerKeys[currentProvider.id];
+
+    if (merged.apiBaseUrl) merged.providerBaseUrls[currentProvider.id] = merged.apiBaseUrl;
+    else delete merged.providerBaseUrls[currentProvider.id];
+  }
+
+  /* 4. 老字段只作迁移输入：清掉，保证「数据只有一份」 */
+  delete merged.serviceKeys;
+  delete merged.baseUrls;
+
   return merged;
 }
 
-function readStorageArea(
+function readAreaKey(
   area: 'sync' | 'local',
+  key: string,
   timeoutMs: number
-): Promise<Partial<ExtensionSettings> | null> {
+): Promise<Record<string, unknown> | null> {
   return new Promise((resolve) => {
     let settled = false;
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;
-      console.warn(`[Storage] chrome.storage.${area}.get 超时（${timeoutMs}ms）`);
+      console.warn(`[Storage] chrome.storage.${area}.get(${key}) 超时（${timeoutMs}ms）`);
       resolve(null);
     }, timeoutMs);
 
-    const finish = (value: Partial<ExtensionSettings> | null) => {
+    const finish = (value: Record<string, unknown> | null) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -115,13 +365,14 @@ function readStorageArea(
         finish(null);
         return;
       }
-      storageArea.get([STORAGE_KEY], (result) => {
+      storageArea.get([key], (result) => {
         if (chrome.runtime.lastError) {
           console.warn(`[Storage] chrome.storage.${area} 读取失败:`, chrome.runtime.lastError.message);
           finish(null);
           return;
         }
-        finish((result?.[STORAGE_KEY] as Partial<ExtensionSettings>) || null);
+        const raw = result?.[key];
+        finish(raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : null);
       });
     } catch (e) {
       console.warn(`[Storage] chrome.storage.${area} 异常:`, e);
@@ -130,7 +381,7 @@ function readStorageArea(
   });
 }
 
-function writeStorageArea(area: 'sync' | 'local', value: ExtensionSettings): Promise<boolean> {
+function writeAreaKey(area: 'sync' | 'local', key: string, value: unknown): Promise<boolean> {
   return new Promise((resolve) => {
     try {
       const storageArea = chrome.storage?.[area];
@@ -138,7 +389,7 @@ function writeStorageArea(area: 'sync' | 'local', value: ExtensionSettings): Pro
         resolve(false);
         return;
       }
-      storageArea.set({ [STORAGE_KEY]: value }, () => {
+      storageArea.set({ [key]: value }, () => {
         if (chrome.runtime.lastError) {
           console.warn(`[Storage] chrome.storage.${area} 写入失败:`, chrome.runtime.lastError.message);
           resolve(false);
@@ -153,26 +404,90 @@ function writeStorageArea(area: 'sync' | 'local', value: ExtensionSettings): Pro
   });
 }
 
+/* ══════════════════════ 敏感字段：只进 local ══════════════════════
+ * 分工：
+ *   sync  → 非敏感设置（语言、外观、断句、厂牌 id、Base URL…），跨设备同步
+ *   local → 只有一把 Key 的集合（SECRETS_KEY），不随账号上云
+ * 老用户（v0.4.1 及以前）的 Key 还在 sync 里：首次读取时搬到 local，
+ * 并把 sync 里那几个字段抹掉。迁移幂等（抹完就没有可搬的了），失败也不影响读取。
+ */
+
+/** 一份设置里是否还带着敏感字段（老格式 / 迁移前） */
+function hasSecretFields(raw: Record<string, unknown> | null): boolean {
+  if (!raw) return false;
+  return SECRET_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(raw, field));
+}
+
+/** 从老格式设置里取出敏感字段（serviceKeys 由 sanitizeSettings 折进 providerKeys） */
+function extractSecrets(raw: Partial<ExtensionSettings>): SecretState {
+  const normalized = sanitizeSettings(raw);
+  return { apiKey: normalized.apiKey, providerKeys: normalized.providerKeys };
+}
+
+async function readSecrets(): Promise<SecretState | null> {
+  const raw = await readAreaKey('local', SECRETS_KEY, 1000);
+  if (!raw) return null;
+  const out: SecretState = {};
+  if (typeof raw.apiKey === 'string') out.apiKey = raw.apiKey;
+  if (raw.providerKeys && typeof raw.providerKeys === 'object' && !Array.isArray(raw.providerKeys)) {
+    out.providerKeys = raw.providerKeys as Record<string, string>;
+  }
+  return out;
+}
+
+/** 写 local：空值不占格（「恢复默认」清空 Key 时这里落成 {}，语义上就是没有 Key） */
+function writeSecrets(value: SecretState): Promise<boolean> {
+  const payload: Record<string, unknown> = {};
+  if (value.apiKey) payload.apiKey = value.apiKey;
+  if (value.providerKeys && Object.keys(value.providerKeys).length > 0) {
+    payload.providerKeys = value.providerKeys;
+  }
+  return writeAreaKey('local', SECRETS_KEY, payload);
+}
+
+/** 把设置区里残留的敏感字段抹掉（迁移的最后一步；失败只记日志） */
+async function stripSecrets(area: 'sync' | 'local', raw: Record<string, unknown>): Promise<void> {
+  const next: Record<string, unknown> = { ...raw };
+  for (const field of SECRET_FIELDS) delete next[field];
+  const ok = await writeAreaKey(area, STORAGE_KEY, next);
+  if (!ok) console.warn(`[Storage] 迁移后重写 chrome.storage.${area} 失败（下次读取会重试）`);
+}
+
 /**
  * 获取当前用户配置
- * 读取顺序：sync → local → 默认值；超时会记录日志，而不是静默伪装成默认配置。
+ * 读取顺序：sync → local → 默认值；敏感字段一律以 local 的 SECRETS_KEY 为准（覆盖）。
+ * 超时会记录日志，而不是静默伪装成默认配置。
  */
 export async function getStoredSettings(): Promise<ExtensionSettings> {
   if (typeof chrome === 'undefined' || !chrome.storage) {
     return { ...DEFAULT_SETTINGS };
   }
 
-  const syncValue = await readStorageArea('sync', READ_TIMEOUT_MS);
-  if (syncValue) {
-    return sanitizeSettings(syncValue);
+  /* 三个读并行：多一次 local 读换来更短的启动路径（原本 sync 命中时压根不读 local） */
+  const [syncValue, localValue, localSecrets] = await Promise.all([
+    readAreaKey('sync', STORAGE_KEY, READ_TIMEOUT_MS),
+    readAreaKey('local', STORAGE_KEY, 1000),
+    readSecrets()
+  ]);
+
+  const base = (syncValue || localValue) as Partial<ExtensionSettings> | null;
+  const baseArea: 'sync' | 'local' = syncValue ? 'sync' : 'local';
+
+  if (!base) {
+    return sanitizeSettings({ ...(localSecrets || {}) });
   }
 
-  const localValue = await readStorageArea('local', 1000);
-  if (localValue) {
-    return sanitizeSettings(localValue);
+  /* 迁移：老数据 Key 还写在 sync/settings 里 → 搬到 local，并把那份里的 Key 抹掉 */
+  if (hasSecretFields(base as Record<string, unknown>)) {
+    const migrated = extractSecrets(base);
+    /* local 已有值优先：升级之后 local 才是唯一真相，sync 里的只是历史残留 */
+    const merged: SecretState = { ...migrated, ...(localSecrets || {}) };
+    await writeSecrets(merged);
+    await stripSecrets(baseArea, base as Record<string, unknown>);
+    return sanitizeSettings({ ...base, ...merged });
   }
 
-  return { ...DEFAULT_SETTINGS };
+  return sanitizeSettings({ ...base, ...(localSecrets || {}) });
 }
 
 // 串行化“读-改-写”，避免 popup 与快捷面板并发保存时互相覆盖字段
@@ -180,6 +495,10 @@ let saveChain: Promise<ExtensionSettings> = Promise.resolve({ ...DEFAULT_SETTING
 
 /**
  * 保存用户配置（自动合并当前持久化值，串行执行）
+ *
+ * 分两次写：先 local（Key）再 sync（其余设置）。
+ * 顺序不能反：写入会触发 storage.onChanged，设置页收到通知会重新读一次；
+ * 若 sync 先落、Key 后落，那次回读会读到旧的 Key（输入框里刚打的字被抹回原值）。
  */
 export function saveStoredSettings(
   newSettings: Partial<ExtensionSettings>
@@ -190,10 +509,20 @@ export function saveStoredSettings(
       const current = await getStoredSettings();
       const updated = sanitizeSettings({ ...current, ...newSettings });
 
-      const ok = await writeStorageArea('sync', updated);
-      if (!ok) {
-        await writeStorageArea('local', updated);
-      }
+      /* sync 里必须**不含** Key：显式删掉三个敏感字段，再写 */
+      const plain: Record<string, unknown> = { ...updated };
+      for (const field of SECRET_FIELDS) delete plain[field];
+
+      const okSecrets = await writeSecrets({
+        apiKey: updated.apiKey,
+        providerKeys: updated.providerKeys
+      });
+      const okSync = await writeAreaKey('sync', STORAGE_KEY, plain);
+
+      /* 与原语义一致：sync 不可用（配额 / 无权限）时整份退到 local；Key 已经在 local 了 */
+      if (!okSync) await writeAreaKey('local', STORAGE_KEY, plain);
+      if (!okSecrets) console.warn('[Storage] Key 写入 local 失败，本次改动只在内存里生效');
+
       return updated;
     });
 

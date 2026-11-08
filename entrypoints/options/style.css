@@ -7,6 +7,10 @@
  */
 
 :root {
+  /* 原生控件的配色取向：Windows Chrome/Edge 的下拉 popup、滚动条、取色器由系统渲染，
+     background-color 改不动它们，color-scheme 才是那个开关（见 .ctl-select option 注释） */
+  color-scheme: dark;
+
   /* ── 表面与边框 ── */
   --bg-primary: #0a0b0d;
   --bg-elevated: #121317;
@@ -25,11 +29,18 @@
   --state-warn: #fbbf24;
   --state-error: #f87171;
 
-  /* ── 文字层级 ── */
+  /* ── 文字层级 ──
+   * 三级层次（对 #0a0b0d 的 WCAG 对比度，实测值见 docs/OPTIONS-0.4.0.md §12）：
+   *   --text-main  18.9:1（标题、正文强调）
+   *   --text-body  13.3:1（正文）
+   *   --text-muted  7.7:1（说明文字）
+   *   --text-dim   5.2:1（弱化辅注）
+   * 本轮把 --text-dim 从 #71717a（4.07:1，不达 AA）提到 #82828c（5.2:1）。
+   * --text-muted 未动：它与弹窗共享（令牌一致性测试守着），实测 7.7:1 本就达标。 */
   --text-main: #fafafa;
   --text-body: #d4d4d8;
   --text-muted: #a1a1aa;
-  --text-dim: #71717a;
+  --text-dim: #82828c;
 
   /* ── 圆角三档 ── */
   --radius-lg: 12px;
@@ -52,8 +63,23 @@
   --stagger-tight: 40ms;
   --stagger-list: 75ms;
 
-  --nav-width: 250px;
+  --nav-width: 218px;
   --topbar-h: 58px;
+
+  /* ── 自适应（任务四 · 需求八） ──
+   * --content-max：主内容可读宽度上限。窗口再宽也不无限拉伸，但 1400+ 时
+   *   主区从原来的 ~760px 吃到 1100px，右侧留白不再大得离谱。
+   * --font-*：流体字号。**下限即可读性地板**（基准 14px，上一轮刚提上来的，
+   *   不许回退）；上限只在超宽屏生效，缓变斜率 0.1~0.18vw，不是整体缩放。
+   * --pad-pane：分区内边距，跟着视口缓变（1024 约 28px / 1600+ 收到 34px）。 */
+  --content-max: 1100px;
+  --font-base: clamp(14px, 0.18vw + 13.2px, 16px);
+  --font-h1: clamp(21px, 0.3vw + 19.4px, 25px);
+  --font-title: clamp(14px, 0.16vw + 13.3px, 16.5px);
+  --font-lead: clamp(13px, 0.14vw + 12.3px, 15px);
+  --font-desc: clamp(12.5px, 0.12vw + 11.9px, 14px);
+  --font-note: clamp(12px, 0.1vw + 11.5px, 13.5px);
+  --pad-pane: clamp(20px, 1.6vw + 12px, 34px);
 }
 
 * {
@@ -71,8 +97,10 @@ body {
   background: var(--bg-primary);
   color: var(--text-body);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", Roboto, sans-serif;
-  font-size: 13px;
-  line-height: 1.5;
+  /* 基准字号 13 → 14（上一轮的可读性地板）→ 本轮改为流体：14px 起，随视口缓变到 16px。
+     下限仍是 14px，窄窗口不会回退到 13px。实测值见 docs/OPTIONS-0.4.0.md §13.2。 */
+  font-size: var(--font-base);
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -127,7 +155,7 @@ body {
 }
 
 .brand-text strong {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text-main);
   letter-spacing: -0.01em;
@@ -137,7 +165,7 @@ body {
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-dim);
   letter-spacing: 0.02em;
 }
@@ -162,7 +190,7 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   padding: 5px 10px;
   border-radius: var(--radius-pill);
@@ -256,13 +284,13 @@ body {
 }
 
 .navitem-label {
-  font-size: 12.5px;
+  font-size: 13.5px;
   font-weight: 500;
   letter-spacing: 0.01em;
 }
 
 .navitem-hint {
-  font-size: 10px;
+  font-size: 11.5px;
   color: var(--text-dim);
   letter-spacing: 0.02em;
   transition: color var(--dur-fast) var(--ease-out-expo);
@@ -304,8 +332,10 @@ body {
 
 .pane {
   display: none;
-  padding: 30px 34px 64px;
-  max-width: 860px;
+  /* 宽度上限 + 水平居中：窗口 1400+ 时内容不再只是个 760px 的窄条 */
+  padding: var(--pad-pane) var(--pad-pane) 64px;
+  max-width: var(--content-max);
+  margin: 0 auto;
 }
 
 .pane.active {
@@ -316,6 +346,8 @@ body {
 /* 行子项错峰入场 */
 .pane.active > .rows > .row,
 .pane.active > .gloss-layout,
+.pane.active > .scenario-layout,
+.pane.active > .spec-block,
 .pane.active > .preview-stage {
   animation: rowEnter var(--dur-fast) var(--ease-out-expo) both;
 }
@@ -339,20 +371,21 @@ body {
 
 /* ───────────────────────── 面板头 ───────────────────────── */
 .pane-head {
-  margin-bottom: 22px;
+  margin-bottom: 24px;
 }
 
 .pane-eyebrow {
-  font-size: 10px;
+  /* 字号继承 .pane-head p（13px）：它是 <p>，写在这里会被 .pane-head p 盖掉，
+     索性不留一条永远不生效的声明 */
   font-weight: 600;
-  letter-spacing: 0.16em;
+  letter-spacing: 0.14em;
   color: var(--text-dim);
   text-transform: uppercase;
-  margin-bottom: 6px;
+  margin-bottom: 7px;
 }
 
 .pane-head h1 {
-  font-size: 21px;
+  font-size: var(--font-h1);
   font-weight: 600;
   color: var(--text-main);
   letter-spacing: -0.015em;
@@ -360,8 +393,8 @@ body {
 }
 
 .pane-head p {
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: 7px;
+  font-size: var(--font-lead);
   color: var(--text-muted);
   max-width: 62ch;
   line-height: 1.6;
@@ -378,7 +411,8 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 28px;
-  padding: 14px 2px;
+  /* 行距 +3px/侧（14 → 17）：比原来松一档，但不靠 margin 叠加 */
+  padding: 17px 2px;
   border-top: 1px solid rgba(255, 255, 255, 0.055);
 }
 
@@ -400,28 +434,28 @@ body {
 .row-text {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 5px;
   min-width: 0;
 }
 
 .row-title {
-  font-size: 13px;
+  font-size: var(--font-title);
   font-weight: 600;
   color: var(--text-main);
   letter-spacing: -0.005em;
 }
 
 .row-desc {
-  font-size: 11.5px;
+  font-size: var(--font-desc);
   color: var(--text-muted);
-  line-height: 1.55;
+  line-height: 1.6;
   max-width: 58ch;
 }
 
 .row-desc code,
 .row-desc kbd {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 10.5px;
+  font-size: 12px;
   padding: 1px 5px;
   border-radius: 4px;
   background: rgba(255, 255, 255, 0.06);
@@ -431,9 +465,9 @@ body {
 
 /* 辅注：比 .row-desc 弱一档，用于「切换后会发生什么」这类补充说明 */
 .row-note {
-  font-size: 10.5px;
+  font-size: var(--font-note);
   color: var(--text-dim);
-  line-height: 1.5;
+  line-height: 1.65;
 }
 
 .row-control {
@@ -441,6 +475,10 @@ body {
   align-items: center;
   gap: 10px;
   flex-shrink: 0;
+  /* 字号变大后「输入框 + 按钮」那几行最容易把行撑爆：允许换行而不是溢出 */
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  min-width: 0;
 }
 
 .row-control-wide {
@@ -450,7 +488,7 @@ body {
 /* ───────────────────────── 控件 ───────────────────────── */
 .ctl {
   font-family: inherit;
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-main);
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--border-glass);
@@ -483,8 +521,12 @@ body {
   padding-right: 28px;
 }
 
-.ctl-select option {
-  background: #14151a;
+/* 原生下拉面板（Windows Chrome/Edge）由系统渲染，只能靠 :root 的 color-scheme 换成深色；
+   这里的 option 配色是兜底——老版本 / 部分平台只认 option 的显式颜色。
+   覆盖范围：设置页全部 .ctl-select + 表格行内编辑用的 select.gloss-input。 */
+.ctl-select option,
+select.gloss-input option {
+  background-color: #14151a;
   color: var(--text-main);
 }
 
@@ -501,10 +543,619 @@ body {
   max-width: 44vw;
 }
 
+/* 输入框 + 按钮同一行：不换行（.field .ctl 是 width:100%，一换行眼睛按钮就被挤到下一行），
+   靠 flex-shrink 让输入框让出按钮的宽度 */
 .input-with-btn {
   display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
+}
+
+/* ─────────────────── 厂牌与模型（厂牌一级 / 模型二级） ───────────────────
+ * 层级：免 Key 区 → 厂牌行（图标 + 名字 + Key 状态 + 模型数 + 箭头）→ 展开面板
+ * （该厂牌的 Key / 高级端点 / 模型行 / 工具条）。图标尺寸与配色只用既有令牌：
+ * 图标 18px、圆底 28px（providerIconHtml 写死内联宽高），未选中 --text-muted，
+ * 选中态与展开态提到 --text-main。
+ */
+.provider-control {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+  width: 100%;
+}
+
+/* 厂牌图标：圆形底 + 居中（providerIconHtml 输出的 span.provider-icon 靠这条上样式） */
+.provider-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-muted);
+  overflow: hidden;
+}
+
+.provider-icon svg {
+  display: block;
+}
+
+.provider-icon-fallback {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--text-muted);
+}
+
+/* 免 Key 区（Google 免费翻译）：单独一块，单选语义走 aria-pressed */
+.provider-free {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.provider-free-hit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.provider-free-hit:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.provider-free-hit.is-current {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.provider-free-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.provider-free-name {
+  font-size: 13px;
+  color: var(--text-main);
+}
+
+.provider-free-desc {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.provider-free-flag {
+  flex: 0 0 auto;
+  font-size: 12px;
+  color: var(--state-ok);
+}
+
+/* 厂牌列表 */
+.provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+}
+
+.provider-group {
+  position: relative;
+  border-radius: var(--radius-md);
+  transition: background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.provider-group + .provider-group {
+  margin-top: 2px;
+}
+
+.provider-group.is-open {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.provider-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  /* 触控目标 32px 是既定取舍：这里按内容撑到 ≥36px，够点且不臃肿 */
+  min-height: 36px;
+  padding: 6px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+/* hover 用左侧 2px 标线，不做整行上浮（沿用 .model-hit / .scenario-card 的语义） */
+.provider-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: #ffffff;
+  opacity: 0;
+  transform: scaleY(0.25);
+  transition: opacity var(--dur-fast) var(--ease-out-expo),
+    transform var(--dur-base) var(--spring-snappy);
+}
+
+.provider-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.provider-row:hover::before {
+  opacity: 0.5;
+  transform: scaleY(1);
+}
+
+.provider-group.is-current .provider-row::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
+.provider-row[aria-expanded="true"] {
+  color: var(--text-main);
+}
+
+.provider-icon-slot {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.provider-group.is-current .provider-icon,
+.provider-group.is-open .provider-icon {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.provider-main {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.provider-name {
+  font-size: 13.5px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.provider-meta {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.provider-keystate {
+  color: var(--text-muted);
+}
+
+.provider-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.provider-flag {
+  font-size: 12px;
+  color: var(--state-ok);
+  white-space: nowrap;
+}
+
+/* 箭头用 CSS 三角形画（界面符号，不是品牌图形）：只动 transform 的旋转 */
+.provider-chevron {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-muted);
+  transform: rotate(0deg);
+  transition: transform var(--dur-base) var(--ease-out-expo);
+}
+
+.provider-group.is-open .provider-chevron {
+  transform: rotate(90deg);
+  border-left-color: var(--text-main);
+}
+
+/* 展开面板：缩进在厂牌名下方，左侧一条细线交代从属关系。
+ * 展开/收起走 grid-template-rows: 0fr → 1fr + opacity（只动网格行与透明度，不碰 height）。
+ * 收起态的「不可聚焦、不进 tab 序列」由 JS 的 inert 负责（hidden 会 display:none，
+ * 那样过渡就没了）；只有首次渲染的折叠态仍用原生 hidden，省一次布局。
+ * 内层 .provider-panel-inner 负责 overflow: hidden 与下拉阅读所需的内边距。 */
+.provider-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin: 0 0 0 24px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border-glass);
+  /* 与 .fold-panel / .details-body 完全同一条声明（问题 5：五个 disclosure 一个口径） */
+  transition: grid-template-rows var(--dur-base) var(--spring-soft),
+    opacity var(--dur-base) var(--ease-out-expo);
+}
+
+.provider-group.is-open > .provider-panel {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.provider-panel-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  overflow: hidden;
+  /* 注意：内边距不能写在这里。网格项的 min-content 高度会把 padding 算进去，
+     收起态（0fr）就会残留这么多高度（实测 12px 的空条）。
+     上下留白改由子元素承担——内容高度在收起时被 min-height: 0 归零。 */
+}
+
+.provider-panel-inner > :first-child {
+  padding-top: 2px;
+}
+
+.provider-panel-inner > :last-child {
+  padding-bottom: 8px;
+}
+
+/* 收起态靠 hidden 属性：这里必须显式盖掉上面的 display:grid，
+   否则作者样式会压过 UA 的 [hidden] { display:none }，七个面板会全部展开 */
+.provider-panel[hidden] {
+  display: none;
+}
+
+.provider-config {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  /* Key 与端点不需要铺满整行：给定可读宽度，右侧留白 */
+  max-width: 470px;
+  padding-top: 4px;
+}
+
+.provider-field .field-label {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.provider-keystate-inline {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.provider-keyhint {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.provider-advanced {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.02);
+  padding: 6px 10px 8px;
+}
+
+.provider-advanced[open] {
+  padding-bottom: 10px;
+}
+
+.provider-advanced summary {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+  list-style-position: inside;
+}
+
+.provider-advanced summary:hover {
+  color: var(--text-body);
+}
+
+.provider-advanced .field {
+  margin-top: 8px;
+}
+
+.provider-advanced .row-note {
+  margin-top: 6px;
+}
+
+.provider-models {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.provider-status {
+  flex: 1 1 220px;
+  min-width: 0;
+}
+
+/* ───────────────────────── 模型行 ───────────────────────── */
+/* 行：显示名 + 等宽 model id + 定位 note / 使用中（+ 自定义条目的编辑删除）。
+   行高由两行文字撑出固定值，不靠 padding 猜，保证整列等高。 */
+.model-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.model-row:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: var(--border-glass);
+}
+
+.model-row.is-current {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-glass-bright);
+}
+
+.model-hit {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 12px 6px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* 自定义条目右侧有「编辑 / 删除」：给它们固定留出 88px，badge 右缘才对齐 */
+.model-row.is-custom .model-hit {
+  padding-right: 88px;
+}
+
+/* hover 用左侧 2px 标线，不做整体上浮（沿用 .scenario-card 的做法） */
+.model-hit::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 9px;
+  bottom: 9px;
+  width: 2px;
+  border-radius: 2px;
+  background: #ffffff;
+  opacity: 0;
+  transform: scaleY(0.25);
+  transition: opacity var(--dur-fast) var(--ease-out-expo), transform var(--dur-base) var(--spring-snappy);
+}
+
+.model-row:hover .model-hit::before {
+  opacity: 0.5;
+  transform: scaleY(1);
+}
+
+.model-row.is-current .model-hit::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
+.model-row.is-current .model-hit {
+  cursor: default;
+}
+
+.model-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.model-label {
+  font-size: 13px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-row.is-custom .model-label {
+  color: var(--text-body);
+}
+
+/* 等宽 model id：≥12px + 1.5 行高，长串（gpt-5.1-turbo-preview-2026-01）不再挤成一条 */
+.model-id {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.model-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding-right: 2px;
+}
+
+.model-note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.model-state {
+  font-size: 11.5px;
+  color: var(--state-ok);
+  white-space: nowrap;
+}
+
+.model-ops {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+/* 测试连通性的结果徽标：延迟就落在模型名后面（使用中之前）。
+ * 阈值与弹窗一致：<600 绿 / <1800 黄 / 其它红；失败显示「失败」。
+ * 颜色与边框色沿用 .latency 的既有过渡（只动 color / border-color）。 */
+.model-latency {
+  font-size: 11px;
+  line-height: 1.5;
+  padding: 1px 7px;
+  white-space: nowrap;
+}
+
+.model-latency.is-fast {
+  color: var(--state-ok);
+  border-color: rgba(74, 222, 128, 0.35);
+}
+
+.model-latency.is-medium {
+  color: var(--state-warn);
+  border-color: rgba(251, 191, 36, 0.35);
+}
+
+.model-latency.is-slow,
+.model-latency.is-error {
+  color: var(--state-error);
+  border-color: rgba(248, 113, 113, 0.35);
+}
+
+/* 工具条里那句测试口径：独占一行，不挤按钮（工具条是 flex-wrap: wrap 的） */
+.provider-testhint {
+  flex-basis: 100%;
+  margin-top: 2px;
+}
+
+/* 模型列表的空态提示（没获取过 / 拉到了空）：一句话说清下一步做什么 */
+.provider-empty {
+  margin-top: 2px;
+  padding: 8px 10px;
+  border: 1px dashed var(--border-glass);
+  border-radius: var(--radius-md);
+  line-height: 1.6;
+}
+
+.model-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* ───────────────────────── 自定义模型弹层 ───────────────────────── */
+.modal {
+  width: min(470px, calc(100vw - 32px));
+  /* 全局 * { margin: 0 } 会把 UA 的 dialog 居中（margin: auto）一起清掉，这里补回来 */
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border-glass-bright);
+  border-radius: var(--radius-lg);
+  background: #101116;
+  color: var(--text-body);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.55);
+}
+
+.modal::backdrop {
+  background-color: rgba(4, 5, 7, 0.66);
+}
+
+.modal[open] {
+  animation: modalEnter var(--dur-base) var(--ease-out-expo) both;
+}
+
+@keyframes modalEnter {
+  from { opacity: 0; transform: translateY(10px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.modal-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 16px;
+}
+
+.modal-head h2 {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-main);
+  letter-spacing: -0.01em;
+}
+
+.modal-head p {
+  margin-top: 5px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.field-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.field .ctl {
+  width: 100%;
+}
+
+.modal-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 2px;
 }
 
 .btn {
@@ -512,10 +1163,10 @@ body {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 30px;
+  min-height: 32px;
   padding: 0 12px;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   font-weight: 500;
   color: var(--text-body);
   background: rgba(255, 255, 255, 0.06);
@@ -526,6 +1177,7 @@ body {
   transition: background-color var(--dur-fast) var(--ease-out-expo),
     border-color var(--dur-fast) var(--ease-out-expo),
     color var(--dur-fast) var(--ease-out-expo),
+    opacity var(--dur-fast) var(--ease-out-expo),
     transform var(--dur-instant) var(--ease-out-circ);
 }
 
@@ -585,14 +1237,14 @@ body {
 }
 
 .btn-icon {
-  width: 30px;
-  min-width: 30px;
+  width: 32px;
+  min-width: 32px;
   padding: 0;
 }
 
 .btn-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .link-btn {
@@ -600,7 +1252,7 @@ body {
   border: none;
   color: var(--text-main);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
@@ -709,7 +1361,7 @@ body {
   border-radius: 6px;
   color: var(--text-muted);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-out-expo), transform var(--dur-instant) var(--ease-out-circ);
   white-space: nowrap;
@@ -774,9 +1426,9 @@ body {
 }
 
 .range-out {
-  min-width: 62px;
+  min-width: 66px;
   text-align: right;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-main);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.01em;
@@ -796,7 +1448,7 @@ body {
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-glass);
   background: rgba(255, 255, 255, 0.04);
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-muted);
   cursor: pointer;
 }
@@ -827,7 +1479,7 @@ body {
   padding: 1px 7px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-glass);
-  font-size: 10.5px;
+  font-size: 11.5px;
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -840,17 +1492,19 @@ body {
 
 .mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 11.5px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text-body);
 }
 
 .latency {
-  font-size: 11px;
+  font-size: 12px;
   padding: 3px 8px;
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-glass);
   color: var(--state-ok);
   font-variant-numeric: tabular-nums;
+  transition: color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo);
 }
 
 /* ───────────────────────── 场景卡片 ───────────────────────── */
@@ -907,15 +1561,15 @@ body {
 }
 
 .scenario-name {
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 600;
   color: var(--text-main);
 }
 
 .scenario-hint {
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-dim);
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 /* ───────────────────────── 术语库工作区 ───────────────────────── */
@@ -928,7 +1582,10 @@ body {
   border-bottom: 1px solid rgba(255, 255, 255, 0.055);
 }
 
-.gloss-layout {
+/* 左窄右宽的两栏工作区：术语库（包列表 + 表格）与翻译场景（场景列表 + 分层详情）
+   共用同一条栅格，避免两个编辑器各长一套视觉语言 */
+.gloss-layout,
+.scenario-layout {
   display: grid;
   grid-template-columns: 218px minmax(0, 1fr);
   gap: 16px;
@@ -951,11 +1608,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 10px;
-  letter-spacing: 0.14em;
+  font-size: 11px;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-muted);
-  padding: 2px 4px 4px;
+  padding: 2px 4px 5px;
 }
 
 .pack-list {
@@ -966,17 +1623,37 @@ body {
   overflow-y: auto;
 }
 
+/* 选中态：背景 + 左侧 2px 标线同时过渡（标线走 scaleY，只动 transform）。
+ * 选中切换由 JS 就地切 class（不重建列表），所以过渡真的会播。 */
 .pack-item {
+  position: relative;
   display: flex;
   flex-direction: column;
-  gap: 1px;
-  padding: 7px 9px;
+  gap: 2px;
+  padding: 8px 9px 8px 11px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
   text-align: left;
   cursor: pointer;
-  transition: background-color var(--dur-fast) var(--ease-out-expo), border-color var(--dur-fast) var(--ease-out-expo);
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo),
+    color var(--dur-fast) var(--ease-out-expo);
+}
+
+.pack-item::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 2px;
+  background: #ffffff;
+  opacity: 0;
+  transform: scaleY(0.3);
+  transition: opacity var(--dur-fast) var(--ease-out-expo),
+    transform var(--dur-base) var(--spring-snappy);
 }
 
 .pack-item:hover {
@@ -988,6 +1665,11 @@ body {
   border-color: rgba(255, 255, 255, 0.18);
 }
 
+.pack-item.active::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
 .pack-item-top {
   display: flex;
   align-items: center;
@@ -996,7 +1678,7 @@ body {
 }
 
 .pack-item-name {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-main);
   font-weight: 500;
   white-space: nowrap;
@@ -1005,15 +1687,23 @@ body {
 }
 
 .pack-item-count {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
 }
 
 .pack-item-meta {
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-dim);
+}
+
+/* 包列表底部动作区：竖排（两个 btn-block 是 inline-flex，不排成一列会同挤一行） */
+.pack-rail-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 2px;
 }
 
 .gloss-editor {
@@ -1037,7 +1727,7 @@ body {
 
 .editor-count {
   margin-left: auto;
-  font-size: 10.5px;
+  font-size: 12px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
@@ -1051,7 +1741,8 @@ body {
   border: 1px dashed rgba(251, 191, 36, 0.35);
   background: rgba(251, 191, 36, 0.06);
   color: #fcd34d;
-  font-size: 11px;
+  font-size: 12.5px;
+  line-height: 1.5;
 }
 
 .table-wrap {
@@ -1071,11 +1762,11 @@ body {
   position: sticky;
   top: 0;
   z-index: 2;
-  padding: 8px 10px;
+  padding: 9px 10px;
   text-align: left;
-  font-size: 10px;
+  font-size: 12.5px;
   font-weight: 600;
-  letter-spacing: 0.12em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
   background: rgba(14, 15, 18, 0.96);
@@ -1101,9 +1792,12 @@ body {
   background: rgba(255, 255, 255, 0.035);
 }
 
+/* 单元格 12.5px + 7px 内边距 ⇒ 行高约 37px（要求 ≥34px，改前 36px）；
+   146 行仍在页面滚动里浏览，没有变成更重的表格 */
 .gloss-table td {
-  padding: 6px 10px;
-  font-size: 11.5px;
+  padding: 7px 10px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text-body);
   vertical-align: middle;
   overflow: hidden;
@@ -1121,7 +1815,7 @@ body {
 
 .gloss-table td.cell-cat {
   color: var(--text-dim);
-  font-size: 10.5px;
+  font-size: 12px;
 }
 
 .row-ops {
@@ -1132,8 +1826,8 @@ body {
 }
 
 .op-btn {
-  padding: 3px 7px;
-  font-size: 10.5px;
+  padding: 3px 8px;
+  font-size: 12px;
   border-radius: var(--radius-sm);
   border: 1px solid transparent;
   background: transparent;
@@ -1155,13 +1849,15 @@ body {
 .gloss-input {
   width: 100%;
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-main);
   background: rgba(255, 255, 255, 0.07);
   border: 1px solid rgba(255, 255, 255, 0.22);
   border-radius: var(--radius-sm);
-  padding: 4px 6px;
+  padding: 5px 6px;
   outline: none;
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo);
 }
 
 .gloss-input:focus {
@@ -1179,14 +1875,216 @@ tr.is-editing {
 }
 
 .empty-title {
-  font-size: 13px;
+  font-size: 14px;
   color: var(--text-body);
-  margin-bottom: 4px;
+  margin-bottom: 5px;
 }
 
 .empty-desc {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-dim);
+}
+
+/* 弹层 / 场景编辑的行内错误：不用 alert 弹窗，也不静默截断用户输入 */
+.field-error {
+  font-size: 12px;
+  color: var(--state-error);
+  line-height: 1.55;
+}
+
+/* ───────────────────────── 翻译场景工作区 ───────────────────────── */
+.scene-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.scene-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.scene-title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text-main);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.scene-desc {
+  font-size: 12.5px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+
+.scene-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* 总说明：这是实际注入的 system prompt，从上到下拼接 */
+.scene-intro {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  line-height: 1.65;
+  padding: 0 2px;
+}
+
+.layer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.layer-card {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.025);
+  transition: border-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.layer-card:hover {
+  border-color: var(--border-glass-bright);
+}
+
+.layer-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.layer-index {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.layer-title {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-main);
+  letter-spacing: -0.005em;
+}
+
+/* 卡片右上角：这一层由什么控制（场景自带 / 全局固定 / 受某设置控制 / 契约不可改） */
+.layer-owner {
+  margin-left: auto;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-glass);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.layer-summary {
+  font-size: 12.5px;
+  color: var(--text-body);
+  line-height: 1.6;
+}
+
+.layer-detail {
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+/* 层正文：等宽 + 深底，默认最多 8 行，超出折叠（.is-open 才展开）。
+   max-height 用 em 折算行高并补上内边距与 1px 边框：直接写 8.8em 只够 4 行多。
+   「展开全文」靠 max-height 过渡（allowed 属性），不再一次性跳开。 */
+.layer-body {
+  margin: 0;
+  max-height: calc(1.6em * 8 + 22px);
+  overflow: hidden;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-body);
+  white-space: pre-wrap;
+  word-break: break-word;
+  transition: max-height var(--dur-base) var(--ease-out-expo);
+}
+
+.layer-card.is-open .layer-body {
+  max-height: calc(1.6em * 24 + 22px);
+  overflow: auto;
+}
+
+.layer-more {
+  display: none;
+  align-self: flex-start;
+}
+
+.layer-card.is-clamped .layer-more {
+  display: inline-flex;
+}
+
+.layer-edit {
+  align-self: flex-start;
+}
+
+/* 术语层不预览（按批生成），这里只留一句说明位，保持层的顺序可见 */
+.layer-ghost {
+  padding: 9px 12px;
+  border-radius: var(--radius-md);
+  border: 1px dashed var(--border-glass);
+  font-size: 12px;
+  color: var(--text-dim);
+  line-height: 1.6;
+}
+
+/* 场景人设编辑器：固定 ~240px 高、等宽、可纵向拉伸 */
+.scene-editor-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scene-editor-field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.scene-editor {
+  width: 100%;
+  min-height: 240px;
+  height: 240px;
+  resize: vertical;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass-bright);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-main);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  overflow: auto;
 }
 
 /* ───────────────────────── 字幕预览 ───────────────────────── */
@@ -1212,7 +2110,7 @@ tr.is-editing {
 }
 
 .preview-time {
-  font-size: 10px;
+  font-size: 11.5px;
   color: rgba(255, 255, 255, 0.5);
   font-variant-numeric: tabular-nums;
 }
@@ -1238,6 +2136,10 @@ tr.is-editing {
   background: rgba(255, 255, 255, 0.6);
 }
 
+/* 位置由 JS 写 top 控制（main.ts: sub.style.top = offsetY%）。
+   这里原来登记 transition: bottom —— 而 bottom 已被强制成 auto，那条过渡永不触发。
+   处理方式：删掉这条（而不是改成 top）——top 是布局属性，逐帧改会触发重排，
+   且会让滑块跟随变「黏」；预览本来就该实时跟随。 */
 .preview-sub {
   position: absolute;
   left: 50%;
@@ -1249,8 +2151,7 @@ tr.is-editing {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  transition: background-color var(--dur-fast) var(--ease-out-expo),
-    bottom var(--dur-fast) var(--ease-out-expo);
+  transition: background-color var(--dur-fast) var(--ease-out-expo);
 }
 
 .preview-sub p {
@@ -1270,7 +2171,7 @@ tr.is-editing {
   border: 1px solid var(--border-glass-bright);
   background: rgba(20, 21, 26, 0.96);
   color: var(--text-main);
-  font-size: 12px;
+  font-size: 13px;
   opacity: 0;
   pointer-events: none;
   transition: opacity var(--dur-fast) var(--ease-out-expo), transform var(--dur-base) var(--spring-snappy);
@@ -1292,8 +2193,33 @@ tr.is-editing {
   outline: none;
 }
 
-/* ───────────────────────── 响应式 ───────────────────────── */
-@media (max-width: 880px) {
+/* ───────────────────────── 响应式（三档，任务四 · 需求八） ─────────────────────────
+ * 档 1（默认，≥1280）：侧栏 218px + 主区自适应加宽（上限 --content-max 1100，居中）
+ * 档 2（1024–1279）：侧栏收窄到 180，主区仍有 ≥720 可用宽度
+ * 档 3（≤1023，含 768–1023）：侧栏变顶部横向滚动页签，主区单列
+ * 三档都必须 `scrollWidth - clientWidth === 0`（实测见 docs/OPTIONS-0.4.0.md §13.3）。
+ * 不用 transform: scale() —— 缩放会糊字、破坏点击热区，要的是布局与字号的流体化。
+ */
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .shell {
+    grid-template-columns: 180px minmax(0, 1fr);
+  }
+
+  /* 主区兜底 720：这一档最窄是 1024 - 180 = 844，仍有余量，不会撑出横向滚动条 */
+  .panes {
+    min-width: 720px;
+  }
+
+  .navitem {
+    padding: 8px 10px;
+  }
+
+  .navitem-label {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 1023px) {
   .shell {
     grid-template-columns: 1fr;
   }
@@ -1330,18 +2256,28 @@ tr.is-editing {
     border: none;
   }
 
-  .pane {
-    padding: 20px 16px 48px;
+  /* 单列铺满：这一档没有侧栏，限制宽度只会留出无意义的边 */
+  .panes {
+    min-width: 0;
   }
 
-  .gloss-layout {
+  .pane {
+    padding: 20px 16px 48px;
+    max-width: none;
+    margin: 0;
+  }
+
+  .gloss-layout,
+  .scenario-layout {
     grid-template-columns: 1fr;
   }
 
   .pack-rail {
     position: static;
   }
+}
 
+@media (max-width: 880px) {
   .row {
     flex-direction: column;
     align-items: flex-start;
@@ -1377,14 +2313,868 @@ tr.is-editing {
   .pane.active,
   .pane.active > .rows > .row,
   .pane.active > .gloss-layout,
-  .pane.active > .preview-stage {
+  .pane.active > .scenario-layout,
+  .pane.active > .spec-block,
+  .pane.active > .preview-stage,
+  .modal[open],
+  .modal.is-closing,
+  .modal::backdrop,
+  .modal.is-closing::backdrop {
     animation: none !important;
     opacity: 1 !important;
     transform: none !important;
   }
 
+  /* 新增的过渡：滑块 / 厂牌面板 / details 标记 / 选中标线 / 复制反馈 / 常规页两个折叠块 */
   .nav-marker,
-  .seg-glider {
+  .seg-glider,
+  .provider-panel,
+  .fold-panel,
+  .details-body,
+  .fold-chevron,
+  .provider-chevron,
+  .provider-advanced > summary::before,
+  .spec-block > summary::before,
+  .pack-item::before,
+  .btn.is-copied {
+    transition: none !important;
+  }
+
+  /* 面板直接以终态呈现（0fr 的 collapsed 由 .is-open 覆盖，1ms 也够） */
+  .provider-panel {
+    opacity: 1 !important;
+  }
+
+  .provider-group:not(.is-open) > .provider-panel {
+    opacity: 0 !important;
+  }
+
+  /* 常规页两个折叠块同一套降级：展开即终态，收起仍是 0fr + 透明 */
+  .fold-panel {
+    opacity: 1 !important;
+  }
+
+  .fold:not(.is-open) > .fold-panel {
+    opacity: 0 !important;
+  }
+
+  /* details 包装层：展开即 1fr，收起仍是 0fr（details 关闭时本来也不渲染内容） */
+  .details-body {
+    opacity: 1 !important;
+  }
+
+  .is-motion > .details-body:not(.is-open) {
+    opacity: 0 !important;
+  }
+
+  /* 自动降级的顺序列表：折叠与拖拽让位都直接呈现终态 */
+  .depend-panel {
+    opacity: 1 !important;
+  }
+
+  .depend-panel:not(.is-open) {
+    opacity: 0 !important;
+  }
+
+  .fallback-item,
+  .fallback-grip,
+  .fallback-move,
+  .fallback-drop {
     transition: none !important;
   }
 }
+
+/* 窄屏下模型工具栏改为竖排（行内 badge 让位给 model id，避免横向溢出） */
+@media (max-width: 880px) {
+  .model-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .model-toolbar .model-manual {
+    flex: 1 1 auto;
+    max-width: none;
+  }
+
+  .model-tail {
+    padding-right: 4px;
+  }
+
+  .icon-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  /* 竖排时 .row 变成 column，面板不再需要「占满一整行」的 flex-basis */
+  .row-depend > .depend-panel {
+    flex-basis: auto;
+  }
+}
+/* ───────────────────────── 场景：新建 / 导入 / 规范说明 ─────────────────────────
+ * 三块都是「翻译场景」分区里的新成员，视觉沿用既有语言：
+ * 报告区用语义错误色、规范说明用 1px 玻璃边 + 等宽代码块、弹层复用 .modal。
+ * 不新增任何 :root 令牌（颜色全部取自已有令牌或与既有错误色同一组 rgba）。
+ */
+
+/* 导入失败报告：逐条列出原因（字段级 / 条目级），不用 alert 打断 */
+.import-report {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(248, 113, 113, 0.35);
+  background: rgba(248, 113, 113, 0.07);
+}
+
+.import-report-title {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: #fca5a5;
+}
+
+.import-report-list {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--text-body);
+}
+
+/* 文件格式规范：默认收起（details 不带 open） */
+.spec-block {
+  margin-top: 16px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.spec-block > summary {
+  padding: 11px 14px;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.spec-block > summary:hover {
+  color: var(--text-main);
+}
+
+.spec-block[open] > summary {
+  border-bottom: 1px solid var(--border-glass);
+  color: var(--text-body);
+}
+
+/* 内容已包进 .details-body（高度过渡的包装层），不再是最外层的直接子元素 */
+.spec-block .spec-lead {
+  margin: 10px 14px 0;
+  font-size: 12.5px;
+  line-height: 1.65;
+  color: var(--text-dim);
+}
+
+.spec-table {
+  width: calc(100% - 28px);
+  margin: 8px 14px;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.spec-table th,
+.spec-table td {
+  padding: 6px 8px;
+  text-align: left;
+  vertical-align: top;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.spec-table th {
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.spec-table td {
+  line-height: 1.6;
+  color: var(--text-body);
+}
+
+.spec-table td:first-child {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-main);
+}
+
+.spec-code {
+  margin: 8px 14px 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  background: rgba(0, 0, 0, 0.3);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--text-body);
+  white-space: pre;
+  overflow-x: auto;
+}
+
+/* 弹层：模板正文与「新建场景」共用一个更宽的弹层 */
+.modal-wide {
+  width: min(680px, calc(100vw - 32px));
+}
+
+/* 弹层里的提示词框矮一点：弹层本身已经在屏幕中间，240px 会顶到视口外 */
+.modal .scene-editor {
+  height: 180px;
+  min-height: 180px;
+}
+
+.tpl-body {
+  width: 100%;
+  min-height: 340px;
+  max-height: min(58vh, 460px);
+  resize: vertical;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass-bright);
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-main);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  overflow: auto;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 任务四 · 需求六：补齐缺失的过渡 / 动效
+ * ──────────────────────────────────────────────────────────────────────────
+ * 纪律：只过渡 transform / opacity / grid-template-rows / max-height /
+ * background-color / border-color / color；时长取既有令牌（--dur-*）；
+ * 禁止 all 通配过渡；prefers-reduced-motion 下全部归零（见上面的降级块）。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. 原生 <details>（规范说明 / 高级 Base URL）
+ * 原生 ::marker 无法旋转，改成自绘三角：形状与 .provider-chevron 同一套画法，
+ * 展开时 rotate(90deg) 走 transform 过渡（时长与内容同为 --dur-base）。
+ *
+ * 高度过渡：details 关闭时内容根本不渲染，直接给内容写 transition 没有起点。
+ * 所以内容再包一层 .details-body（display: grid + 0fr → 1fr + opacity），由 main.ts
+ * 的 toggle 监听加 .is-open —— 与两个 .fold / 厂牌面板的声明逐字相同，
+ * 五处 disclosure 的 computed transition-property / duration 因此完全一致。
+ * 收起方向仍是瞬切（details 关闭后内容不渲染，没有可过渡的终态），属原生行为。 */
+.provider-advanced > summary,
+.spec-block > summary {
+  list-style: none;
+}
+
+.provider-advanced > summary::-webkit-details-marker,
+.spec-block > summary::-webkit-details-marker {
+  display: none;
+}
+
+.provider-advanced > summary::before,
+.spec-block > summary::before {
+  content: "";
+  display: inline-block;
+  width: 0;
+  height: 0;
+  margin-right: 7px;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid currentColor;
+  transform: rotate(0deg);
+  transition: transform var(--dur-base) var(--ease-out-expo);
+  vertical-align: 1px;
+}
+
+.provider-advanced[open] > summary::before,
+.spec-block[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+/* 内容包装层：默认 1fr（没有 JS 时内容照常可读，不会被 CSS 藏死）。
+   .is-motion 由 attachDetailsMotion() 添加，之后才切成 0fr 并由 .is-open 推到 1fr。 */
+.details-body {
+  display: grid;
+  grid-template-rows: 1fr;
+  opacity: 1;
+  transition: grid-template-rows var(--dur-base) var(--spring-soft),
+    opacity var(--dur-base) var(--ease-out-expo);
+}
+
+.is-motion > .details-body {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.is-motion > .details-body.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.details-body-inner {
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── 2. 弹层：遮罩淡入 + 关闭反向
+ * 入场沿用 .modal[open] 的 modalEnter（scale + opacity，已有）；
+ * 这里补遮罩淡入，以及关闭时的 .is-closing（main.ts 加类 → 等一个 --dur-fast → close()）。
+ * 原生 dialog 没有「关闭动画」这回事，只能靠这个类把 close() 延后一拍。 */
+.modal::backdrop {
+  animation: backdropEnter var(--dur-base) var(--ease-out-expo) both;
+}
+
+@keyframes backdropEnter {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes modalExit {
+  from {
+    opacity: 1;
+    transform: none;
+  }
+  to {
+    opacity: 0;
+    transform: translateY(6px) scale(0.99);
+  }
+}
+
+@keyframes backdropExit {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+/* 放在 .modal[open] 之后：同特异性时后写者赢，关闭时才轮到这段 */
+.modal.is-closing {
+  animation: modalExit var(--dur-fast) var(--ease-in-expo) both;
+}
+
+.modal.is-closing::backdrop {
+  animation: backdropExit var(--dur-fast) var(--ease-in-expo) both;
+}
+
+/* ── 3. 复制成功的按钮状态（不弹窗）
+ * 文字改成「已复制」+ 底色切到成功色，160ms 过渡；main.ts 1.2s 后还原。
+ * 固定最小宽度：两个文案字数不同，宽度跳动会把旁边的「关闭」推走。 */
+#tpl-copy {
+  min-width: 88px;
+}
+
+.btn.is-copied,
+.btn.is-copied:hover {
+  color: #06210f;
+  background: var(--state-ok);
+  border-color: var(--state-ok);
+}
+
+/* ── 4. 零散补课：有状态变化但原先没有过渡的交互点
+ * （.navitem / .seg / .switch / .ctl / .btn / .model-row / .pack-item /
+ *  .provider-row / .save-chip / .toast / .latency 本来就有，这里只补缺的那几处） */
+.provider-row {
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    color var(--dur-fast) var(--ease-out-expo);
+}
+
+.provider-icon {
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.link-btn {
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+
+.model-hit {
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 任务四 · 需求五 + 六：常规页两处折叠
+ * ──────────────────────────────────────────────────────────────────────────
+ * 1) 「翻译服务」= 可折叠的厂牌选择器（收起：图标 + 厂牌名 + 当前模型 id + 箭头；
+ *    展开：PROVIDERS 全量通道 + 底部一行「更多模型与自定义模型 → 服务与模型」）。
+ * 2) 「翻译场景」= 可折叠的场景网格（收起：当前场景名 + 一句说明 + 总数；展开：
+ *    原来那张 .scenario-grid，卡片样式一个像素都没改）。
+ *
+ * 折叠语义与「服务与模型」的厂牌展开完全一致（同一套类名与时长）：
+ *   - aria-expanded 在按钮上，面板用 hidden + inert 保证收起不可聚焦；
+ *   - 展开 / 收起只动 grid-template-rows: 0fr → 1fr 与 opacity，不碰 height；
+ *   - 箭头只转 transform（rotate(0 → 90deg)），160ms --ease-out-expo。
+ * 全部尺寸取自既有令牌与 --radius-*，宿主动效测试守着「只动允许属性」。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+.fold {
+  width: 100%;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* 收起态那一行：整行可点，最小高度与 .provider-free-hit 一致（44px） */
+.fold-toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    color var(--dur-fast) var(--ease-out-expo);
+}
+
+.fold-toggle:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.fold-toggle[aria-expanded="true"] {
+  color: var(--text-main);
+}
+
+.fold-icon {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+.fold-main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.35;
+}
+
+.fold-title {
+  font-size: 13px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fold-sub {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 当前模型 id：等宽，和「服务与模型」里的 .model-id 同一套字体栈 */
+.fold-sub.fold-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  color: var(--text-muted);
+}
+
+.fold-tail {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.fold-badge {
+  font-size: 12px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 箭头：与 .provider-chevron 同一套画法（CSS 三角形，界面符号不是品牌图形） */
+.fold-chevron {
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-muted);
+  transform: rotate(0deg);
+  transition: transform var(--dur-base) var(--ease-out-expo);
+}
+
+.fold.is-open .fold-chevron {
+  transform: rotate(90deg);
+  border-left-color: var(--text-main);
+}
+
+/* 展开面板：与 .provider-panel 同一条折叠曲线。
+   内层负责 overflow: hidden；上下留白由子元素承担，收起态高度才真的为 0。 */
+.fold-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  /* 与 .provider-panel / .details-body 逐字相同（问题 5） */
+  transition: grid-template-rows var(--dur-base) var(--spring-soft),
+    opacity var(--dur-base) var(--ease-out-expo);
+}
+
+.fold.is-open > .fold-panel {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+.fold-panel-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fold-panel-inner > :first-child {
+  padding-top: 2px;
+}
+
+.fold-panel-inner > :last-child {
+  padding-bottom: 8px;
+}
+
+/* 收起态靠 hidden 属性；必须显式盖掉上面的 display: grid，否则面板会一直展开 */
+.fold-panel[hidden] {
+  display: none;
+}
+
+/* 展开态的通道列表：行结构复用 .provider-row（等高、同一套 hover 与左侧标线），
+   只补「使用中」那条标线 —— 折叠块里没有 .provider-group.is-current 可挂 */
+.fold-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.fold-list .provider-row[aria-pressed="true"]::before {
+  opacity: 0.9;
+  transform: scaleY(1);
+}
+
+.fold-list .provider-row[aria-pressed="true"] .provider-name {
+  color: var(--text-main);
+}
+
+/* 面板底部：细字链接，点击切到「服务与模型」分区 */
+.fold-more {
+  align-self: flex-start;
+  margin: 4px 0 0 10px;
+  padding: 4px 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out-expo);
+}
+
+.fold-more:hover {
+  color: var(--text-main);
+}
+
+/* 场景折叠：展开后就是原来那张网格，卡片样式不动，只负责给它一个容器内边距 */
+.fold-scenario .scenario-grid {
+  padding-top: 2px;
+  padding-bottom: 6px;
+  padding-left: 10px;
+  padding-right: 10px;
+}
+
+/* ══════════════════════════════════════════════════════════════════════════
+ * 任务四 · 「自动降级」+ 降级顺序（v0.4.2）
+ * ──────────────────────────────────────────────────────────────────────────
+ * 1) 开关就是既有的 .switch（沿用原样式），标题改叫「自动降级」；
+ * 2) 顺序列表挂在同一个 .row 里（.row-depend 允许换行，列表自己占满一整行），
+ *    开关关着 → grid-template-rows 0fr + opacity 0 收起（与 .fold-panel /
+ *    .provider-panel / .details-body 逐字相同的一条过渡声明，300ms）；
+ * 3) 行结构与 .provider-row 同一套口径（min-height 36px / gap 10px / 图标 28px），
+ *    不新造视觉语言；所有尺寸只取既有令牌，没有新增自定义属性。
+ * 动效纪律：只过渡 transform / opacity / grid-template-rows / background-color /
+ * border-color / color —— 拖拽让位只写 transform，不碰 top / height。
+ * ══════════════════════════════════════════════════════════════════════════ */
+
+/* 开关那一行允许换行：第三块（列表面板）自己占满第二行 */
+.row-depend {
+  flex-wrap: wrap;
+  /* 纵向不留 gap：收起时面板高度为 0，28px 的间距会变成一条空档 */
+  gap: 0 28px;
+}
+
+.depend-panel {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  /* 开关那一行允许换行，这块自己占满第二行 */
+  flex: 0 0 100%;
+  width: 100%;
+  min-width: 0;
+  transition: grid-template-rows var(--dur-base) var(--spring-soft),
+    opacity var(--dur-base) var(--ease-out-expo);
+}
+
+.depend-panel.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* 作者样式会压过 UA 的 [hidden] { display: none }，这里显式盖掉：
+   否则「首次渲染的收起态」也会按 grid 占位 */
+.depend-panel[hidden] {
+  display: none;
+}
+
+/* 内层负责 overflow: hidden 与 min-height: 0（收起时高度才能真正归零） */
+.fallback-order-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.fallback-order-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  padding-top: 4px;
+}
+
+.fallback-order-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-body);
+}
+
+.fallback-grip-hint {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.fallback-empty,
+.fallback-hint {
+  padding-left: 2px;
+}
+
+.fallback-list {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  min-width: 0;
+}
+
+/* 一行 = 手柄 + 图标 + 厂牌名（+ 状态）+ 序号 + 上/下移 */
+.fallback-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  /* 行高与 .provider-row 一致（触控目标 32px 是既定取舍，见 §12 的登记） */
+  min-height: 36px;
+  padding: 6px 6px 6px 4px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  background: rgba(255, 255, 255, 0.03);
+  outline: none;
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo),
+    opacity var(--dur-fast) var(--ease-out-expo),
+    transform var(--dur-fast) var(--ease-out-expo);
+}
+
+.fallback-item:hover {
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.fallback-item:focus-visible {
+  border-color: var(--border-glass-bright);
+  box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.08);
+}
+
+/* 拖拽中：被拖那行跟手（摘掉过渡）+ 半透明 + 提升；其余行保留 transform 过渡做平滑让位 */
+.fallback-item.is-dragging {
+  transition: none;
+  opacity: 0.72;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--border-glass-bright);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.45);
+  z-index: 1;
+}
+
+.fallback-list.is-sorting .fallback-item:not(.is-dragging) {
+  cursor: grabbing;
+}
+
+/* 未配 Key 的厂牌：留在列表里但置灰（不替用户删条目，Key 可以事后补） */
+.fallback-item.is-unconfigured {
+  background: transparent;
+}
+
+.fallback-item.is-unconfigured .fallback-name,
+.fallback-item.is-unconfigured .fallback-index {
+  color: var(--text-dim);
+}
+
+.fallback-item.is-unconfigured .provider-icon {
+  opacity: 0.5;
+}
+
+/* 固定兜底行：不可拖、无手柄、无上/下移，只把语气压低一档 */
+.fallback-item.is-final {
+  background: rgba(255, 255, 255, 0.015);
+  border-color: var(--border-glass);
+  border-style: dashed;
+}
+
+/* 拖拽手柄：视觉 20px，命中区 32px（用负 margin 撑住，行高仍是 36px 不被顶开） */
+.fallback-grip {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  margin: -4px 0;
+  border-radius: var(--radius-sm);
+  color: var(--text-muted);
+  font-size: 17px;
+  line-height: 1;
+  cursor: grab;
+  /* 触控：按住手柄不滚页面（Pointer Events 才有意义，HTML5 DnD 在移动端本就不触发） */
+  touch-action: none;
+  user-select: none;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.fallback-grip[data-grip]:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.fallback-grip:active {
+  cursor: grabbing;
+}
+
+/* 占位（未配 Key 行 / 固定兜底行）：只负责对齐，不给可拖外观 */
+.fallback-grip.is-ghost {
+  cursor: default;
+  color: transparent;
+}
+
+.fallback-main {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.fallback-name {
+  font-size: 13.5px;
+  color: var(--text-main);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fallback-state {
+  font-size: 12px;
+  color: var(--text-dim);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fallback-tail {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 0 0 auto;
+}
+
+/* 序号：等宽，和 .model-id / .fold-mono 同一套字体栈 */
+.fallback-index {
+  min-width: 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* 上移 / 下移：命中区 32px（负 margin 保持行高），视觉上就是两个小箭头 */
+.fallback-move {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin: -4px 0;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.fallback-move:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.07);
+}
+
+/* 已在头 / 尾：不 disabled（disabled 会把焦点丢回 body，连按就断了），只弱化并 no-op */
+.fallback-move[aria-disabled="true"] {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.fallback-move[aria-disabled="true"]:hover {
+  color: var(--text-muted);
+  background: transparent;
+}
+
+/* 插入指示线：绝对定位在列表里，位置只靠 transform 写（不碰 top，不抖） */
+.fallback-drop {
+  position: absolute;
+  left: 4px;
+  right: 4px;
+  top: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--text-main);
+  opacity: 0;
+  pointer-events: none;
+  transition: transform var(--dur-instant) var(--ease-out-expo),
+    opacity var(--dur-instant) var(--ease-out-expo);
+}
+
+.fallback-drop.is-on {
+  opacity: 0.85;
+}
+

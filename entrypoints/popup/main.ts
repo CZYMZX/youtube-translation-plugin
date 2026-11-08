@@ -1,7 +1,7 @@
-/**
+﻿/**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - 扩展弹出设置面板 (Popup Main Controller)
- * 当前版本: v0.4.1 (独立高级设置页)
+ * 当前版本: v0.4.3 (独立高级设置页)
  *
  * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
  * 1. 翻译服务引擎参数折叠规范：当选择大模型服务（DeepSeek、OpenAI、Gemini）时，
@@ -38,6 +38,21 @@ import {
   ICON_CHECK,
   ICON_ALERT
 } from '../../utils/icons';
+/**
+ * 厂牌与模型清单：**只读引用**，清单只有 utils/models.ts 这一份（任务四）。
+ * 弹窗不再自带 PRESET_MODELS 副本 —— 那份副本里的 gpt-4o-mini / gemini-1.5-flash
+ * 等型号早已下架，用户点了就 404，而且与设置页的 8 通道对不上。
+ */
+import {
+  PROVIDERS,
+  FREE_PROVIDER_ID,
+  getProvider,
+  findProviderByModelId,
+  providerHasModel,
+  cachedModelsKey,
+  type Provider
+} from '../../utils/models';
+import { providerIconHtml } from '../../utils/provider-icons';
 
 function hexToRgba(hex: string, opacity: number): string {
   if (!hex || hex === 'transparent' || hex === '#00000000') return 'transparent';
@@ -85,6 +100,8 @@ function renderStatus(
 const enabledToggle = document.getElementById('enabled-toggle') as HTMLInputElement;
 const targetLangSelect = document.getElementById('target-lang') as HTMLSelectElement;
 const serviceSelect = document.getElementById('service-select') as HTMLSelectElement;
+/** 已选中厂牌的图标（原生 <option> 放不下 SVG，图标只出现在选中态这一格） */
+const serviceIconEl = document.getElementById('service-icon') as HTMLElement | null;
 
 // 场景与推理
 const scenarioSelect = document.getElementById('scenario-select') as HTMLSelectElement;
@@ -122,6 +139,17 @@ const btnUploadScene = document.getElementById('btn-upload-scene') as HTMLButton
 const btnUploadGlossary = document.getElementById('btn-upload-glossary') as HTMLButtonElement | null;
 const sceneUploadInput = document.getElementById('scene-upload-input') as HTMLInputElement | null;
 const glossaryUploadInput = document.getElementById('glossary-upload-input') as HTMLInputElement | null;
+
+// 可折叠分区（场景 / 术语库，v0.4.2 问题 3）
+const sceneSectionEl = document.getElementById('section-scene') as HTMLElement | null;
+const sceneSectionToggle = document.getElementById('section-scene-toggle') as HTMLButtonElement | null;
+const sceneSectionBody = document.getElementById('section-scene-body') as HTMLElement | null;
+const sceneSectionCountEl = document.getElementById('scene-section-count') as HTMLElement | null;
+const glossarySectionEl = document.getElementById('section-glossary') as HTMLElement | null;
+const glossarySectionToggle = document.getElementById('section-glossary-toggle') as HTMLButtonElement | null;
+const glossarySectionBody = document.getElementById('section-glossary-body') as HTMLElement | null;
+const glossaryStateEl = document.getElementById('glossary-section-state') as HTMLElement | null;
+const glossaryPackCountEl = document.getElementById('glossary-pack-count') as HTMLElement | null;
 
 // 断句参数
 const pauseThresholdRange = document.getElementById('pause-threshold') as HTMLInputElement;
@@ -168,9 +196,13 @@ document.addEventListener('DOMContentLoaded', async () => {
     void chrome.runtime.openOptionsPage();
   });
   setupSmoothSwitchers();
+  /* 服务下拉由 PROVIDERS 动态填充（8 通道），必须早于 populateForm 设值 */
+  renderServiceOptions();
   await loadSettings();
   bindEvents();
   await initPacksUI();
+  bindPackSectionEvents();
+  await loadPackSectionState();
   updatePreview();
   checkTranslationConnectivity();
 });
@@ -185,7 +217,7 @@ function checkTranslationConnectivity() {
         if (networkAlert) {
           networkAlert.classList.remove('hidden');
           if (networkAlertText) {
-            networkAlertText.textContent = '当前网络无法直连 Google 免费翻译接口，建议开启科学代理或在下方切换为 DeepSeek / Gemini / OpenAI 翻译。';
+            networkAlertText.textContent = '当前网络无法直连 Google 免费翻译接口，建议开启科学代理，或在「翻译服务引擎」里切换为任一 AI 厂牌通道（共 7 家，Key 各记各的）。';
           }
         }
       } else {
@@ -336,83 +368,187 @@ async function loadSettings() {
   });
 }
 
-/**
- * 各服务商默认/推荐模型预设
+/* ══════════════════════════ 厂牌（8 通道）与按厂牌的 Key / 端点 ══════════════════════════
+ * 口径与设置页完全同源：清单来自 utils/models.ts#PROVIDERS，本文件不留第二份副本。
+ * 关键点：service 只是**协议出口**（google / gemini / openai / deepseek），claude / qwen /
+ * kimi / zhipu 的 service 都是 'openai'，所以「现在是哪一家」只能靠 providerId 说清。
+ * 设置里能被请求层读到的 apiKey / apiBaseUrl 只有一个，切厂牌时必须一次性换成目标厂牌
+ * 自己的那一份（providerKeys / providerBaseUrls），否则会「拿 A 家的 Key 请求 B 家的端点」→ 401。
  */
-const PRESET_MODELS: Record<string, Array<{ id: string; name?: string }>> = {
-  deepseek: [
-    { id: 'deepseek-chat', name: 'DeepSeek-V3 / Chat (推荐)' },
-    { id: 'deepseek-reasoner', name: 'DeepSeek-R1 / Reasoner (深度推理)' }
-  ],
-  openai: [
-    { id: 'gpt-4o-mini', name: 'GPT-4o mini (快速轻巧)' },
-    { id: 'gpt-4o', name: 'GPT-4o (旗舰全能)' },
-    { id: 'gemini-3.8-flash', name: 'Gemini 3.8 Flash (Antigravity推荐)' },
-    { id: 'gemini-3.5-flash-lite', name: 'Gemini 3.5 Flash Lite (极速低延迟)' },
-    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (高质)' }
-  ],
-  gemini: [
-    { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash (快速推荐)' },
-    { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (深度分析)' },
-    { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash (实验版)' }
-  ]
-};
+
+/** 免 Key 通道（PROVIDERS 里的 google-free） */
+function freeProvider(): Provider {
+  return getProvider(FREE_PROVIDER_ID) || (PROVIDERS[PROVIDERS.length - 1] as Provider);
+}
+
+/** 下拉当前选中的厂牌（option 的 value 就是 provider.id） */
+function activeProvider(): Provider {
+  return getProvider(serviceSelect.value) || freeProvider();
+}
+
+/**
+ * 由设置反推「该显示哪个厂牌」：
+ * providerId 有效且与 service 对得上 → 用它；否则按 modelName 反查；再否则按 service 落位。
+ * 老数据只有 service（没有 providerId）时靠后两步兜住，不会把 claude 显示成 openai。
+ */
+function resolvedProviderId(): string {
+  if (currentSettings.service === 'google') return FREE_PROVIDER_ID;
+
+  const direct = getProvider(currentSettings.providerId);
+  if (direct && direct.service === currentSettings.service) return direct.id;
+
+  const byModel = findProviderByModelId(currentSettings.modelName);
+  if (byModel && byModel.service === currentSettings.service) return byModel.id;
+
+  const byService = PROVIDERS.find((p) => p.service === currentSettings.service);
+  return (byService || freeProvider()).id;
+}
+
+/** 该厂牌自己存的那把 Key（不是「当前生效」的那把） */
+function providerKeyOf(provider: Provider): string {
+  return (currentSettings.providerKeys || {})[provider.id] || '';
+}
+
+/** 该厂牌被单独覆盖过的端点（空串 = 没覆盖，用厂牌声明的官方端点） */
+function providerBaseOverride(provider: Provider): string {
+  return (currentSettings.providerBaseUrls || {})[provider.id] || '';
+}
+
+/** 实际生效的端点：用户覆盖值优先，其次厂牌声明的官方端点（'' = 走官方 SDK 自带路径） */
+function providerBase(provider: Provider): string {
+  return providerBaseOverride(provider) || provider.defaultBaseUrl;
+}
+
+/**
+ * 写盘时用的 providerId。停在 Google 免费通道时保留「上次用的那个厂牌」，
+ * 不把 providerId 改成 google-free —— 设置页靠它决定展开哪一组厂牌面板。
+ */
+function providerIdForPersist(): string {
+  const provider = activeProvider();
+  if (provider.service !== 'google') return provider.id;
+  const previous = getProvider(currentSettings.providerId);
+  return previous && previous.service !== 'google' ? previous.id : FREE_PROVIDER_ID;
+}
+
+/** 服务下拉：首项 Google 免费翻译，其后按 PROVIDERS 声明顺序的 7 个厂牌 */
+function renderServiceOptions(): void {
+  if (!serviceSelect) return;
+  const free = freeProvider();
+  const ordered = [free, ...PROVIDERS.filter((p) => p.id !== free.id)];
+
+  serviceSelect.innerHTML = '';
+  for (const provider of ordered) {
+    const option = document.createElement('option');
+    option.value = provider.id;
+    option.textContent = provider.service === 'google'
+      ? `${provider.name} (无需 Key，免配置)`
+      : `${provider.name} API`;
+    serviceSelect.appendChild(option);
+  }
+}
+
+/** 选中态厂牌图标（providerIconHtml 是静态图标数据，不含用户输入） */
+function syncServiceIcon(): void {
+  if (!serviceIconEl) return;
+  const provider = activeProvider();
+  serviceIconEl.innerHTML = providerIconHtml(provider.iconKey, provider.name);
+  serviceIconEl.title = provider.name;
+}
+
+/** 一个模型下拉条目（与设置页 ModelRow 同形状的展示子集） */
+type ModelChoice = { id: string; name?: string; note?: string };
+
+/**
+ * 某厂牌要显示的模型 —— **只有真正可用的**（v0.4.2 问题 2）。
+ *
+ * 数据源只有两样：
+ *   1. `cached_models_<providerId>`：用户点「获取模型列表」拉到的在线列表；
+ *   2. 当前已选中的那个型号：必须保留一行，否则 <select> 显示不出当前值。
+ *
+ * `PROVIDERS[].models`（参考清单）**不再补位** —— 那正是「选了 OpenAI、端点指向中转站，
+ * 下拉里却混着 gpt-* 预置型号」的来源。清单仍留在 utils/models.ts 里服务默认值与归属判断。
+ * 两者都为空时，由 renderModelOptions 追加一行禁用提示，引导用户去拉取。
+ */
+function buildModelChoices(online: ModelChoice[], currentModel: string): ModelChoice[] {
+  const out: ModelChoice[] = [];
+  const seen = new Set<string>();
+
+  const current = (currentModel || '').trim();
+  if (current) {
+    seen.add(current);
+    out.push({ id: current, name: `当前设置：${current}` });
+  }
+
+  for (const item of online) {
+    if (!item || typeof item.id !== 'string' || !item.id || seen.has(item.id)) continue;
+    seen.add(item.id);
+    out.push({ id: item.id, name: item.name, note: item.note });
+  }
+  return out;
+}
 
 /**
  * 渲染模型下拉选项
  */
-function renderModelOptions(models: Array<{ id: string; name?: string }>, selectedModel?: string) {
+function renderModelOptions(online: ModelChoice[], selectedModel?: string) {
   if (!modelSelect) return;
   modelSelect.innerHTML = '';
 
-  const defaultOpt = document.createElement('option');
-  defaultOpt.value = '';
-  defaultOpt.textContent = `-- 可选模型列表 (${models.length} 个) --`;
-  modelSelect.appendChild(defaultOpt);
+  const currentVal = (selectedModel !== undefined ? selectedModel : modelNameInput.value).trim();
+  const choices = buildModelChoices(online, currentVal);
 
-  let matched = false;
-  const currentVal = selectedModel !== undefined ? selectedModel : modelNameInput.value.trim();
-
-  models.forEach((m) => {
+  for (const m of choices) {
     const opt = document.createElement('option');
     opt.value = m.id;
-    opt.textContent = m.name && m.name !== m.id ? `${m.name} [${m.id}]` : m.id;
-    if (m.id === currentVal) {
-      opt.selected = true;
-      matched = true;
-    }
+    const label = m.name && m.name !== m.id ? m.name : m.id;
+    opt.textContent = m.note ? `${label} · ${m.note}` : label;
+    if (m.id === currentVal) opt.selected = true;
     modelSelect.appendChild(opt);
-  });
-
-  // 若当前设定的模型不在返回列表里，保留作为单独选项
-  if (currentVal && !matched) {
-    const customOpt = document.createElement('option');
-    customOpt.value = currentVal;
-    customOpt.textContent = `当前设置: ${currentVal}`;
-    customOpt.selected = true;
-    modelSelect.appendChild(customOpt);
   }
 
-  const manualOpt = document.createElement('option');
-  manualOpt.value = '__custom__';
-  manualOpt.textContent = '手动输入其它自定义模型...';
-  modelSelect.appendChild(manualOpt);
+  if (online.length === 0) {
+    /* 没拉过（或拉到的是空数组）：给一行**禁用提示**，不是型号行。
+       用户按提示点右侧「获取模型列表」之后，这一行会被真实列表替换。 */
+    const hint = document.createElement('option');
+    hint.value = '';
+    hint.disabled = true;
+    hint.textContent = '点右侧「获取模型列表」拉取可用模型';
+    if (choices.length === 0) hint.selected = true;
+    modelSelect.appendChild(hint);
+  } else {
+    /* 有真实列表时才给「手填」入口：没列表时它只会让人以为还有别的型号可选 */
+    const manualOpt = document.createElement('option');
+    manualOpt.value = '__custom__';
+    manualOpt.textContent = '手动输入其它自定义模型...';
+    modelSelect.appendChild(manualOpt);
+  }
 }
 
 /**
- * 加载当前服务商的模型选项（优先读取缓存，否则读取预设）
+ * 加载当前厂牌的模型选项：先看 `cached_models_<providerId>`，
+ * 没有再退回改造前弹窗按 service 存的旧键 `cached_models_<service>`
+ * （否则老用户升级后白丢一次已经拉到的列表）。
  */
-function loadModelOptionsForCurrentService(selectedModel?: string) {
-  const service = serviceSelect.value;
-  if (service === 'google') return;
+function loadModelOptionsForCurrentProvider(selectedModel?: string) {
+  const provider = activeProvider();
+  if (!provider || provider.service === 'google') return;
 
-  chrome.storage.local.get([`cached_models_${service}`], (result) => {
-    const cached = result[`cached_models_${service}`];
-    if (Array.isArray(cached) && cached.length > 0) {
-      renderModelOptions(cached, selectedModel);
-    } else {
-      renderModelOptions(PRESET_MODELS[service] || [], selectedModel);
-    }
+  const ownKey = cachedModelsKey(provider.id);
+  const legacyKey = cachedModelsKey(provider.service);
+
+  chrome.storage.local.get([ownKey, legacyKey], (result) => {
+    // 读取是异步的：期间用户可能又切了厂牌，别把别人的列表画到这一家头上
+    if (activeProvider().id !== provider.id) return;
+
+    const own = result?.[ownKey];
+    const legacy = result?.[legacyKey];
+    const online: ModelChoice[] = Array.isArray(own) && own.length > 0
+      ? own
+      : Array.isArray(legacy) && legacy.length > 0
+        ? legacy
+        : [];
+
+    renderModelOptions(online, selectedModel);
   });
 }
 
@@ -422,17 +558,23 @@ function loadModelOptionsForCurrentService(selectedModel?: string) {
 function populateForm() {
   enabledToggle.checked = currentSettings.enabled;
   targetLangSelect.value = currentSettings.targetLang;
-  serviceSelect.value = currentSettings.service;
+
+  /* 服务下拉的 value 是厂牌 id（与设置页同一口径），首项为 Google 免费通道 */
+  const provider = getProvider(resolvedProviderId()) || freeProvider();
+  const isFree = provider.service === 'google';
+  serviceSelect.value = provider.id;
+  syncServiceIcon();
 
   scenarioSelect.value = currentSettings.scenario || 'vtuber';
 
   reasoningSelect.value = currentSettings.reasoningEffort || 'low';
   updateReasoningBadge();
 
-  apiKeyInput.value = currentSettings.apiKey || '';
-  apiBaseUrlInput.value = currentSettings.apiBaseUrl || '';
+  /* Key / 端点各取**当前厂牌自己**的那一格（不是别家上次留下的） */
+  apiKeyInput.value = isFree ? currentSettings.apiKey || '' : providerKeyOf(provider);
+  apiBaseUrlInput.value = isFree ? currentSettings.apiBaseUrl || '' : providerBase(provider);
   modelNameInput.value = currentSettings.modelName || '';
-  loadModelOptionsForCurrentService(currentSettings.modelName || '');
+  loadModelOptionsForCurrentProvider(currentSettings.modelName || '');
   autoHideNativeCheck.checked = currentSettings.autoHideNativeSubtitles;
   if (autoFallbackToggle) {
     autoFallbackToggle.checked = currentSettings.autoFallbackToGoogle !== false;
@@ -535,24 +677,64 @@ function updateReasoningBadge() {
  * 切换 AI 配置选项卡显示与隐藏
  */
 function toggleAiSectionVisibility() {
-  const service = serviceSelect.value;
-  if (service === 'google') {
+  const provider = activeProvider();
+  if (provider.service === 'google') {
     aiConfigSection.classList.add('hidden');
-  } else {
-    aiConfigSection.classList.remove('hidden');
-
-    if (service === 'deepseek') {
-      apiBaseUrlInput.placeholder = 'https://api.deepseek.com/v1';
-      modelNameInput.placeholder = 'deepseek-chat';
-    } else if (service === 'openai') {
-      apiBaseUrlInput.placeholder = 'https://api.openai.com/v1';
-      modelNameInput.placeholder = 'gpt-4o-mini';
-    } else if (service === 'gemini') {
-      apiBaseUrlInput.placeholder = '（Gemini 使用官方 SDK 端点）';
-      modelNameInput.placeholder = 'gemini-1.5-flash';
-    }
-    updateAiAccordionState();
+    return;
   }
+
+  aiConfigSection.classList.remove('hidden');
+  apiBaseUrlInput.placeholder = provider.defaultBaseUrl || '（Gemini 使用官方 SDK 端点）';
+  /* 占位符不再拿预置型号当例子（预置型号已退出界面，见 docs/PROVIDER-MODELS.md） */
+  modelNameInput.placeholder = '点「获取模型列表」拉取，或手填服务商支持的 model id';
+  updateAiAccordionState();
+}
+
+/**
+ * 切厂牌：一次性换掉 providerId / service / modelName / apiKey / apiBaseUrl 五样。
+ * Key 与端点分别取**目标厂牌自己**的 providerKeys / providerBaseUrls 那一格，
+ * 三处输入框随之刷新 —— 否则从 DeepSeek 切到 Claude 会带着 DeepSeek 的 Key 去请求
+ * anthropic 端点，直接 401。
+ *
+ * 模型选择（v0.4.2 问题 1）：切走前先把旧厂牌当前选的型号记进 providerModelSelections，
+ * 切到新厂牌时按「该厂牌上次选的 → 当前型号本就属于它 → 厂牌默认模型」三级取值。
+ * 这样「DeepSeek 选 deepseek-v4-pro → 切 Claude → 切回 DeepSeek」不会掉回 flash。
+ */
+function applyProviderSelection(persist = true): void {
+  const provider = activeProvider();
+
+  if (provider.service === 'google') {
+    toggleAiSectionVisibility();
+    syncServiceIcon();
+    if (persist) persistSettings(true);
+    return;
+  }
+
+  /* ① 切走前留底：旧厂牌 + 它当时用的型号（空型号不记，免得覆盖已有的记忆） */
+  const previousId = currentSettings.providerId || resolvedProviderId();
+  const previousModel = (currentSettings.modelName || '').trim();
+  const selections = { ...(currentSettings.providerModelSelections || {}) };
+  if (previousId && previousModel && previousId !== provider.id) selections[previousId] = previousModel;
+
+  /* ② 三级取值：上次选的（可能已不在清单里，手填 id 也要能恢复）→ 本次属于该厂牌 → 默认 */
+  const remembered = (selections[provider.id] || '').trim();
+  const keepModel = Boolean(currentSettings.modelName)
+    && providerHasModel(provider.id, currentSettings.modelName || '');
+  const nextModel = remembered || (keepModel ? currentSettings.modelName || '' : (provider.models[0]?.id || ''));
+  if (nextModel) selections[provider.id] = nextModel;
+
+  currentSettings.modelName = nextModel;
+  currentSettings.providerModelSelections = selections;
+  apiKeyInput.value = providerKeyOf(provider);
+  apiBaseUrlInput.value = providerBase(provider);
+  modelNameInput.value = nextModel;
+
+  toggleAiSectionVisibility();
+  syncServiceIcon();
+  loadModelOptionsForCurrentProvider(nextModel);
+  updateAiAccordionState();
+
+  if (persist) persistSettings(true);
 }
 
 /**
@@ -562,8 +744,7 @@ function toggleAiSectionVisibility() {
  * 2. 当前生效的目标模型名称（如「当前模型: gemini-3.5-flash-lite」）。
  */
 function updateAiAccordionState() {
-  const service = serviceSelect.value;
-  if (service === 'google') return;
+  if (activeProvider().service === 'google') return;
 
   const hasKey = !!apiKeyInput.value.trim();
   const model = modelNameInput.value.trim();
@@ -617,15 +798,46 @@ function flushPendingSettingsSave() {
 }
 
 function persistSettings(immediate = false) {
+  /* 厂牌维度的 Key / 端点：先把当前输入写回**当前厂牌**自己那一格，
+     再整份下发（不是 patch）—— 别家的 Key 原样带出，不会被清空。 */
+  const active = activeProvider();
+  const isFree = active.service === 'google';
+  const providerKeys = { ...(currentSettings.providerKeys || {}) };
+  const providerBaseUrls = { ...(currentSettings.providerBaseUrls || {}) };
+  const typedKey = apiKeyInput.value.trim();
+  const typedBase = apiBaseUrlInput.value.trim();
+  const typedModel = modelNameInput.value.trim();
+
+  if (!isFree) {
+    if (typedKey) providerKeys[active.id] = typedKey;
+    else delete providerKeys[active.id];
+
+    if (typedBase) providerBaseUrls[active.id] = typedBase;
+    else delete providerBaseUrls[active.id];
+  }
+
+  /* 手选 / 手填的型号也要记进「按厂牌记忆」：下次切回来看到的是最新选择，不是旧值。
+     Google 免费通道没有模型概念，不参与记录。 */
+  const providerModelSelections = { ...(currentSettings.providerModelSelections || {}) };
+  if (!isFree && typedModel) providerModelSelections[active.id] = typedModel;
+
   currentSettings = {
     enabled: enabledToggle.checked,
     targetLang: targetLangSelect.value,
-    service: serviceSelect.value as any,
+    service: active.service,
+    /* 厂牌 id 与 service 一起写：claude / qwen / kimi / zhipu 的 service 都是 'openai'，
+       只有 providerId 能说清「现在用的是哪一家的端点与 Key」 */
+    providerId: providerIdForPersist(),
+    providerKeys,
+    providerBaseUrls,
+    providerModelSelections,
     scenario: (scenarioSelect.value || currentSettings.scenario || 'vtuber') as any,
     reasoningEffort: reasoningSelect.value as any,
-    apiKey: apiKeyInput.value.trim(),
-    apiBaseUrl: apiBaseUrlInput.value.trim(),
-    modelName: modelNameInput.value.trim(),
+    /* 请求层只读 apiKey / apiBaseUrl：停在大模型通道时就是当前厂牌自己那份；
+       停在 Google 免费通道时保持原值（Key 输入框此时是隐藏的，不参与读写） */
+    apiKey: isFree ? currentSettings.apiKey || '' : typedKey,
+    apiBaseUrl: isFree ? currentSettings.apiBaseUrl || '' : (typedBase || active.defaultBaseUrl),
+    modelName: typedModel,
     autoHideNativeSubtitles: autoHideNativeCheck.checked,
     autoFallbackToGoogle: autoFallbackToggle ? autoFallbackToggle.checked : true,
     glossaryEnabled: glossaryEnabledCheck ? glossaryEnabledCheck.checked : true,
@@ -687,7 +899,11 @@ function bindEvents() {
 
   // 术语库注入开关（v0.2.9）
   if (glossaryEnabledCheck) {
-    glossaryEnabledCheck.addEventListener('change', () => persistSettings(true));
+    glossaryEnabledCheck.addEventListener('change', () => {
+      persistSettings(true);
+      /* 折叠态摘要里的「注入开 / 注入关」要跟着变 */
+      renderGlossaryPackList();
+    });
   }
 
   // 术语与场景页（v0.2.9）
@@ -708,13 +924,12 @@ function bindEvents() {
   reasoningSelect.addEventListener('change', () => persistSettings(true));
 
   serviceSelect.addEventListener('change', () => {
-    toggleAiSectionVisibility();
-    loadModelOptionsForCurrentService();
     if (fetchModelsStatus) {
       fetchModelsStatus.textContent = '';
       fetchModelsStatus.className = 'sub-status-msg';
     }
-    persistSettings(true);
+    /* 切厂牌 = providerId / service / modelName / apiKey / apiBaseUrl 一次性换掉并落盘 */
+    applyProviderSelection();
     checkTranslationConnectivity();
   });
 
@@ -752,7 +967,10 @@ function bindEvents() {
       }
     }
     if (!found) {
-      modelSelect.value = '__custom__';
+      /* 手填了一个不在列表里的 id：有「手动输入」入口就指向它，没列表时（只有禁用提示行）
+         就留空 —— 不要硬塞一个不存在的 value。 */
+      const hasCustom = Array.from(modelSelect.options).some((opt) => opt.value === '__custom__');
+      modelSelect.value = hasCustom ? '__custom__' : '';
     }
     persistSettings();
   });
@@ -861,11 +1079,13 @@ function bindEvents() {
  * 从 API 接口获取可用模型列表
  */
 async function fetchModelsFromApi() {
-  const service = serviceSelect.value;
+  /* 用**当前厂牌**的 Key 与端点去拉（不再用 service 拼端点：Claude / 通义 / Kimi / GLM
+     的 service 也是 'openai'，拼出来会打到 api.openai.com 上） */
+  const provider = activeProvider();
   const apiKey = apiKeyInput.value.trim();
-  const apiBaseUrl = apiBaseUrlInput.value.trim();
+  const apiBaseUrl = apiBaseUrlInput.value.trim() || provider.defaultBaseUrl;
 
-  if (!apiKey && service !== 'google') {
+  if (!apiKey && provider.service !== 'google') {
     if (fetchModelsStatus) {
       fetchModelsStatus.className = 'sub-status-msg error';
       fetchModelsStatus.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;margin-right:4px;vertical-align:-1px;">${ICON_ALERT}</span>请先在上方填入 API Key 再点击获取模型`;
@@ -880,12 +1100,13 @@ async function fetchModelsFromApi() {
   }
   if (fetchModelsStatus) {
     fetchModelsStatus.className = 'sub-status-msg loading';
-    fetchModelsStatus.textContent = '正在通过接口获取可用模型列表...';
+    fetchModelsStatus.textContent = `正在通过 ${provider.name} 的接口获取可用模型列表...`;
   }
 
   const querySettings: ExtensionSettings = {
     ...currentSettings,
-    service: service as any,
+    service: provider.service,
+    providerId: provider.id,
     apiKey,
     apiBaseUrl
   };
@@ -912,10 +1133,10 @@ async function fetchModelsFromApi() {
           );
         }
 
-        // 缓存到 local storage
-        chrome.storage.local.set({ [`cached_models_${service}`]: res.models });
+        // 缓存键按**厂牌**（cached_models_<providerId>），与设置页同一条
+        chrome.storage.local.set({ [cachedModelsKey(provider.id)]: res.models });
 
-        // 重新渲染下拉列表
+        // 重新渲染下拉列表：只放这次拉到的真实列表（+ 当前设置那一行），不拿预置清单补位
         renderModelOptions(res.models, modelNameInput.value.trim());
 
         // 如果目前未指定模型名称，自动推荐选中第一个
@@ -995,13 +1216,13 @@ async function handleTestApi() {
 
       if (res && res.success && res.translations && res.translations.length > 0) {
         testStatus.className = 'status-msg success';
+        /* 显示名按**厂牌名** + 用户实际配置的 modelName；取不到型号就只显示厂牌名。
+           Google 免费通道固定写「Google 翻译」。不拿任何预设型号兜底。 */
+        const provider = activeProvider();
+        const activeModelName = currentSettings.modelName?.trim() || '';
         let serviceLabel = 'Google 翻译';
-        if (currentSettings.service === 'openai') {
-          serviceLabel = `OpenAI代理 [${currentSettings.modelName?.trim() || 'gpt-4o-mini'}]`;
-        } else if (currentSettings.service === 'deepseek') {
-          serviceLabel = `DeepSeek [${currentSettings.modelName?.trim() || 'deepseek-chat'}]`;
-        } else if (currentSettings.service === 'gemini') {
-          serviceLabel = `Gemini [${currentSettings.modelName?.trim() || 'gemini-1.5-flash'}]`;
+        if (provider.service !== 'google') {
+          serviceLabel = activeModelName ? `${provider.name} [${activeModelName}]` : provider.name;
         }
         renderStatus(
           testStatus,
@@ -1112,6 +1333,89 @@ async function initPacksUI(): Promise<void> {
   renderGlossaryPackList();
 }
 
+/* ───────────────── 可折叠分区：翻译场景 / 术语库（v0.4.2 问题 3） ─────────────────
+ * 折叠状态只是 **UI 偏好**，存 chrome.storage.local 的 yt_sub_popup_pack_sections
+ * （{ scene: boolean, glossary: boolean }，true = 展开），**不写进 ExtensionSettings**，
+ * 也不进翻译缓存键。收起态用 inert 让内容不可聚焦（不是只靠视觉隐藏），
+ * 展开走 grid-template-rows 0fr → 1fr + opacity，与设置页两个 .fold 完全同口径。
+ */
+const PACK_SECTIONS_KEY = 'yt_sub_popup_pack_sections';
+type PackSectionKey = 'scene' | 'glossary';
+const packSectionOpen: Record<PackSectionKey, boolean> = { scene: false, glossary: false };
+
+function packSectionNodes(key: PackSectionKey): {
+  section: HTMLElement | null;
+  toggle: HTMLButtonElement | null;
+  body: HTMLElement | null;
+} {
+  return key === 'scene'
+    ? { section: sceneSectionEl, toggle: sceneSectionToggle, body: sceneSectionBody }
+    : { section: glossarySectionEl, toggle: glossarySectionToggle, body: glossarySectionBody };
+}
+
+/** 就地切折叠态（不重建卡片列表，勾选 / 选中态 / 上传按钮原样保留） */
+function syncPackSectionState(key: PackSectionKey, open: boolean): void {
+  const { section, toggle, body } = packSectionNodes(key);
+  if (!section || !toggle || !body) return;
+
+  toggle.setAttribute('aria-expanded', String(open));
+  toggle.title = open ? '收起完整列表' : '展开完整列表';
+  body.inert = !open;
+
+  if (open) {
+    /* 先摘 hidden 并强制一次布局，让「0fr + opacity 0」的起点先落地，过渡才播得出来 */
+    body.hidden = false;
+    void body.offsetHeight;
+    section.classList.add('is-open');
+  } else {
+    section.classList.remove('is-open');
+  }
+}
+
+function savePackSectionState(): void {
+  try {
+    chrome.storage.local.set({ [PACK_SECTIONS_KEY]: { ...packSectionOpen } });
+  } catch {
+    /* 存储不可用就只在本次会话里记住，不影响展开 / 收起 */
+  }
+}
+
+/** 读回上次的展开状态（刷新弹窗后保持）；没存过 = 两个都收起 */
+function loadPackSectionState(): Promise<void> {
+  return new Promise((resolve) => {
+    try {
+      chrome.storage.local.get([PACK_SECTIONS_KEY], (res) => {
+        void chrome.runtime.lastError;
+        const saved = res?.[PACK_SECTIONS_KEY];
+        if (saved && typeof saved === 'object') {
+          for (const key of ['scene', 'glossary'] as PackSectionKey[]) {
+            packSectionOpen[key] = (saved as Record<string, unknown>)[key] === true;
+            syncPackSectionState(key, packSectionOpen[key]);
+          }
+        }
+        resolve();
+      });
+    } catch {
+      resolve();
+    }
+  });
+}
+
+function bindPackSectionEvents(): void {
+  /* 初始态一律收起（HTML 里已是 aria-expanded="false" + body hidden），
+     这里补上 inert —— 收起的面板才是真的不可聚焦、不进 tab 序列 */
+  syncPackSectionState('scene', packSectionOpen.scene);
+  syncPackSectionState('glossary', packSectionOpen.glossary);
+
+  for (const key of ['scene', 'glossary'] as PackSectionKey[]) {
+    packSectionNodes(key).toggle?.addEventListener('click', () => {
+      packSectionOpen[key] = !packSectionOpen[key];
+      syncPackSectionState(key, packSectionOpen[key]);
+      savePackSectionState();
+    });
+  }
+}
+
 function showPackStatus(message: string, kind: 'ok' | 'error' | 'warn' = 'ok'): void {
   if (!packStatusEl) return;
   packStatusEl.textContent = message;
@@ -1147,6 +1451,10 @@ function renderSceneList(): void {
 
   if (sceneActiveBadgeEl) {
     sceneActiveBadgeEl.textContent = scenes.find((s) => s.id === activeId)?.name || '通用日常';
+  }
+  /* 收起态摘要：「当前场景名 · 共 N 个」（场景名在 #scene-active-badge 里） */
+  if (sceneSectionCountEl) {
+    sceneSectionCountEl.textContent = `共 ${scenes.length} 个`;
   }
   if (!sceneListEl) return;
 
@@ -1227,6 +1535,17 @@ function renderGlossaryPackList(): void {
     const total = packs.filter((p) => enabled.includes(p.id)).reduce((sum, p) => sum + p.entries.length, 0);
     glossaryTotalBadgeEl.textContent = `${total} 条`;
     glossaryTotalBadgeEl.title = `启用 ${enabled.length} 个术语库`;
+  }
+  /* 收起态摘要：注入开关状态 + 包总数 */
+  if (glossaryStateEl) {
+    const on = currentSettings.glossaryEnabled !== false;
+    glossaryStateEl.textContent = on ? '注入开' : '注入关';
+    glossaryStateEl.className = on ? 'badge badge-accent' : 'badge';
+    glossaryStateEl.title = on ? '术语库正在注入翻译请求' : '已关闭注入：包与条目仍保留';
+  }
+  if (glossaryPackCountEl) {
+    glossaryPackCountEl.textContent = `${packs.length} 个库`;
+    glossaryPackCountEl.title = `启用 ${enabled.length} 个`;
   }
   if (!glossaryPackListEl) return;
 

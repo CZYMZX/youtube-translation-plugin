@@ -18,7 +18,7 @@
         </span>
         <span class="brand-text">
           <strong>字幕断句翻译器</strong>
-          <span class="brand-sub">高级设置<i id="app-version">v0.4.1</i></span>
+          <span class="brand-sub">高级设置<i id="app-version">v0.4.3</i></span>
         </span>
       </div>
       <div class="topbar-actions">
@@ -37,6 +37,10 @@
         <button type="button" role="tab" class="navitem" id="nav-service" aria-controls="pane-service" data-pane="service" aria-selected="false" tabindex="-1">
           <span class="navitem-label">服务与模型</span>
           <span class="navitem-hint">Key · 端点 · 降级</span>
+        </button>
+        <button type="button" role="tab" class="navitem" id="nav-scenario" aria-controls="pane-scenario" data-pane="scenario" aria-selected="false" tabindex="-1">
+          <span class="navitem-label">翻译场景</span>
+          <span class="navitem-hint">提示词 · 分层</span>
         </button>
         <button type="button" role="tab" class="navitem" id="nav-glossary" aria-controls="pane-glossary" data-pane="glossary" aria-selected="false" tabindex="-1">
           <span class="navitem-label">术语库</span>
@@ -108,15 +112,31 @@
             <div class="row row-stack">
               <div class="row-text">
                 <span class="row-title">翻译服务</span>
-                <span class="row-desc">Google 免配置可直接用；大模型在同场景下译文更自然，但需要 Key。</span>
+                <span class="row-desc">Google 免配置可直接用；大模型译文更自然但需要 Key。通道与「服务与模型」同一份（免费 + 7 个厂牌）。</span>
               </div>
               <div class="row-control row-control-wide">
-                <div class="seg seg-4" data-seg="service">
-                  <div class="seg-glider" aria-hidden="true"></div>
-                  <button type="button" data-setting="service" data-value="google">Google 免费</button>
-                  <button type="button" data-setting="service" data-value="deepseek">DeepSeek</button>
-                  <button type="button" data-setting="service" data-value="openai">OpenAI</button>
-                  <button type="button" data-setting="service" data-value="gemini">Gemini</button>
+                <!-- 可折叠厂牌选择器：收起态一行摘要（厂牌图标 + 名称 + 当前模型 id + 箭头），
+                     展开态列出 utils/models.ts#PROVIDERS 的全部通道。
+                     数据与切换逻辑都与「服务与模型」分区共用，这里不硬编码任何厂牌。 -->
+                <div class="fold fold-provider" id="provider-fold">
+                  <button type="button" class="fold-toggle" id="btn-provider-fold"
+                    aria-expanded="false" aria-controls="provider-fold-panel">
+                    <span class="fold-icon" id="fold-provider-icon" aria-hidden="true"></span>
+                    <span class="fold-main">
+                      <span class="fold-title" id="fold-provider-name">Google 免费翻译</span>
+                      <span class="fold-sub" id="fold-provider-model">免 Key · 不需要选模型</span>
+                    </span>
+                    <span class="fold-tail">
+                      <span class="fold-badge" id="fold-provider-badge">免 Key</span>
+                      <span class="fold-chevron" aria-hidden="true"></span>
+                    </span>
+                  </button>
+                  <div class="fold-panel" id="provider-fold-panel" hidden>
+                    <div class="fold-panel-inner">
+                      <div class="fold-list" id="provider-fold-list" role="group" aria-label="翻译通道"></div>
+                      <button type="button" class="fold-more" id="btn-provider-fold-more">更多模型与自定义模型 → 服务与模型</button>
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -127,7 +147,27 @@
                 <span class="row-desc">场景决定注入给模型的身份与语气。内容在「翻译场景包」中定义。</span>
               </div>
               <div class="row-control row-control-wide">
-                <div class="scenario-grid" id="scenario-grid"></div>
+                <!-- 可折叠：场景会随自定义包变多，收起后只占一行摘要，不占满首屏。
+                     展开后仍是原来那张 .scenario-grid，卡片样式一个像素都没改。
+                     展开状态不持久化（每次进页面默认收起，纯视觉收纳）。 -->
+                <div class="fold fold-scenario" id="scenario-fold">
+                  <button type="button" class="fold-toggle" id="btn-scenario-fold"
+                    aria-expanded="false" aria-controls="scenario-fold-panel">
+                    <span class="fold-main">
+                      <span class="fold-title" id="fold-scenario-name">翻译场景</span>
+                      <span class="fold-sub" id="fold-scenario-hint">展开后选一个场景决定模型的身份与语气</span>
+                    </span>
+                    <span class="fold-tail">
+                      <span class="fold-badge" id="fold-scenario-count">0 个</span>
+                      <span class="fold-chevron" aria-hidden="true"></span>
+                    </span>
+                  </button>
+                  <div class="fold-panel" id="scenario-fold-panel" hidden>
+                    <div class="fold-panel-inner">
+                      <div class="scenario-grid" id="scenario-grid"></div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -152,55 +192,59 @@
         <section class="pane" id="pane-service" role="tabpanel" aria-labelledby="nav-service" tabindex="0">
           <header class="pane-head">
             <h1>服务与模型</h1>
-            <p>自定义 OpenAI 兼容端点；Key 只保存在本机浏览器存储中。</p>
+            <p>按厂牌选服务：Key 与端点跟着厂牌各自保存，只留在本机浏览器存储里。</p>
           </header>
 
           <div class="rows">
-            <div class="row">
+            <div class="row row-stack">
               <div class="row-text">
-                <span class="row-title">API Key</span>
-                <span class="row-desc">随服务切换使用同一份 Key，切换服务后请确认 Key 是否匹配。</span>
+                <span class="row-title">翻译通道</span>
+                <span class="row-desc">Google 免费通道免 Key、不用选模型；下面每个厂牌各记一把 Key，切厂牌不会互相串。</span>
+                <span class="row-note" id="provider-current-hint">当前使用：Google 免费翻译（不需要 Key 与模型）</span>
               </div>
-              <div class="row-control">
-                <div class="input-with-btn">
-                  <input type="password" class="ctl ctl-text" data-setting="apiKey" placeholder="sk-..." autocomplete="off" spellcheck="false" />
-                  <button type="button" class="btn btn-icon" id="btn-toggle-key" title="显示 / 隐藏" aria-label="显示或隐藏 API Key">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12Z"/><circle cx="12" cy="12" r="2.6"/></svg>
+              <div class="row-control row-control-wide provider-control">
+                <div class="provider-free">
+                  <button type="button" class="provider-free-hit" id="btn-free-google" aria-pressed="true">
+                    <span class="provider-icon provider-icon-free" style="width:28px;height:28px"><span class="provider-icon-fallback">G</span></span>
+                    <span class="provider-free-main">
+                      <span class="provider-free-name">Google 免费翻译</span>
+                      <span class="provider-free-desc">不用 Key、不用选模型；最省事，译文偏直译。</span>
+                    </span>
+                    <span class="provider-free-flag" id="free-flag">使用中</span>
                   </button>
                 </div>
+                <div class="provider-list" id="provider-list" aria-label="模型厂牌与模型"></div>
               </div>
             </div>
 
-            <div class="row">
+            <!-- 「自动降级」= 既有字段 autoFallbackToGoogle（不是第二个开关）。
+                 开启后在同一行块内展开「降级顺序」：顺序即优先级（高 → 低），存 fallbackOrder。
+                 []（默认）= 失败直接降级 Google 免费翻译（v0.4.1 行为，不能变）；
+                 关闭时列表收起，且**不写** fallbackOrder（用户排好的顺序下次开启还在）。
+                 列表行由 main.ts 的 renderFallbackOrder() 渲染，这里只留容器。 -->
+            <div class="row row-depend" id="row-auto-fallback">
               <div class="row-text">
-                <span class="row-title">Base URL</span>
-                <span class="row-desc">留空使用官方端点；中转站填写到 <code>/v1</code> 为止。</span>
+                <span class="row-title">自动降级</span>
+                <span class="row-desc">关闭时失败不降级；开启后可指定降级顺序，不设置则直接降级到 Google 免费翻译。</span>
               </div>
               <div class="row-control">
-                <input type="text" class="ctl ctl-text ctl-wide" data-setting="apiBaseUrl" placeholder="https://api.deepseek.com/v1" spellcheck="false" />
-              </div>
-            </div>
-
-            <div class="row">
-              <div class="row-text">
-                <span class="row-title">模型名称</span>
-                <span class="row-desc">例如 <code>deepseek-chat</code>、<code>gpt-4o-mini</code>、<code>gemini-3.8-flash</code>。</span>
-              </div>
-              <div class="row-control">
-                <input type="text" class="ctl ctl-text ctl-wide" data-setting="modelName" placeholder="deepseek-chat" spellcheck="false" />
-              </div>
-            </div>
-
-            <div class="row">
-              <div class="row-text">
-                <span class="row-title">失败自动降级</span>
-                <span class="row-desc">大模型超时或报错时，本句改用 Google 免费翻译，避免整段字幕空白。</span>
-              </div>
-              <div class="row-control">
-                <label class="switch" aria-label="失败自动降级">
-                  <input type="checkbox" data-setting="autoFallbackToGoogle" />
+                <label class="switch" aria-label="自动降级">
+                  <input type="checkbox" data-setting="autoFallbackToGoogle"
+                    aria-controls="fallback-order-panel" />
                   <span class="track"><span class="knob"></span></span>
                 </label>
+              </div>
+              <div class="depend-panel" id="fallback-order-panel" hidden>
+                <div class="fallback-order-inner">
+                  <div class="fallback-order-head">
+                    <span class="fallback-order-title">降级顺序</span>
+                    <span class="row-note">从上到下逐级尝试。拖动 <b class="fallback-grip-hint" aria-hidden="true">⠿</b>
+                      或点行尾的 ↑ ↓ 调整；标「未排序」的厂牌还没写进顺序，调一次就加入。</span>
+                  </div>
+                  <p class="row-note fallback-empty hidden" id="fallback-order-empty"></p>
+                  <div class="fallback-list" id="fallback-order-list" role="list" aria-label="降级顺序"></div>
+                  <p class="row-note fallback-hint" id="fallback-order-hint">未设置顺序时，失败会直接降级到 Google 免费翻译。</p>
+                </div>
               </div>
             </div>
 
@@ -219,17 +263,93 @@
               </div>
             </div>
 
-            <div class="row">
-              <div class="row-text">
-                <span class="row-title">连通性测试</span>
-                <span class="row-desc" id="service-test-desc">发送一句短文本，测量首字节延迟。</span>
+            <!-- 「连通性测试」整行已迁到每个厂牌展开面板的工具条（测试对象是那个厂牌的模型，
+                 而且口径改成「用一句样例真实翻译一次」，不再用 /models 列表测速）。 -->
+          </div>
+        </section>
+
+        <!-- ─────────── 翻译场景 ─────────── -->
+        <section class="pane" id="pane-scenario" role="tabpanel" aria-labelledby="nav-scenario" tabindex="0">
+          <header class="pane-head">
+            <p class="pane-eyebrow">复杂配置</p>
+            <h1>翻译场景</h1>
+            <p>场景决定注入给模型的身份与语气。左侧选场景只是「查看」，右侧逐层展开它实际注入的 system prompt；要换用某个场景，点右侧的「使用此场景」。</p>
+          </header>
+
+          <!-- 导入失败：逐条列出原因，不合法的文件不进库（放在两栏之上，免得用户以为没反应） -->
+          <div class="import-report hidden" id="scene-import-report" role="alert"></div>
+
+          <div class="scenario-layout">
+            <aside class="pack-rail">
+              <div class="pack-rail-head">
+                <span>翻译场景</span>
+                <span class="pill" id="scene-total">0</span>
               </div>
-              <div class="row-control">
-                <button type="button" class="btn btn-primary" id="btn-test-service">测试连接</button>
-                <span class="latency hidden" id="service-latency"></span>
+              <div class="pack-list" id="scene-list" role="listbox" aria-label="翻译场景列表"></div>
+              <div class="pack-rail-foot">
+                <button type="button" class="btn btn-quiet btn-block" id="btn-new-scene">＋ 新建场景</button>
+                <button type="button" class="btn btn-quiet btn-block" id="btn-import-scene" title="选一个符合下方规范的 JSON 文件">导入 JSON</button>
+                <input type="file" id="file-import-scene" accept=".json,application/json" class="hidden" />
+                <button type="button" class="btn btn-quiet btn-block" id="btn-scene-template" title="复制一段提示词，交给你常用的 AI 生成可直接导入的场景 JSON">用 AI 生成模板</button>
+              </div>
+            </aside>
+
+            <div class="scene-detail" id="scene-detail"></div>
+          </div>
+
+          <details class="spec-block" id="scene-spec" data-details-motion="true">
+            <summary>文件格式规范（JSON）· 点开查看</summary>
+
+            <!-- 原生 details 不做高度过渡，包一层 .details-body（grid 0fr → 1fr + opacity）
+                 让展开和两个 .fold / 厂牌面板同一档 300ms（见 style.css 与 main.ts attachDetailsMotion） -->
+            <div class="details-body">
+              <div class="details-body-inner">
+
+            <p class="spec-lead">
+              必须是 UTF-8 编码的 JSON 对象（单文件 ≤ 1 MB）。校验不通过会逐条列出原因，不合格的文件不会进库。
+            </p>
+
+            <table class="spec-table">
+              <thead>
+                <tr><th scope="col">字段</th><th scope="col">必填</th><th scope="col">限制</th><th scope="col">说明</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>name</td><td>✅</td><td>1~40 字</td><td>场景名称，列表展示</td></tr>
+                <tr><td>prompt</td><td>✅</td><td>20~4000 字</td><td>场景提示词，作为 system prompt 的场景段注入</td></tr>
+                <tr><td>description</td><td>否</td><td>字符串</td><td>场景说明</td></tr>
+                <tr><td>hint</td><td>否</td><td>字符串</td><td>示例（如适合的视频类型）</td></tr>
+                <tr><td>version</td><td>否</td><td>数字</td><td>建议 1</td></tr>
+              </tbody>
+            </table>
+
+            <p class="spec-lead">不允许未知字段（防止拼写错误被静默忽略）。</p>
+
+            <p class="spec-lead">可直接复制的完整示例：</p>
+            <pre class="spec-code">{
+  "version": 1,
+  "name": "科普视频",
+  "description": "科学解说 / 教育内容",
+  "hint": "例：TED-Ed、物理讲解",
+  "prompt": "你是一位科普视频字幕译者。要求：术语准确并使用业界通用译名；逻辑连接词清晰；保留公式、单位与数字原样；不添加原文没有的信息；语气客观、面向大众读者。"
+}</pre>
+
+            <p class="spec-lead">常见错误（报错原文 → 怎么改）：</p>
+            <table class="spec-table">
+              <thead>
+                <tr><th scope="col">现象</th><th scope="col">原因</th><th scope="col">处理</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>缺少字段 prompt（场景提示词）</td><td>顶层只有 name，忘了写 prompt</td><td>补一个 20~4000 字的提示词</td></tr>
+                <tr><td>prompt 少于 20 字，无法有效指导翻译</td><td>只写了一句「翻译得好一点」</td><td>按 5 个要素补全：角色、受众语气、术语策略、格式数字、禁止事项</td></tr>
+                <tr><td>prompt 超过 4000 字</td><td>把整篇文档 / 整段聊天记录贴进来了</td><td>只保留「这类视频该怎么译」的行为约束</td></tr>
+                <tr><td>文件内容不是 JSON 对象</td><td>交的是数组、纯文本、空文件</td><td>顶层必须是 { … }，不是 [ … ]</td></tr>
+                <tr><td>存在未知字段：promt, instruction</td><td>键名拼错，或用文档里的说法当键名</td><td>只留 version / name / description / hint / prompt 五个字段</td></tr>
+                <tr><td>version 写成了 2</td><td>当前只认 1，但不会因此被拒（校验不看这个字段的值）</td><td>改成 1；非 1 也没有任何升级含义</td></tr>
+              </tbody>
+            </table>
               </div>
             </div>
-          </div>
+          </details>
         </section>
 
         <!-- ─────────── 术语库 ─────────── -->
@@ -241,6 +361,20 @@
           </header>
 
           <div class="rows">
+            <div class="row gloss-option-row">
+              <div class="row-text">
+                <span class="row-title">注入术语库</span>
+                <span class="row-desc">总开关：关闭后所有已选术语库都不再注入，但包与条目保留。</span>
+                <span class="row-note">与快捷面板的「注入术语库」是同一份设置，改动会双向同步。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="注入术语库">
+                  <input type="checkbox" data-setting="glossaryEnabled" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+
             <div class="row gloss-option-row">
               <div class="row-text">
                 <span class="row-title">专有名词括注原文</span>
@@ -265,8 +399,10 @@
               </div>
               <div class="pack-list" id="pack-list" role="listbox" aria-label="术语库包列表"></div>
               <div class="pack-rail-foot">
+                <button type="button" class="btn btn-quiet btn-block" id="btn-new-pack">＋ 新建术语库</button>
                 <button type="button" class="btn btn-quiet btn-block" id="btn-import-pack">导入 JSON</button>
                 <input type="file" id="file-import" accept=".json,application/json" class="hidden" />
+                <button type="button" class="btn btn-quiet btn-block" id="btn-glossary-template" title="复制一段提示词，交给你常用的 AI 生成可直接导入的术语库 JSON">用 AI 生成模板</button>
               </div>
             </aside>
 
@@ -553,6 +689,49 @@
               </div>
             </div>
 
+            <div class="row row-stack">
+              <div class="row-text">
+                <span class="row-title">AI 精翻字幕保留时长</span>
+                <span class="row-desc">保留期间重新打开视频会直接载入本地精翻字幕，不再重翻。</span>
+                <span class="row-note">永久保留不会自动清理，需要时可用下方「清空 AI 精翻缓存」手动释放。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-4" data-seg="aiCacheTtlHours">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="aiCacheTtlHours" data-value="24">1 天</button>
+                  <button type="button" data-setting="aiCacheTtlHours" data-value="168">7 天</button>
+                  <button type="button" data-setting="aiCacheTtlHours" data-value="720">30 天</button>
+                  <button type="button" data-setting="aiCacheTtlHours" data-value="0">永久</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">视频续播时自动继续精翻</span>
+                <span class="row-desc">检测到上次只翻了一半时：手动＝只提示、等你点按钮；自动＝直接接着翻。</span>
+                <span class="row-note">两种模式都只翻缺失部分，并带上文两句保持语境。</span>
+              </div>
+              <div class="row-control">
+                <div class="seg seg-2 seg-compact" data-seg="aiResumeMode">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" data-setting="aiResumeMode" data-value="manual">手动</button>
+                  <button type="button" data-setting="aiResumeMode" data-value="auto">自动</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">AI 精翻缓存</span>
+                <span class="row-desc" id="ai-cache-stat">正在统计本地 AI 精翻字幕…</span>
+                <span class="row-note">清空后重新打开视频需要重新精翻，已缓存的普通机翻译文不受影响。</span>
+              </div>
+              <div class="row-control">
+                <button type="button" class="btn btn-quiet" id="btn-clear-ai-cache">清空 AI 精翻缓存</button>
+              </div>
+            </div>
+
             <div class="row">
               <div class="row-text">
                 <span class="row-title">翻译缓存</span>
@@ -604,7 +783,109 @@
       </main>
     </div>
 
-    <div class="toast" id="toast" role="status" aria-live="polite"></div>
-    <script type="module" src="./main.ts"></script>
+    <!-- ─────────── 自定义模型弹层 ─────────── -->
+    <dialog class="modal" id="custom-model-dialog" aria-labelledby="cm-title">
+      <div class="modal-body">
+        <header class="modal-head">
+          <h2 id="cm-title">自定义模型</h2>
+          <p>会加在「<b id="cm-provider-name">—</b>」这个厂牌下，用该厂牌的端点与 Key 发请求；图标跟随厂牌，不用单独挑。</p>
+        </header>
+
+        <label class="field">
+          <span class="field-label">显示名</span>
+          <input type="text" class="ctl ctl-text" id="cm-label" maxlength="40" placeholder="例如 我的中转 GPT" autocomplete="off" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">模型 id</span>
+          <input type="text" class="ctl ctl-text" id="cm-id" maxlength="120" placeholder="例如 gpt-6.1-sol" spellcheck="false" autocomplete="off" />
+        </label>
+
+        <footer class="modal-foot">
+          <button type="button" class="btn btn-quiet" id="cm-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="cm-save">保存</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <!-- ─────────── 新建术语库弹层 ─────────── -->
+    <dialog class="modal" id="new-pack-dialog" aria-labelledby="np-title">
+      <div class="modal-body">
+        <header class="modal-head">
+          <h2 id="np-title">新建术语库</h2>
+          <p>新建的包是空的（0 条），创建后可逐条「新增条目」，也可以之后用「导入 JSON」批量补。</p>
+        </header>
+
+        <label class="field">
+          <span class="field-label">名称（必填，最多 40 字）</span>
+          <input type="text" class="ctl ctl-text" id="np-name" maxlength="40" placeholder="例如 我的常用译名" autocomplete="off" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">描述（选填，最多 120 字）</span>
+          <input type="text" class="ctl ctl-text" id="np-desc" maxlength="120" placeholder="一句话说明这个包收什么词" autocomplete="off" />
+        </label>
+
+        <p class="field-error hidden" id="np-error" role="alert"></p>
+
+        <footer class="modal-foot">
+          <button type="button" class="btn btn-quiet" id="np-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="np-save">创建</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <!-- ─────────── 新建翻译场景弹层 ─────────── -->
+    <dialog class="modal modal-wide" id="new-scene-dialog" aria-labelledby="ns-title">
+      <div class="modal-body">
+        <header class="modal-head">
+          <h2 id="ns-title">新建翻译场景</h2>
+          <p>场景就是注入给模型的身份与语气。确认后写进自定义场景包并自动选中；要真正换用它，还得点右侧的「使用此场景」。</p>
+        </header>
+
+        <label class="field">
+          <span class="field-label">场景名称（必填，最多 40 字）</span>
+          <input type="text" class="ctl ctl-text" id="ns-name" maxlength="40" placeholder="例如 数学讲解" autocomplete="off" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">描述（选填，最多 120 字）</span>
+          <input type="text" class="ctl ctl-text" id="ns-desc" maxlength="120" placeholder="一句话说明这类视频怎么译" autocomplete="off" />
+        </label>
+
+        <label class="field">
+          <span class="field-label">场景提示词（必填，20~4000 字）</span>
+          <textarea class="ctl scene-editor" id="ns-prompt" rows="9" spellcheck="false"></textarea>
+        </label>
+
+        <p class="field-error hidden" id="ns-error" role="alert"></p>
+
+        <footer class="modal-foot">
+          <button type="button" class="btn btn-quiet" id="ns-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="ns-save">创建</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <!-- ─────────── 模板提示词弹层（术语库 / 翻译场景两份不同的模板） ─────────── -->
+    <dialog class="modal modal-wide" id="template-dialog" aria-labelledby="tpl-title">
+      <div class="modal-body">
+        <header class="modal-head">
+          <h2 id="tpl-title">用 AI 生成模板</h2>
+          <p>整段复制，粘到你常用的 AI 里；第一行「# 需求：」后面写你想要什么，让它直接产出可导入的 JSON。</p>
+        </header>
+
+        <textarea class="ctl tpl-body" id="tpl-body" rows="16" spellcheck="false" readonly aria-label="模板提示词正文"></textarea>
+
+        <p class="row-note" id="tpl-note">第一行是留给你的空位；输出必须能被 JSON.parse 直接解析，导入失败会逐条告诉你哪一项不合格。</p>
+
+        <footer class="modal-foot">
+          <button type="button" class="btn btn-quiet" id="tpl-close">关闭</button>
+          <button type="button" class="btn btn-primary" id="tpl-copy">复制</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>    <script type="module" src="./main.ts"></script>
   </body>
 </html>

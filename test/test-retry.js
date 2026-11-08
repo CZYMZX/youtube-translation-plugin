@@ -18,6 +18,9 @@ import assert from 'node:assert/strict';
 import { DEFAULT_SETTINGS } from '../types/index.ts';
 import {
   translateWithLlmChannel,
+  translateSentenceBatchDetailed,
+  resolveFallbackCandidates,
+  resolveCurrentProviderId,
   retryFailedSentences,
   buildRetryItem,
   mapRawItemsToSlots,
@@ -302,8 +305,413 @@ console.log('- 用例 8：缓存指纹未被改动');
   check('契约文本本身非空（否则上一条断言无意义）', RETRY_CONTRACT.length > 40, String(RETRY_CONTRACT.length));
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * 9. 逐级降级链（v0.4.2 降级顺序）
+ * ----------------------------------------------------------------------------
+ * 被测对象：translateSentenceBatchDetailed 的降级分支 + resolveFallbackCandidates。
+ * 全程用假 fetch（按 URL 路由），不联网；每条用例的原文都不同 ——
+ * 缓存键含原文，共用原文会命中前一用例写下的缓存（那样断言就没意义了）。
+ * ══════════════════════════════════════════════════════════════════════════ */
+console.log('- 用例 9：逐级降级链（降级顺序）');
+{
+  let requests = [];
+  let responder = null;
+  const realFetch = globalThis.fetch;
+
+  function failRes(status, message = 'boom') {
+    return {
+      ok: false,
+      status,
+      json: async () => ({ error: { message } }),
+      text: async () => JSON.stringify({ error: { message } })
+    };
+  }
+  function okRes(data) {
+    return { ok: true, status: 200, json: async () => data, text: async () => JSON.stringify(data) };
+  }
+  /** OpenAI 兼容成功：按 payload 条目逐条回译，前缀用来判断「结果来自哪一级」 */
+  const llmOk = (tag) => (url, init, body) => {
+    const items = JSON.parse(body.messages[1].content);
+    return okRes({
+      choices: [{ message: { content: JSON.stringify(items.map((it, i) => ({ id: i, translation: `${tag}${it.text}` }))) } }]
+    });
+  };
+  /** Google 免费成功：按行回译（合并请求按行数与输入对齐） */
+  const googleOk = (tag) => (url) => {
+    const q = new URL(url).searchParams.get('q') || '';
+    return okRes([[[q.split('\n').map((l) => `${tag}${l}`).join('\n')]]]);
+  };
+  const route = (table) => (url, init, body) => {
+    for (const [frag, handler] of table) {
+      if (url.includes(frag)) return handler(url, init, body);
+    }
+    return failRes(404, 'no route');
+  };
+
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    let body = null;
+    if (init && typeof init.body === 'string') {
+      try {
+        body = JSON.parse(init.body);
+      } catch {
+        body = init.body;
+      }
+    }
+    requests.push({ url: u, body, headers: (init && init.headers) || {} });
+    if (!responder) return failRes(599, 'no responder');
+    return responder(u, init, body);
+  };
+
+  const hits = (frag) => requests.filter((r) => r.url.includes(frag));
+  const reset = (fn) => {
+    requests = [];
+    responder = fn;
+  };
+  const textsOf = (prefix, n) => Array.from({ length: n }, (_, i) => `${prefix}${i + 1} 句`);
+  const mk = (overrides) => ({
+    ...DEFAULT_SETTINGS,
+    service: 'openai',
+    providerId: 'openai',
+    apiKey: 'sk-primary',
+    modelName: 'gpt-6.1-sol',
+    providerKeys: { openai: 'sk-primary' },
+    ...overrides
+  });
+
+  try {
+    /* 9.1 【最重要】默认行为未变：fallbackOrder 为空 + 允许降级 → 仍然走 Google 免费 */
+    {
+      const t = textsOf('D1-', 2);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'bad key')],
+        ['translate.googleapis.com', googleOk('G|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(t, 'zh-CN', mk({ fallbackOrder: [] }));
+
+      check('9.1 默认行为未变：order 为空仍降级 Google', res.translations.every((x) => x.startsWith('G|')), JSON.stringify(res.translations));
+      check('9.1 请求数 = 主通道 1 + Google 1（没有多发的级）', requests.length === 2, JSON.stringify(requests.map((r) => r.url.slice(0, 32))));
+      check('9.1 无失败句', res.failed.every((f) => !f), JSON.stringify(res.failed));
+      check('9.1 成功结果不标注前缀（不污染译文）', !res.translations.some((x) => x.includes('降级')), JSON.stringify(res.translations));
+    }
+
+    /* 9.2 非空顺序且第一级成功 → 只请求第一级，不请求 Google */
+    {
+      const t = textsOf('D2-', 2);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'down')],
+        ['api.deepseek.com', llmOk('DS|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({
+          fallbackOrder: ['deepseek'],
+          providerKeys: { openai: 'sk-primary', deepseek: 'sk-deep' },
+          providerModelSelections: { deepseek: 'deepseek-v4-pro' }
+        })
+      );
+
+      check('9.2 只请求主通道 + 第一级', requests.length === 2, JSON.stringify(requests.map((r) => r.url.slice(0, 32))));
+      check('9.2 完全不请求 Google', hits('translate.googleapis.com').length === 0);
+      check('9.2 结果来自第一级', res.translations.every((x) => x.startsWith('DS|')), JSON.stringify(res.translations));
+      check('9.2 用该厂牌自己的 Key', String(hits('api.deepseek.com')[0].headers.Authorization) === 'Bearer sk-deep', String(hits('api.deepseek.com')[0].headers.Authorization));
+      check('9.2 用该厂牌记住的模型', hits('api.deepseek.com')[0].body.model === 'deepseek-v4-pro', String(hits('api.deepseek.com')[0].body.model));
+      check('9.2 用该厂牌的端点（不是主通道的端点）', hits('api.deepseek.com')[0].url.endsWith('/v1/chat/completions'), hits('api.deepseek.com')[0].url);
+      check('9.2 无失败句', res.failed.every((f) => !f));
+    }
+
+    /* 9.3 前两级失败、第三级成功 → 请求顺序正确，结果来自第三级 */
+    {
+      const t = textsOf('D3-', 2);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'down')],
+        ['api.deepseek.com', () => failRes(400, 'down')],
+        ['api.moonshot.cn', () => failRes(400, 'down')],
+        ['open.bigmodel.cn', llmOk('Z|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({
+          fallbackOrder: ['deepseek', 'kimi', 'zhipu'],
+          providerKeys: { openai: 'sk-primary', deepseek: 'sk-d', kimi: 'sk-k', zhipu: 'sk-z' }
+        })
+      );
+      const order = requests.map((r) =>
+        r.url.includes('api.openai.com') ? 'openai'
+          : r.url.includes('api.deepseek.com') ? 'deepseek'
+            : r.url.includes('api.moonshot.cn') ? 'kimi'
+              : r.url.includes('open.bigmodel.cn') ? 'zhipu'
+                : 'other'
+      );
+      check('9.3 请求顺序 = 主通道 → deepseek → kimi → zhipu', JSON.stringify(order) === JSON.stringify(['openai', 'deepseek', 'kimi', 'zhipu']), JSON.stringify(order));
+      check('9.3 结果来自第三级', res.translations.every((x) => x.startsWith('Z|')), JSON.stringify(res.translations));
+      check('9.3 有级成功就不再兜底 Google', hits('translate.googleapis.com').length === 0);
+    }
+
+    /* 9.4 全部失败 → 落到 Google；Google 也失败 → [降级失败: …] */
+    {
+      const t = textsOf('D4-', 1);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'primary down')],
+        ['api.deepseek.com', () => failRes(400, 'deepseek down')],
+        ['translate.googleapis.com', () => failRes(429, 'google down')],
+        ['translate.google.com', () => failRes(429, 'google down')],
+        ['api.mymemory.translated.net', () => failRes(429, 'mymemory down')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({ fallbackOrder: ['deepseek'], providerKeys: { openai: 'sk-primary', deepseek: 'sk-d' } })
+      );
+
+      check('9.4 链路走完后确实试过 Google 兜底', hits('translate.googleapis.com').length > 0);
+      check('9.4 每句写 [降级失败: 原因]', res.translations.every((x) => /^\[降级失败: .+\]$/.test(x)), JSON.stringify(res.translations));
+      check('9.4 失败掩码全置位', res.failed.every(Boolean), JSON.stringify(res.failed));
+    }
+
+    /* 9.5 noFallback: true（测试连接 / AI 深度全篇）→ 一次降级都不发生 */
+    {
+      const t = textsOf('D5-', 1);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'primary down')],
+        ['api.deepseek.com', llmOk('DS|')],
+        ['translate.googleapis.com', googleOk('G|')]
+      ]));
+      let thrown = null;
+      try {
+        await translateSentenceBatchDetailed(
+          t,
+          'zh-CN',
+          mk({ fallbackOrder: ['deepseek'], providerKeys: { openai: 'sk-primary', deepseek: 'sk-d' } }),
+          { noFallback: true }
+        );
+      } catch (e) {
+        thrown = e;
+      }
+      check('9.5 noFallback 抛真实错误（不静默降级）', !!thrown && /HTTP 400|端点响应错误/.test(thrown.message), String(thrown && thrown.message));
+      check('9.5 noFallback 时只发主通道 1 次请求', requests.length === 1, JSON.stringify(requests.map((r) => r.url.slice(0, 32))));
+    }
+
+    /* 9.6 autoFallbackToGoogle: false（自动降级开关关掉）→ 一次降级都不发生 */
+    {
+      const t = textsOf('D6-', 1);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'primary down')],
+        ['api.deepseek.com', llmOk('DS|')],
+        ['translate.googleapis.com', googleOk('G|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({
+          autoFallbackToGoogle: false,
+          fallbackOrder: ['deepseek'],
+          providerKeys: { openai: 'sk-primary', deepseek: 'sk-d' }
+        })
+      );
+      check('9.6 开关关掉时一次降级都不发生', requests.length === 1, JSON.stringify(requests.map((r) => r.url.slice(0, 32))));
+      check('9.6 展示该服务真实报错（不是降级占位）', /^\[OPENAI 失败: /.test(res.translations[0]), res.translations[0]);
+      check('9.6 失败掩码置位', res.failed[0] === true);
+    }
+
+    /* 9.7 候选解析：跳过当前厂牌 / 跳过未配 Key / 丢弃非法 id / 去重 / 免费通道免 Key */
+    {
+      const cands = resolveFallbackCandidates(
+        mk({
+          fallbackOrder: ['openai', 'claude', 'kimi', 'kimi', 'evil', 'google-free'],
+          providerKeys: { openai: 'sk-primary', kimi: 'sk-k' }
+        })
+      );
+      const ids = cands.map((c) => c.providerId);
+      check('9.7 跳过当前正在用的厂牌', !ids.includes('openai'), JSON.stringify(ids));
+      check('9.7 跳过未配 Key 的厂牌', !ids.includes('claude'), JSON.stringify(ids));
+      check('9.7 丢弃未知 id', !ids.includes('evil'), JSON.stringify(ids));
+      check('9.7 重复项只留一次', ids.filter((x) => x === 'kimi').length === 1, JSON.stringify(ids));
+      check('9.7 免费通道不需要 Key 也能进链', cands.some((c) => c.providerId === 'google-free' && c.settings.apiKey === ''), JSON.stringify(ids));
+      check('9.7 候选保持用户设定的相对顺序', JSON.stringify(ids) === JSON.stringify(['kimi', 'google-free']), JSON.stringify(ids));
+      check(
+        '9.7 当前厂牌识别：providerId 与 service 对不上时按 service 主厂牌落位',
+        resolveCurrentProviderId({ ...DEFAULT_SETTINGS, service: 'gemini', providerId: 'kimi' }) === 'gemini',
+        resolveCurrentProviderId({ ...DEFAULT_SETTINGS, service: 'gemini', providerId: 'kimi' })
+      );
+      check(
+        '9.7 当前在免费通道时，当前厂牌是 google-free（providerId 只是上次用过的那家）',
+        resolveCurrentProviderId({ ...DEFAULT_SETTINGS, service: 'google', providerId: 'deepseek' }) === 'google-free',
+        resolveCurrentProviderId({ ...DEFAULT_SETTINGS, service: 'google', providerId: 'deepseek' })
+      );
+      check(
+        '9.7 免费通道下 providerId 那家**不会**被误当作当前厂牌排除',
+        JSON.stringify(
+          resolveFallbackCandidates({
+            ...DEFAULT_SETTINGS,
+            service: 'google',
+            providerId: 'deepseek',
+            fallbackOrder: ['deepseek', 'google-free'],
+            providerKeys: { deepseek: 'sk-d' }
+          }).map((c) => c.providerId)
+        ) === JSON.stringify(['deepseek']),
+        JSON.stringify(
+          resolveFallbackCandidates({
+            ...DEFAULT_SETTINGS,
+            service: 'google',
+            providerId: 'deepseek',
+            fallbackOrder: ['deepseek', 'google-free'],
+            providerKeys: { deepseek: 'sk-d' }
+          }).map((c) => c.providerId)
+        )
+      );
+      check(
+        '9.7 临时设置里顺序被清空（第二道防递归闸）',
+        cands.every((c) => Array.isArray(c.settings.fallbackOrder) && c.settings.fallbackOrder.length === 0)
+      );
+
+      /* 全链验证：未配 Key 的 claude 一个请求都不该发 */
+      const t = textsOf('D7-', 1);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'down')],
+        ['api.anthropic.com', llmOk('C|')],
+        ['api.moonshot.cn', llmOk('K|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({ fallbackOrder: ['claude', 'kimi'], providerKeys: { openai: 'sk-primary', kimi: 'sk-k' } })
+      );
+      check('9.7 未配 Key 的 claude 没被请求', hits('api.anthropic.com').length === 0, String(hits('api.anthropic.com').length));
+      check('9.7 直接落到有 Key 的 kimi', res.translations[0].startsWith('K|'), res.translations[0]);
+    }
+
+    /* 9.8 不递归：四级候选全失败 + Google 也失败 → 降级级数 = 候选数 + 1，每个厂牌只碰 1 次 */
+    {
+      const t = textsOf('D8-', 1);
+      const order = ['deepseek', 'kimi', 'zhipu', 'gemini'];
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'down')],
+        ['api.deepseek.com', () => failRes(400, 'down')],
+        ['api.moonshot.cn', () => failRes(400, 'down')],
+        ['open.bigmodel.cn', () => failRes(400, 'down')],
+        ['generativelanguage.googleapis.com', () => failRes(400, 'down')],
+        ['translate.googleapis.com', () => failRes(429, 'down')],
+        ['translate.google.com', () => failRes(429, 'down')],
+        ['api.mymemory.translated.net', () => failRes(429, 'down')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({
+          fallbackOrder: order,
+          providerKeys: { openai: 'sk-primary', deepseek: 'sk-d', kimi: 'sk-k', zhipu: 'sk-z', gemini: 'sk-g' }
+        })
+      );
+      const perProvider = {
+        openai: hits('api.openai.com').length,
+        deepseek: hits('api.deepseek.com').length,
+        kimi: hits('api.moonshot.cn').length,
+        zhipu: hits('open.bigmodel.cn').length,
+        gemini: hits('generativelanguage.googleapis.com').length
+      };
+      check('9.8 每个厂牌最多被请求 1 次（不来回弹）', Object.values(perProvider).every((n) => n <= 1), JSON.stringify(perProvider));
+      check('9.8 主通道只发 1 次（不在降级里重试主通道）', perProvider.openai === 1, JSON.stringify(perProvider));
+      const levels = order.reduce((s, k) => s + (perProvider[k] > 0 ? 1 : 0), 0) + (hits('translate.googleapis.com').length > 0 ? 1 : 0);
+      check('9.8 降级级数 ≤ 候选数 + 1', levels <= order.length + 1, String(levels));
+      check('9.8 降级级数 = 候选数 + 1（四级 + Google 兜底都在同一条链上）', levels === order.length + 1, String(levels));
+      check('9.8 全失败仍按 [降级失败: …] 收尾', res.translations.every((x) => /^\[降级失败: .+\]$/.test(x)), JSON.stringify(res.translations));
+    }
+
+    /* 9.9 一级部分成功即采用该级结果：不做失败句逐句重试（请求量不随句数放大） */
+    {
+      const t = textsOf('D9-', 3);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'down')],
+        ['api.deepseek.com', (url, init, body) => {
+          const items = JSON.parse(body.messages[1].content);
+          return okRes({
+            choices: [{ message: { content: JSON.stringify(items.slice(0, 2).map((it, i) => ({ id: i, translation: `DS|${it.text}` }))) } }]
+          });
+        }]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({ fallbackOrder: ['deepseek'], providerKeys: { openai: 'sk-primary', deepseek: 'sk-d' } })
+      );
+      check('9.9 该级只发 1 次请求（noSentenceRetry：失败句不逐句重试）', hits('api.deepseek.com').length === 1, String(hits('api.deepseek.com').length));
+      check('9.9 拿到的两句用该级译文', res.translations[0].startsWith('DS|') && res.translations[1].startsWith('DS|'), JSON.stringify(res.translations));
+      check('9.9 缺条目那句按降级占位', /^\[降级失败: /.test(res.translations[2]), res.translations[2]);
+      check('9.9 只有缺条目那句标失败', JSON.stringify(res.failed) === JSON.stringify([false, false, true]), JSON.stringify(res.failed));
+      check('9.9 有级成功就不兜底 Google', hits('translate.googleapis.com').length === 0);
+    }
+
+    /* 9.10 缓存不分叉：降级成功的译文写回主路径缓存键，第二次 0 请求 */
+    {
+      const t = textsOf('D10-', 2);
+      reset(route([
+        ['api.openai.com', () => failRes(400, 'down')],
+        ['api.deepseek.com', llmOk('DS|')]
+      ]));
+      const s = mk({ fallbackOrder: ['deepseek'], providerKeys: { openai: 'sk-primary', deepseek: 'sk-d' } });
+      const first = await translateSentenceBatchDetailed(t, 'zh-CN', s);
+      const spent = requests.length;
+      const second = await translateSentenceBatchDetailed(t, 'zh-CN', s);
+
+      check('9.10 降级成功的译文写回主路径缓存键（第二次 0 新请求）', requests.length === spent, `${spent} → ${requests.length}`);
+      check('9.10 第二次直接复用同一批译文', JSON.stringify(second.translations) === JSON.stringify(first.translations), JSON.stringify(second.translations));
+      check('9.10 复用时不标失败', second.failed.every((f) => !f), JSON.stringify(second.failed));
+    }
+
+    /* 9.11 当前就是 Google 免费通道：失败是「句级失败」，不是传输级抛错 → 不进入降级分支
+     * （v0.4.1 就是这个语义，本轮不改：translateWithGoogle 把错误吞成逐句 errors，
+     *   所以免费通道当主通道时 fallbackOrder 不会生效 —— 这是刻意保留的既有行为） */
+    {
+      const t = textsOf('D11-', 1);
+      reset(route([
+        ['translate.googleapis.com', () => failRes(429, 'down')],
+        ['translate.google.com', () => failRes(429, 'down')],
+        ['api.mymemory.translated.net', () => failRes(429, 'down')],
+        ['api.deepseek.com', llmOk('DS|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({ service: 'google', providerId: 'google-free', apiKey: '', modelName: '', fallbackOrder: [] })
+      );
+      check('9.11 免费通道 + 空顺序 → 不降级（保持 v0.4.1：写句级占位）', /^\[翻译失败: /.test(res.translations[0]), res.translations[0]);
+      check('9.11 没去请求任何大模型厂牌', hits('api.deepseek.com').length === 0);
+    }
+
+    /* 9.12 免费通道 + order 非空：同样不降级（同上，免费通道的失败不上抛）—— 锁定这个既有语义 */
+    {
+      const t = textsOf('D12-', 1);
+      reset(route([
+        ['translate.googleapis.com', () => failRes(429, 'down')],
+        ['translate.google.com', () => failRes(429, 'down')],
+        ['api.mymemory.translated.net', () => failRes(429, 'down')],
+        ['api.deepseek.com', llmOk('DS|')]
+      ]));
+      const res = await translateSentenceBatchDetailed(
+        t,
+        'zh-CN',
+        mk({
+          service: 'google',
+          providerId: 'google-free',
+          apiKey: '',
+          modelName: '',
+          fallbackOrder: ['deepseek'],
+          providerKeys: { deepseek: 'sk-d' }
+        })
+      );
+      check('9.12 免费通道当主通道时顺序不生效（既有语义，未在本轮改写）', !res.translations[0].startsWith('DS|'), res.translations[0]);
+      check('9.12 顺序里的厂牌一个请求都没发', hits('api.deepseek.com').length === 0, String(hits('api.deepseek.com').length));
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
 console.log(`\n汇总: ${passed} 通过, ${failed} 失败`);
 if (failed > 0) {
-  assert.fail(`失败句局部重试守卫有 ${failed} 项失败，详见上方 ✗ 行`);
+  assert.fail(`失败句局部重试 / 降级链守卫有 ${failed} 项失败，详见上方 ✗ 行`);
 }
 console.log('\n所有测试项验证通过！');

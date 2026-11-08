@@ -8,6 +8,215 @@
 
 ---
 
+## [0.4.3] - 2026-11-09 (降级顺序 / 逐级降级 · 并入 0.4.2 全部改动)
+
+> 本版包含 `0.4.2` 的全部改动（`0.4.2` 从未提交、从未发版，故未单独发布，其内容随本版首次发布）。
+> 以下先按主题把 `0.4.2` 的改动列全，末节「🆕 本版新增」为本版自己的改动。
+> 版本号同步点（`package.json` / `package-lock.json` / `wxt.config.ts` / 三处入口 banner /
+> popup 与 options 页脚）均为 `0.4.3`，两个构建产物目录同版本。
+> 本轮只做本地准备：**未 commit / tag / push**，仓库 tag 仍停在 `v0.4.1`，待确认后再打。
+
+### ✨ 新增
+- **厂牌图标**：接入 LobeHub `@lobehub/icons-static-svg` v1.102.0（MIT）的单色原始 SVG 路径，
+  新建 `utils/provider-icons.ts` 收录 8 个品牌；只去掉根 `<svg>` 包装与 `<title>`，未自行绘制，
+  图标继承 `currentColor`，深浅两套主题共用一份。
+- **翻译场景三入口**：「＋ 新建场景 / 导入 JSON / 用 AI 生成模板」，配可折叠的格式规范；
+  术语库在「导入 JSON」下补同一份「用 AI 生成模板」。两份模板以 `# 需求：` 开头，
+  含顶层字段表与最小可导入示例，剪贴板不可用时降级为选中 textarea + 手动复制提示。
+- **AI 字幕持久化**：新建 `utils/ai-track-cache.ts`，独立 IndexedDB `yt_sub_ai_tracks`；
+  `ephemeral-subtitle-store` 不再在 `pagehide` / `beforeunload` 销毁（只 flush）。
+  新增设置项 `aiCacheTtlHours`（24 / 168 / 720 / 0，0 = 永久）与 `aiResumeMode`（manual / auto）。
+  `planResume` 复用已翻句、只续翻缺句并带上文 2 句；上文只进 user 消息，system prompt 与缓存键未动。
+- **厂牌内「测试连通性」**：用弹窗同一口径（`TRANSLATE_BATCH` + 1 句样例 + `noFallback` + `bypassCache`）
+  串行真实测延迟，结果显示在模型名后（600 / 1800 三档 + 失败一档），只留在本次会话、不落盘。
+
+### 🔄 变更
+- **厂牌化模型**：`utils/models.ts` 重写为 `PROVIDERS`（Google 免费通道 + 7 个厂牌，
+  22 个 2026-11 官方型号）；新增 `providerId` / `providerKeys` / `providerBaseUrls`，
+  旧 `serviceKeys` / `baseUrls` 迁移后只读。
+- **Key 只存本地**：`utils/storage.ts` 拆 sync / local，`apiKey` 与 `providerKeys` 只落
+  `local['yt_sub_translator_secrets']`，sync 显式剔除；老数据首次读取搬移并抹掉 sync 里的副本，幂等。
+- **空场景补齐**：`utils/packs.ts` 为科普视频 / 音乐视频 / 游戏实况补上 854 / 686 / 870 字提示词
+  （原先 `prompt: ''` 回落 general）；vtuber / general 的 prompt 哈希逐字节未变。
+- **常规页折叠**：「翻译服务」由 4 段硬编码改为按 `PROVIDERS` 的 8 通道折叠（带厂牌图标）；
+  「翻译场景」改折叠，展开后仍是原来那张 `.scenario-grid`，卡片样式不变；两者默认收起、不持久化。
+- **自适应**：`--content-max: 1100px`、`--font-base: clamp(14px, 0.18vw + 13.2px, 16px)`、
+  三档断点（≥1280 / 1024–1279 / ≤1023 顶部横向页签）；1920 / 1440 / 1280 / 1024 / 800
+  五档横向溢出全 0；不用 `transform: scale()`。
+- **可读性**：body 14px / 行标题 14px / 说明 12.5px / 表格 12.5px，`--text-muted` 约 7.8:1；
+  补齐分段滑块、厂牌展开、details、弹层、列表选中、复制反馈的动效，`prefers-reduced-motion` 归零。
+- **弹窗选项与设置页同步（8 通道 / 按厂牌 Key / 模型不混装）**：弹窗服务下拉改由
+  `utils/models.ts#PROVIDERS` 动态生成 8 个通道（首项 Google 免费翻译，`value = provider.id`），
+  `index.html` 里不再硬编码 4 个 `<option>`；切厂牌一次性写 `providerId` / `service` / `modelName` /
+  `apiKey`（取 `providerKeys[providerId]`）/ `apiBaseUrl`（取 `providerBaseUrls[providerId]` 或厂牌官方端点），
+  三个输入框随之刷新，不再出现「拿 DeepSeek 的 Key 请求 anthropic 端点」的 401；
+  弹窗自带的 `PRESET_MODELS` 删除，模型下拉按 `providerId` 读厂牌清单（在线优先、参考补后、按 id 去重），
+  下架型号在弹窗彻底消失；缓存键改为 `cached_models_<providerId>` 并**兼容旧的 `cached_models_<service>`**；
+  `:root` 补回 `color-scheme: dark`（8 个 option 的深色可读性），厂牌图标只出现在选中态 `#service-icon`。
+  **弹窗一个配置控件都没删**，也不恢复 `storage.onChanged` 实时双向同步。
+- **弹窗保留完整配置；设置页补齐 `glossaryEnabled`**：弹窗维持 `v0.4.1` 的完整配置版
+  （4 页签：通用与翻译 / 术语与场景 / 断句引擎 / 样式排版），API Key、端点、手填模型、
+  4 个断句滑块、取色器、字号 / 不透明度、场景与术语库上传、细开关全部留在弹窗，一项没删；
+  「精简成遥控器」的方案**已回退**（`entrypoints/popup/*` 回到 `v0.4.1`）。
+  设置页侧新增术语库分区的「注入术语库」开关（`glossaryEnabled`，与弹窗同字段、同默认值）。
+- **视频浮层移除「翻译场景」入口**（任务五 · 问题 4）：快捷面板里那个折叠模块
+  （`data-accordion="scenario"`，含「VTuber 直播 / 通用日常」两段切换器）整个删除，
+  连同它的渲染同步、点击绑定与「切换场景：xxx」toast；剩下三个折叠模块序号顺延为 1/2/3。
+  **场景只在扩展弹窗 / 设置页切换**，浮层只保留只读展示（状态行「已就绪 (VTuber直播 · N 句)」）。
+  `settings.scenario` 字段与其它调用方一律未动；该模块无专属 CSS，故 `overlay-styles.ts`
+  一行未改（VSR 声明数复核仍为 0）。
+
+### 🐛 修复
+- **Key 随 sync 跨设备同步**：收敛为只落 local，老数据迁移后抹掉 sync 副本，密钥不再进入云同步面。
+- **刷新 / 重开视频整轨重译**：改为读 IDB 缓存复用已翻句、只补缺句并带上文 2 句；
+  换轨（源字幕文本变化）与目标语言不一致都会判 `reusable=false`，不复用旧译文。
+- **三个空场景回落 general**：补上各自完整提示词，不再拿 general 的人设顶替。
+- **参考 / 预置型号混进模型下拉**（问题 2，写最终状态）：用户选了 OpenAI、端点指向中转站，
+  下拉里仍混着 `gpt-*` 预置型号，点一个必然 404；获取模型后，参考清单里那些不在实际列表中的型号
+  也照旧显示。**最终实现：预置型号完全退出 UI** —— `PROVIDERS[].models` 只作内部参考
+  （默认模型 / 归属判断 / 记忆取值），不再渲染成任何列表：弹窗下拉 = `cached_models_<providerId>`
+  ∪ 当前设置那一行（+ 未获取时的一行禁用提示），设置页模型行 = 在线缓存 ∪ 自定义模型 ∪ 当前在用那一行
+  （无缓存时 0 行 + 空态提示）；「参考清单里有 N 个型号已隐藏」那套四分支逻辑与 `hiddenReferenceCount`
+  一并删除，旧的 `/models` 列表测速按钮也删掉（由厂牌内「测试连通性」取代）。
+  （中间曾有一版「获取后只隐藏不在实际列表中的参考型号、当前使用中型号例外、空数组不清空」，
+  已在同一轮整体撤回，最终以「预置型号完全退出 UI」为准。）
+- **常规页通道与 `PROVIDERS` 脱节**：4 段硬编码改为按厂牌渲染，新增 / 下架厂牌不再需要改 HTML。
+- **切厂牌后模型被重置**（界面与设置 · 问题 1）：设置里只有一个 `modelName`，切走厂牌时旧选择没有
+  地方存，切回来只能落到 `provider.models[0]` —— 于是「DeepSeek 选 `deepseek-v4-pro` → 切 Claude →
+  切回 DeepSeek」会掉回 `deepseek-flash`。新增 `providerModelSelections`（providerId → model id）：
+  切走前留底、切到新厂牌按「记忆 → 当前型号本就属于它 → 默认模型」取值，弹窗与设置页同一份实现；
+  记忆里的值**不校验是否还在参考清单里**（手填 id / 已下架型号都能恢复）。
+- **弹窗长列表铺满整页**（问题 3）：「翻译场景」「术语库」改为可折叠分区
+  （`<section class="pack-section">` + `aria-expanded` + `grid-template-rows 0fr → 1fr`），
+  收起只留一行摘要（场景名 + 共 N 个 / 注入状态 + N 条 + M 个库），折叠状态存
+  `chrome.storage.local` 的 `yt_sub_popup_pack_sections`（不进设置对象），刷新后保持；
+  功能一项没删，只是被折叠起来。
+- **设置页可展开项过渡不一致**（问题 5）：「高级 Base URL」与「文件格式规范（JSON）」两个原生
+  `<details>` 此前只有一次淡入、高度是瞬跳，而厂牌面板是平滑展开。给 details 内容包一层
+  `.details-body`（grid 0fr → 1fr + opacity，`toggle` 驱动 `.is-open`），五个 disclosure
+  （两个 `.fold` / 厂牌面板 / 两个 details）的 `transition-property` 与 `duration` 实测完全一致
+  （`grid-template-rows, opacity` · `0.3s, 0.3s`），箭头时长也对齐到 `--dur-base`。
+
+### 🆕 本版新增 · 降级顺序 / 逐级降级
+
+> 需求原话：「默认保持现有行为，即用户未主动选择时可直接降级至谷歌免费翻译；新增『自动降级』开关，
+> 开启后允许用户为已配置的厂牌设置优先级顺序，并支持通过上下拖拽直接调整排序。」
+
+- **`fallbackOrder` + 自动降级开关**：新增 `ExtensionSettings.fallbackOrder: string[]`（`providerId`，
+  顺序即优先级，高 → 低，默认 `[]`）；开关复用既有的 `autoFallbackToGoogle`（默认 `true`），
+  **没有第二个开关字段**，也没写专属保存代码，走 `bindControls()` 的通用 checkbox 分支。
+- **默认行为不变**：`autoFallbackToGoogle = true` 且 `fallbackOrder = []` 时与 `0.4.1` 完全一致 ——
+  主通道失败直接降级 Google 免费；关掉开关则一次降级都不发生，直接展示该服务的真实报错（`[OPENAI 失败: …]`）。
+- **逐级降级链**：顺序非空时按数组顺序逐级试，每级用它自己的 `apiKey` / `apiBaseUrl` / `modelName`
+  造临时 settings，译同一批文本**只发一次请求**（不逐句重试，请求量不随句数放大）；
+  有任一可用译文即采用该级结果，全部失败再落 Google 免费；Google 也失败才给 `[降级失败: …]`。
+- **候选过滤**（`utils/translator.ts#resolveFallbackCandidates`）：丢弃未知 id、跳过当前正在用的厂牌、
+  跳过未配 Key 的厂牌（免费通道免 Key）、去重。存储层清洗（`utils/storage.ts#sanitizeFallbackOrder`）
+  只留 `utils/models.ts#PROVIDERS` 白名单、去重（保留首次出现的位置）、上限 8，缺项 / 非数组 → `[]`
+  （老数据不报错、行为不变）；**不校验「有没有配 Key」** —— Key 可以事后补，优先级是用户偏好，
+  不该被存储层悄悄改掉（运行时自己跳过无 Key 的级）。
+- **防递归与请求量控制**：降级请求带 `fallbackDepth > 0`，链内禁止再降级（级数 = 候选数 + 1，
+  每个厂牌只碰 1 次）；`noFallback: true`（测试连接 / AI 深度全篇）一次降级都不发生，语义不变。
+- **不进缓存指纹**：改 `fallbackOrder` **不会**让旧译文失效，所以这一行没有任何「将重新翻译」提示
+  （对比：切场景 / 改括注会提示）；降级成功的译文写回主路径缓存键，同一内容第二次 0 请求、不分叉。
+- **界面承载**（设置页 · 常规页「翻译服务」下方）：开启后同一行块内展开「降级顺序」列表，一行 = 一级，
+  展示顺序即执行顺序。未配 Key 的厂牌**置灰标「未配置 Key · 不生效」但保留**（界面不替用户删条目），
+  已配 Key 但还没写进数组的追加在末尾标「未排序」，链尾**固定一行** `Google 免费翻译`（「最终兜底 · 无需 Key」，
+  不可拖、不可删、无手柄）。空态给出「还没有可参与降级的厂牌 · 先去上面的厂牌行填写 API Key」与
+  「未设置顺序时，失败会直接降级到 Google 免费翻译。」——**不预填任何默认顺序**。
+  关掉开关时列表收起但**不写 `fallbackOrder`**（用户排好的顺序留着，下次开启还在）。
+  读屏：`aria-expanded` 随开关走 + `aria-controls="fallback-order-panel"`，且只在 JS 里写，HTML 不留静态值。
+- **可拖拽排序**：用 Pointer Events（`pointerdown/move/up/cancel`），**不是** HTML5 DnD
+  （`dragstart` 在移动端与部分环境下不触发），鼠标 / 触控 / 触控笔一套代码，零第三方依赖。
+  手柄 4px 死区（轻点不算拖）、被拖行 `translateY(dy)` 严格跟手、中间行 `translateY(±step)` 平滑让位、
+  插入指示线绝对定位且位置只写 `transform`；位移夹取在 `[-from·step, (n-1-from)·step]`（免得骑到标题行上）。
+  松手立刻写回 `fallbackOrder`（数组 = 界面行顺序）并重绘重编号；拖拽进行中 `renderFallbackOrder()`
+  直接返回，否则 320ms 后的存储回声会把节点换掉、手势当场断。
+- **键盘可达**（两套互不依赖）：每行 `<button class="fallback-move" data-move="up|down">`（视觉即 ↑ / ↓），
+  边界用 `aria-disabled="true"` + no-op 而**不** `disabled`（disabled 会把焦点丢回 body，连按就断）；
+  另给 `Alt+↑ / ↓`，焦点落在行内任意位置也能调顺序。重绘后焦点经 `captureFallbackFocus()` /
+  `applyFallbackFocus()` 回到「被移动的那一行」，存储回声那次重绘也不会掉回 body。
+
+### ⚠️ 破坏性 / 需注意
+- **多设备 Key 不再同步**：`apiKey` / `providerKeys` 只落本地，同步存储里不再有密钥。
+  升级后**每台设备都要重新填一次 Key**（老数据只在本机首次读取时自动搬移，不会跨设备带过去）。
+- **三个场景提示词补齐会让选了它们的用户重译一次**：科普视频 / 音乐视频 / 游戏实况的
+  `prompt` 由空变成独立文本，缓存键里的 prompt 指纹随之变化，旧译文失效；
+  vtuber / general 用户不受影响（哈希未变）。
+- **预置型号完全退出 UI**（最终状态，非中间态）：`PROVIDERS[].models` 从此**只作内部参考**
+  （默认模型 / 归属判断 / 记忆取值），不再渲染成任何列表 —— 弹窗下拉 = `cached_models_<providerId>`
+  ∪ 当前设置那一行（未获取时追加一行禁用提示），设置页模型行 = 在线缓存 ∪ 自定义模型 ∪ 当前在用那一行
+  （无缓存时 0 行 + 空态提示）。因此 `deepseek-chat` / `deepseek-reasoner`（2026-07-24 停用）、
+  `gpt-4o*`、`gemini-1.5*` 等下架型号不再出现在任何下拉里；**用户手填的 model id 仍保留**，不会被清空。
+  （中间曾有一版只隐藏「不在实际列表中的参考型号」并保留「参考清单里有 N 个型号已隐藏」提示，
+  该版本已在同一轮内整体撤回，以上为最终实现。）
+- **降级顺序不影响译文有效期**：`fallbackOrder` / 自动降级开关都不进缓存指纹，升级后旧译文照常命中、
+  不需要重译；本版唯一会触发重译的仍是上面那条「三场景 prompt 补齐」。
+
+### ✅ 验证
+
+**本版（0.4.3）实测**
+- `npm test` **EXIT=0**（`npm test > log 2>&1; echo $?`，按退出码判定，未用 grep）。逐套件实测：
+  packs 114 · glossary 68 · segmenter 6 · segmenter-lang 85 · scenario 94 · prompt-layers 67 ·
+  retry **110** · popup-ui **58** · options-ui **554** · ai-track 104 —— **1260 打印项，0 失败**。
+  相对 `0.4.2` 轮次的 1166：`options-ui` 511 → 554（+43，降级顺序列表 / 拖拽 / 键盘 / 空态）、
+  `retry` 59 → 110（+51，逐级降级链 12 组用例），其余 8 个套件一条未动；这 94 条全是新增用例，旧断言一条未改。
+- `test-parser / test-settings / test-vsr-styles` 不打印逐条汇总，另有 81 条断言
+  （14 / **62** / 5，`test-settings.js` 本轮 +12，守 `fallbackOrder` 的白名单清洗、去重、上限 8、
+  缺项落空数组、写 sync 与老数据兼容），合计约 **1341** 条；13 个套件全部走抛错断言收口，
+  **无 `console.assert` 例外文件**（`test-segmenter.js` / `test-scenario.js` 均已改 `node:assert`，
+  失败会真的把 `npm test` 变红）。
+- 断言口径由「1166 打印项 / 约 1235 断言」更新为「**1260 打印项 / 约 1341 断言**」，`README.md` 已同步。
+- `npx tsc --noEmit` **EXIT=0**。
+- `npm run build:chrome` **EXIT=0** → `.output/chrome-mv3`，manifest `version = **0.4.3**`；
+  `npm run build:edge` **EXIT=0** → `.output/edge-mv3`，manifest `version = **0.4.3**`
+  （双平台同版本，`options_ui.open_in_tab` 仍为 `true`，产物不入库）。
+- 版本一致性：5 处同步点（`package.json` / `package-lock.json` 自身两处 / `wxt.config.ts` manifest.version /
+  三处入口 banner / popup 与 options 页脚）实测均为 `0.4.3`；`package-lock.json` 仅 2 行改动，
+  134 处依赖版本号一处未动。
+- 降级顺序的执行链与界面承载的端到端（沿用该功能的交付记录：真 Chrome headless + esbuild + chrome 桩，
+  夹具 `D:/edge/_ui/fallback-order/`，不进仓库）：**50 / 50 通过、零 pageerror**（a~h 八项 + 空态 i 组），
+  1280 / 800 横向溢出整页与列表 Δ 均为 0。本版升版轮次**未重跑**这套端到端，只重跑了下面三项工程校验。
+
+**0.4.2 轮次留痕（夹具均不进仓库，含当时版本号）**
+- 效果截图（真 Chrome headless + esbuild IIFE + chrome 桩，夹具在 `D:\edge\_ui\release-0.4.2\`）：
+  弹窗 / 常规页收起与展开 / 服务与模型 / 翻译场景 / 800px 顶部页签共 6 张，零 pageerror。
+  弹窗选项同步另有一批（`D:\edge\_ui\popup-sync\`，10 张）：8 通道选中态（deepseek / claude / google 免 Key /
+  openai / gemini / qwen / kimi / zhipu）、Claude 下改 Key、旧缓存兼容，同样零 pageerror。
+- 界面修复轮另起一套端到端（`D:\edge\_ui\fix5\`，11 张截图 + `report.json`，**38/38 组通过、零 pageerror**）：
+  ①弹窗选 `deepseek-v4-pro` → 切 Claude → 切回仍是 `deepseek-v4-pro`，重开弹窗后再切一次仍能恢复；
+  ②设置页同场景同结果、与弹窗互通；③7 个厂牌未获取时弹窗下拉 = 1 行当前设置 + 1 行禁用提示，
+  设置页 = 仅当前在用（其余 0 行 + 空态），全仓扫描无「非当前设置」的参考型号；
+  ④拉到 `gemini-*` 后下拉只有 gemini-\* + 当前设置行；⑤两个折叠区默认收起 / 展开 / 收起不可聚焦 / 刷新保持；
+  ⑥五个 disclosure 的 `transition-property`+`duration` 计算值完全一致，`details` 展开高度逐帧采样
+  （`0 → 280 → 503 → 611.8 → 688.3 → 728.5`）；⑦两个页面横向溢出 0；
+  ⑧既有验收项未回退：8 个分区齐全、术语库首包 146 行、搜索 `ときのそら` → `1 / 146 条`、
+  字号 20 → 32 实时预览且落盘、当时两个 manifest 均为 `0.4.2` 且 `open_in_tab=true`。
+  桩里的 `GET/SAVE_SETTINGS` 直接转发给**仓库真实的 `utils/storage.ts`**，不是另写一套合并逻辑。
+- 浮层移除「翻译场景」入口另起一套端到端（真 Chrome headless + esbuild IIFE 含 shadow DOM +
+  模拟 YouTube 播放器页，夹具在 `D:\edge\_ui\overlay-fix\`，**31/31 组通过、零 pageerror**）：
+  ①`[data-accordion="scenario"]` / `[data-switcher="scenario"]` / `#qp-badge-scenario` / `[data-scenario]`
+  与文本「翻译场景」全部为 0；②剩余三模块顺序为 双语排版模式 → 时间轴同步微调 → 推理思考深度，
+  逐个展开（body 40 / 36 / 40px）与收回（0px）正常；③三模块间距一致 8px、无重叠、无空洞、
+  面板与主视图横向溢出 0（1280×800 下同样 0）；④只读状态行仍显示 `已就绪 (VTuber直播 · 2 句)`，
+  切 general 后同步为「通用模式」，浮层内 0 条 scenario 写入。
+
+**文档自检与已知缺口**
+- `git describe --tags` 仍为 `v0.4.1`（本版**不打 tag**，tag 由编排层在提交后统一打，属预期状态）；
+  `package.json` / `package-lock.json` / `wxt.config.ts` 均为 `0.4.3`。
+- `docs/PROVIDER-MODELS.md` 已改写为「`PROVIDERS[].models` 只是内部参考，不再是 UI 列表」并给出
+  「未获取时怎么选模型」的用户路径；`docs/UI.md` §十一 与 `docs/OPTIONS-0.4.0.md` §十六 记录那四项修复；
+  `docs/OPTIONS-0.4.0.md` §十七 与 `docs/TRANSLATOR-RETRY.md` §九–§十 记录降级顺序；`docs/UI.md` §十二
+  记录其动效与交互。上述文档里出现的 `0.4.2` 是**当时轮次的历史标注**（按口径保留，不改写）；
+  `docs/UI.md` §十 与 `docs/OPTIONS-0.4.0.md` §十五 里的「基线 tag `v0.4.1` / 包版本 `0.4.1`」同样是历史快照。
+- 已知缺口未变：断句金标集 `docs/断句金标集标注任务包.xlsx` 尚未标注，因此**没有绝对 P/R/F1 基线**，
+  只有版本间相对对比；实机覆盖仍只有 Edge 156 + Windows + RTX 3060 Laptop，Chrome / Firefox 未逐版本验证。
+
+> 注：`0.4.2` 从未提交、从未发版，因此**没有独立条目** —— 其全部改动已并入上面的 `0.4.3` 段
+> （该段标题已标注「并入 0.4.2 全部改动」），此处不重复计数。
+
+---
+
 ## [0.4.1] - 2026-11-06 (六模块：断句 / 翻译 / 术语 / 界面 / 质量)
 
 > 本版收口两批未发布改动：上一轮「五模块复核修复」与本轮六模块改动**一并**发布（`0.4.0` 之后无独立快照，`0.3.x` 亦无）。

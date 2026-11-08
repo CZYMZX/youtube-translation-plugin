@@ -12,6 +12,16 @@ import { normalizeCaptionResponse } from '../../utils/caption-parser';
 import { ControlBarButtonManager } from '../../utils/control-bar-button';
 import { TranslationQueue } from '../../utils/translation-queue';
 import { EphemeralSubtitleStore } from '../../utils/ephemeral-subtitle-store';
+import {
+  AI_TRACK_BATCH_SIZE,
+  AI_TRACK_CONTEXT_WINDOW,
+  buildAiTrackRecord,
+  buildResumeBatches,
+  decideAiRunAction,
+  planResume,
+  type AiResumePlan,
+  type AiTrackRecord
+} from '../../utils/ai-track-cache';
 import { getCachedSentencesBatch, buildSentenceCacheKey } from '../../utils/db-cache';
 import { SubtitleOverlay } from './overlay';
 
@@ -20,7 +30,7 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.4.1]%c Content-script active (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.4.3]%c Content-script active (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -53,6 +63,8 @@ export default defineContentScript({
     let currentSourceLang = '';
     // AI 全篇精翻的运行代际：切视频时自增，旧循环立即失效，避免把旧字幕写进新视频
     let aiRunToken = 0;
+    // 「命中本地 AI 精翻缓存」日志每部视频只打一次，避免每批都刷屏
+    let aiTrackHitLoggedFor = '';
     // 播放器 / 字幕 DOM 观察器的节流计时器
     let playerSyncTimer: any = null;
     let domCaptionTimer: any = null;
@@ -424,10 +436,12 @@ export default defineContentScript({
 
     function handleVideoChange(newVid: string) {
       if (currentVideoId) {
-        EphemeralSubtitleStore.clear(currentVideoId);
+        // 只释放页内内存镜像；**不删盘** —— 旧视频的整轨记录要留给「重看时续翻」
+        EphemeralSubtitleStore.release(currentVideoId);
       }
       currentVideoId = newVid;
       EphemeralSubtitleStore.init(newVid);
+      aiTrackHitLoggedFor = '';
       currentSentences = [];
       lastCaptionData = null;
       currentLoadingTrackUrl = '';
@@ -915,30 +929,138 @@ export default defineContentScript({
       const sentences = segmentCaptionTokens(tokens, settings);
       console.log(`[YT-Sub-Translator] Segmented into ${sentences.length} sentences.`);
 
-      // 检查当前视频是否已有临时 AI 字幕缓存
-      const cached = EphemeralSubtitleStore.load(currentVideoId);
-      if (cached && cached.length === sentences.length && cached.some((s) => s.translation)) {
-        console.log('[YT-Sub-Translator] Loaded from ephemeral subtitle store for video:', currentVideoId);
-        currentSentences = cached;
-        updateNativeSubtitleVisibility();
-        if (overlay) {
-          overlay.setSentences(currentSentences, true);
-          const doneCount = cached.filter((s) => s.translation).length;
-          if (doneCount === cached.length) {
-            overlay.setAiComplete(doneCount);
-          }
+      currentSentences = sentences;
+      updateNativeSubtitleVisibility();
+      if (overlay) {
+        overlay.setSentences(currentSentences, true);
+        overlay.resetAiProgress();
+      }
+
+      // 先查本地 AI 精翻整轨（内存 → IndexedDB）：命中就先把已翻的那部分铺出来，
+      // 再决定要不要跑机器翻译预翻译（全篇都 AI 翻过时完全不用发请求）。
+      void restoreAiTrackThenStartPipeline();
+    }
+
+    /**
+     * 打开视频后的第一条路径：内存 → IndexedDB → 恢复已翻部分 → 视模式决定续翻。
+     * 「刷新/重看后 AI 精翻字幕消失」这个 bug 就修在这里。
+     */
+    async function restoreAiTrackThenStartPipeline() {
+      const entryToken = aiRunToken;
+      const restored = await applyCachedAiTrack();
+      if (entryToken !== aiRunToken) return; // 期间切了视频，全部作废
+
+      const complete = !!restored && restored.pending === 0;
+
+      if (!complete) {
+        await hydrateSentencesFromCache();
+        if (entryToken !== aiRunToken) return;
+        startPreTranslationPipeline();
+      }
+
+      if (restored && restored.pending > 0) {
+        const willAutoResume = settings.aiResumeMode === 'auto';
+        if (willAutoResume) {
+          if (entryToken !== aiRunToken) return;
+          // 自动续翻：只翻缺的，不动已完成的
+          void startAiFullTranslation(restored);
+        } else if (overlay) {
+          // 手动续翻：打开视频就告诉用户「还差多少、点哪里」，不擅自发请求
+          overlay.showToast(
+            `检测到上次精翻完成 ${restored.restored}/${currentSentences.length} 句，点「AI 深度精翻」继续（不会重翻已完成部分）`
+          );
         }
-      } else {
-        currentSentences = sentences;
-        updateNativeSubtitleVisibility();
-        if (overlay) {
-          overlay.setSentences(currentSentences, true);
+      }
+    }
+
+    /** 当前视频落盘用的元信息（每次现取，用户中途改语言/场景也不会写错记录） */
+    function aiTrackMeta() {
+      return {
+        videoId: currentVideoId,
+        targetLang: settings.targetLang,
+        scenario: settings.scenario,
+        service: settings.service,
+        modelName: settings.modelName || ''
+      };
+    }
+
+    /**
+     * 取本地整轨记录：先看页内内存镜像（同一次播放内重复点按钮 / 重渲染），
+     * 再查 IndexedDB（刷新、关标签页、换天重看都走这条）。
+     */
+    async function resolveCachedAiRecord(): Promise<AiTrackRecord | null> {
+      if (!currentVideoId || currentSentences.length === 0) return null;
+      const meta = aiTrackMeta();
+      const mem = EphemeralSubtitleStore.load(currentVideoId);
+      if (
+        mem &&
+        mem.length === currentSentences.length &&
+        mem.some((s) => !!s.translation)
+      ) {
+        return buildAiTrackRecord(meta, mem);
+      }
+      return EphemeralSubtitleStore.hydrate(currentVideoId, meta);
+    }
+
+    /** 把 plan 里恢复出来的 AI 译文贴回当前句子数组（保留机翻结果，不清空） */
+    function applyPlanTranslations(plan: AiResumePlan, target: SubtitleSentence[]): number {
+      let applied = 0;
+      const len = Math.min(target.length, plan.sentences.length);
+      for (let i = 0; i < len; i++) {
+        const s = plan.sentences[i];
+        if (s.status === 'done' && typeof s.translation === 'string' && s.translation.trim()) {
+          target[i].translation = s.translation;
+          target[i].status = 'done';
+          target[i].isAi = true;
+          applied++;
+        }
+      }
+      return applied;
+    }
+
+    /**
+     * 查本地缓存并恢复已翻部分。返回 resume plan（不可复用时返回 null）。
+     * 命中会打一行日志，每部视频只打一次。
+     */
+    async function applyCachedAiTrack(): Promise<AiResumePlan | null> {
+      const record = await resolveCachedAiRecord();
+      if (!record) return null;
+
+      const plan = planResume(record, currentSentences, {
+        targetLang: settings.targetLang,
+        scenario: settings.scenario
+      });
+
+      if (!plan.reusable || plan.restored === 0) {
+        console.log(`[AiTrack] 未复用 videoId=${currentVideoId} 原因=${plan.reason}`);
+        return null;
+      }
+
+      const applied = applyPlanTranslations(plan, currentSentences);
+      plan.restored = applied;
+      plan.pending = currentSentences.length - applied;
+
+      if (overlay) {
+        overlay.setSentences(currentSentences);
+        if (plan.pending === 0) {
+          overlay.setAiComplete(currentSentences.length);
+        } else {
+          /* 注意：这里**不能**用 updateAiProgress() —— 它会把 AI 按钮置灰，
+             手动续翻模式下用户就再也点不动「AI 深度精翻」了（overlay.ts 不在本轮
+             改动范围，无法新增「只显示进度但不置灰」的方法）。
+             所以部分恢复时用 resetAiProgress() 保持按钮可用，进度用 toast 的 N/M 表达。 */
           overlay.resetAiProgress();
         }
-        hydrateSentencesFromCache().then(() => {
-          startPreTranslationPipeline();
-        });
       }
+
+      if (aiTrackHitLoggedFor !== currentVideoId) {
+        aiTrackHitLoggedFor = currentVideoId;
+        console.log(
+          `[AiTrack] 命中 videoId=${currentVideoId} 完成 ${applied}/${currentSentences.length}` +
+            (plan.pending > 0 ? `（续翻模式：${settings.aiResumeMode}）` : '（全篇完整，零请求）')
+        );
+      }
+      return plan;
     }
 
     async function hydrateSentencesFromCache() {
@@ -1040,7 +1162,13 @@ export default defineContentScript({
     }
 
     /**
-     * 全篇 AI 深度字幕精翻管线
+     * 全篇 AI 深度字幕精翻管线（按钮入口）
+     *
+     * 三条路径（需求 7）：
+     *   1. 本地缓存**全篇完整** → 直接恢复，零请求；
+     *   2. 本地缓存**只翻了一半** + `aiResumeMode='manual'`（默认）→ 立即恢复已翻部分，
+     *      只提示「已完成 N/M，点按钮继续」，不发请求；
+     *   3. 其余情况（含 auto 续翻）→ 只翻缺译文的句子，并带紧邻上文两句。
      */
     async function handleRequestAiSubtitles() {
       if (isFullAiRunning) {
@@ -1053,120 +1181,173 @@ export default defineContentScript({
         return;
       }
 
-      // 检查当前视频是否已缓存全篇
-      const cached = EphemeralSubtitleStore.load(currentVideoId);
-      if (cached && cached.length === currentSentences.length && cached.every((s) => s.translation)) {
-        currentSentences = cached;
+      // 先查本地（页内内存 → IndexedDB），已翻部分立刻铺出来
+      const plan = await applyCachedAiTrack();
+      const action = decideAiRunAction(plan, settings.aiResumeMode);
+
+      if (action === 'restore_only' && plan) {
         if (overlay) {
           overlay.setSentences(currentSentences);
           overlay.setAiComplete(currentSentences.length);
-          overlay.showToast('已直接从当前视频临时缓存载入全篇 AI 字幕！');
+          overlay.showToast('已从本地缓存载入全篇精翻字幕');
         }
-        return;
+        return; // 零请求
       }
+
+      if (action === 'prompt_resume' && plan) {
+        if (overlay) {
+          overlay.resetAiProgress();
+          overlay.showToast(
+            `检测到上次精翻完成 ${plan.restored}/${currentSentences.length} 句，点「AI 深度精翻」继续（不会重翻已完成部分）`
+          );
+        }
+        return; // 手动模式：等用户再点一次
+      }
+
+      await startAiFullTranslation(plan);
+    }
+
+    /**
+     * 真正发请求的核心循环。`resume` 非空时只翻剩余句子。
+     */
+    async function startAiFullTranslation(resume: AiResumePlan | null) {
+      if (isFullAiRunning) return;
+      const runSentences = currentSentences;
+      if (runSentences.length === 0) return;
 
       isFullAiRunning = true;
       // 固化本次运行上下文：切换视频后 token 变化，旧循环立即失效
       const runToken = ++aiRunToken;
       const runVideoId = currentVideoId;
-      const runSentences = currentSentences;
-      if (overlay) {
-        overlay.showToast(`正在为全篇 ${runSentences.length} 句字幕启动 AI 深度精翻...`);
-        overlay.updateAiProgress(0, `准备开始精翻 (共 ${runSentences.length} 句)...`);
-      }
-
-      const batchSize = 12;
-      const chunks: SubtitleSentence[][] = [];
-      for (let i = 0; i < runSentences.length; i += batchSize) {
-        chunks.push(runSentences.slice(i, i + batchSize));
-      }
-
-      let doneSentences = 0;
+      const runMeta = aiTrackMeta();
       const totalSentences = runSentences.length;
+      let doneSentences = resume ? resume.restored : 0;
 
-      // 预先统计已有译文的句子
-      for (const s of runSentences) {
-        if (s.translation && s.status === 'done') {
-          doneSentences++;
+      if (!resume) {
+        // 非续翻：从零开始计。「已完成」以 isAi 为准（机翻会先铺满缺口，不能算数）
+        doneSentences = 0;
+        for (const s of runSentences) {
+          if (s.isAi && s.translation) doneSentences++;
         }
       }
 
-      for (let cIdx = 0; cIdx < chunks.length; cIdx++) {
+      if (overlay) {
+        overlay.showToast(
+          resume
+            ? `继续精翻剩余 ${resume.pending} 句（已完成 ${resume.restored} 句不会重翻）...`
+            : `正在为全篇 ${totalSentences} 句字幕启动 AI 深度精翻...`
+        );
+        overlay.updateAiProgress(
+          Math.min(100, Math.round((doneSentences / totalSentences) * 100)),
+          resume
+            ? `继续精翻剩余 ${resume.pending} 句 (已完成 ${resume.restored}/${totalSentences} 句)...`
+            : `准备开始精翻 (共 ${totalSentences} 句)...`
+        );
+      }
+
+      // 只挑缺译文的句子，按句序切批，每批附「紧邻上文最多 2 句」
+      const batches = buildResumeBatches(runSentences, {
+        batchSize: AI_TRACK_BATCH_SIZE,
+        contextWindow: AI_TRACK_CONTEXT_WINDOW
+      });
+
+      for (const batch of batches) {
         // 视频已切换：立即终止，避免旧字幕继续请求和落盘
         if (runToken !== aiRunToken) return;
-        const chunk = chunks[cIdx];
-        const needTrans = chunk.filter((s) => !s.translation || s.status !== 'done');
 
-        if (needTrans.length > 0) {
-          for (const s of needTrans) s.status = 'translating';
-          if (overlay) overlay.setSentences(runSentences);
+        const needTrans = batch.indices
+          .map((i) => runSentences[i])
+          .filter((s) => s && !(s.isAi === true && typeof s.translation === 'string' && !!s.translation.trim()));
+        if (needTrans.length === 0) continue;
 
-          try {
-            const texts = needTrans.map((s) => s.text);
-            const res = await new Promise<any>((resolve) => {
-              chrome.runtime.sendMessage(
-                {
-                  type: 'TRANSLATE_BATCH',
-                  payload: {
-                    texts,
-                    targetLang: settings.targetLang,
-                    settings,
-                    noFallback: true,   // AI 深度字幕严禁用谷歌机翻冒充
-                    bypassCache: true
-                  }
-                },
-                resolve
-              );
-            });
+        for (const s of needTrans) s.status = 'translating';
+        if (overlay) overlay.setSentences(runSentences);
 
-            if (runToken !== aiRunToken) return;
+        try {
+          const texts = needTrans.map((s) => s.text);
+          const res = await new Promise<any>((resolve) => {
+            chrome.runtime.sendMessage(
+              {
+                type: 'TRANSLATE_BATCH',
+                payload: {
+                  texts,
+                  targetLang: settings.targetLang,
+                  settings,
+                  noFallback: true, // AI 深度字幕严禁用谷歌机翻冒充
+                  bypassCache: true,
+                  // 续翻语境：上文原文 + 已有译文，只帮模型判断指代与语气
+                  contextBefore: batch.contextBefore
+                }
+              },
+              resolve
+            );
+          });
 
-            if (res && res.success && Array.isArray(res.translations)) {
-              for (let j = 0; j < needTrans.length; j++) {
-                needTrans[j].translation = res.translations[j] || needTrans[j].text;
-                needTrans[j].status = 'done';
-                needTrans[j].isAi = true;
-                doneSentences++;
+          if (runToken !== aiRunToken) return;
+
+          const translations = Array.isArray(res?.translations) ? res.translations : null;
+          if (res && res.success && translations && translations.length === needTrans.length) {
+            for (let j = 0; j < needTrans.length; j++) {
+              const text = typeof translations[j] === 'string' ? translations[j].trim() : '';
+              if (!text) {
+                needTrans[j].status = 'error';
+                needTrans[j].translation = '[AI精翻失败: 模型返回空译文]';
+                continue;
               }
-            } else {
-              for (const s of needTrans) {
-                s.status = 'error';
-                s.translation = `[AI精翻重试: ${res?.error || '网络连接超时'}]`;
-              }
+              needTrans[j].translation = text;
+              needTrans[j].status = 'done';
+              needTrans[j].isAi = true;
+              doneSentences++;
             }
-          } catch (e: any) {
+          } else {
+            // 条数不符 / 请求失败：不做「按位硬贴」，整批按失败处理（与既有失败路径一致）
+            const reason =
+              res?.error ||
+              (translations ? `返回 ${translations.length} 条，期望 ${needTrans.length} 条` : '网络连接超时');
             for (const s of needTrans) {
               s.status = 'error';
-              s.translation = `[AI精翻异常: ${e.message}]`;
+              s.translation = `[AI精翻重试: ${reason}]`;
             }
           }
-
-          // 实时写入本地临时缓存（使用运行开始时的视频 ID，绝不串写到新视频）
-          EphemeralSubtitleStore.save(runVideoId, runSentences);
-
-          const percent = Math.min(100, Math.round((doneSentences / totalSentences) * 100));
-          if (overlay) {
-            overlay.updateAiProgress(percent, `已处理 ${doneSentences}/${totalSentences} 句 (${percent}%)`);
-            overlay.setSentences(runSentences);
+        } catch (e: any) {
+          for (const s of needTrans) {
+            s.status = 'error';
+            s.translation = `[AI精翻异常: ${e.message}]`;
           }
+        }
+
+        if (runToken !== aiRunToken) return;
+
+        // 每批结束立即落盘到 IndexedDB（用运行开始时的 videoId/meta，绝不串写到新视频）
+        EphemeralSubtitleStore.save(runVideoId, runSentences, runMeta);
+        EphemeralSubtitleStore.flushNow(runVideoId);
+
+        const percent = Math.min(100, Math.round((doneSentences / totalSentences) * 100));
+        if (overlay) {
+          overlay.updateAiProgress(percent, `已处理 ${doneSentences}/${totalSentences} 句 (${percent}%)`);
+          overlay.setSentences(runSentences);
         }
       }
 
       if (runToken !== aiRunToken) return;
       isFullAiRunning = false;
-      EphemeralSubtitleStore.save(runVideoId, runSentences);
+      EphemeralSubtitleStore.save(runVideoId, runSentences, runMeta);
+      EphemeralSubtitleStore.flushNow(runVideoId);
       if (overlay) {
         overlay.setAiComplete(totalSentences);
         overlay.setSentences(runSentences);
-        overlay.showToast('全篇 AI 深度字幕已精翻完成！已临时存储在本地，切片/关闭后自动销毁');
+        overlay.showToast(
+          `全篇 AI 深度字幕已精翻完成！已保存到本地（按「保留时长」设置自动清理，重看时自动载入）`
+        );
       }
     }
 
     /**
-     * 清理当前视频的临时 AI 字幕
+     * 清理当前视频的 AI 字幕缓存（内存 + IndexedDB）
      */
-    function handleClearAiSubtitles() {
-      EphemeralSubtitleStore.clear(currentVideoId);
+    async function handleClearAiSubtitles() {
+      await EphemeralSubtitleStore.clear(currentVideoId);
+      aiTrackHitLoggedFor = '';
       for (const s of currentSentences) {
         s.translation = undefined;
         s.status = 'idle';
@@ -1175,7 +1356,7 @@ export default defineContentScript({
       if (overlay) {
         overlay.setSentences(currentSentences);
         overlay.resetAiProgress();
-        overlay.showToast('已清空当前视频的临时 AI 字幕缓存');
+        overlay.showToast('已清空当前视频的 AI 字幕缓存');
       }
       startPreTranslationPipeline();
     }

@@ -71,6 +71,10 @@
   --transition-fast: 160ms var(--ease-out-expo);
   --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4);
   --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.35);
+
+  /* 深色原生控件：服务下拉有 8 个 option（含厂牌名），下拉面板必须是深色底
+     否则 Windows 下会弹出一块白底浅字的面板、厂牌名读不清。与设置页同一行口径。 */
+  color-scheme: dark;
 }
 
 * {
@@ -315,7 +319,11 @@ input:checked + .slider:before {
   display: none;
   flex-direction: column;
   gap: 13px;
-  min-height: 320px; /* 为最短页签保留高度地板，避免切换时预览块大幅跳动；同时不制造大片空档 */
+  /* 原为 320px（场景/术语库可折叠之前，最短页签也有五张卡片撑着）。
+     折叠后内容变短，但真正决定收起态下面那片空档的是 body 的 min-height: 480px，
+     不是这里；190 只对「内容比这还短」的极端情况兜底（如列表全空），
+     同时保留挡住页签切换时预览块跳动的作用。 */
+  min-height: 190px;
 }
 
 .tab-content.active {
@@ -615,6 +623,51 @@ label {
 .form-select option {
   background: #18181b;
   color: #ffffff;
+}
+
+/* 服务引擎那一行：左边选中厂牌图标 + 右边下拉（原生 <option> 里放不下 SVG，
+   厂牌图标只能出现在「已选中」这一格；不为图标把 select 换成自定义组件） */
+.select-with-icon {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.provider-icon-slot {
+  display: flex;
+  flex: 0 0 auto;
+}
+
+/* 图标占位后下拉仍要吃掉剩余宽度，否则 380px 里会挤出横向滚动条 */
+.select-with-icon .form-select {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* 厂牌圆底图标：providerIconHtml 输出的 span.provider-icon（与设置页同一套形状） */
+.provider-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-muted);
+  overflow: hidden;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.provider-icon svg {
+  display: block;
+}
+
+.provider-icon-fallback {
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  color: var(--text-muted);
 }
 
 .input-with-button {
@@ -1129,6 +1182,122 @@ label {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ───────────── 可折叠分区：翻译场景 / 术语库（v0.4.2 问题 3） ─────────────
+ * 与设置页的 .fold 完全同口径：
+ *   - 展开走 grid-template-rows 0fr → 1fr + opacity，只动网格行与透明度，不碰 height；
+ *   - 收起后内容不可聚焦（JS 写 inert），首次渲染的收起态另带 hidden 省一次布局；
+ *   - 箭头只转 transform，时长与内容同为 --dur-base。 */
+.pack-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.section-toggle {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  cursor: pointer;
+  text-align: left;
+  transition: background-color var(--dur-fast) var(--ease-out-expo),
+    border-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.section-toggle:hover {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: var(--border-glass-bright);
+}
+
+.section-toggle[aria-expanded="true"] {
+  border-color: var(--border-glass-bright);
+}
+
+.section-toggle-main {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-wrap: wrap;
+}
+
+.section-summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.section-count {
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.section-hint {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+}
+
+.section-chevron {
+  flex: 0 0 auto;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 5px solid var(--text-muted);
+  transform: rotate(0deg);
+  transition: transform var(--dur-base) var(--ease-out-expo);
+}
+
+.pack-section.is-open .section-chevron {
+  transform: rotate(90deg);
+  border-left-color: #ffffff;
+}
+
+.section-body {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--dur-base) var(--spring-soft),
+    opacity var(--dur-base) var(--ease-out-expo);
+}
+
+.pack-section.is-open > .section-body {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* 收起态靠 hidden：必须显式盖掉上面的 display: grid，否则面板会一直展开 */
+.section-body[hidden] {
+  display: none;
+}
+
+.section-body-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* 面板里的分区小标题不再需要顶部大间距（外面的 .section-head 是给平铺布局用的） */
+.section-body-inner .section-head {
+  margin: 0;
+}
+
+.section-body-inner .section-head .section-hint {
+  max-width: 210px;
 }
 
 .pack-list {

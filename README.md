@@ -2,7 +2,7 @@
 
 Edge / Chrome 浏览器扩展（Manifest V3）。把 YouTube 自动生成字幕（ASR cue）重新组装成完整句子、补齐标点，再按句批量送翻，以双语浮层叠加在播放器上。
 
-当前版本 **0.4.1**，技术栈 WXT 0.21 + TypeScript 5.8，运行时无第三方依赖。
+当前版本 **0.4.3**，技术栈 WXT 0.21 + TypeScript 5.8，运行时无第三方依赖。
 
 ---
 
@@ -30,8 +30,8 @@ Edge / Chrome 浏览器扩展（Manifest V3）。把 YouTube 自动生成字幕�
 entrypoints/
   background.ts              后台：取字幕、代理请求、消息路由
   content/                   内容脚本：浮层渲染与样式（overlay-styles.ts 为 VSR 红线所在）
-  popup/                     弹窗：看视频时的遥控器
-  options/                   独立设置页（7 分区）
+  popup/                     弹窗：看视频时的快捷设置（完整配置版，4 个页签）
+  options/                   独立设置页（8 分区）
   youtube-bridge.content.ts  主世界桥接：截获播放器字幕响应
 utils/
   segmenter.ts               断句核心
@@ -46,7 +46,7 @@ utils/
   control-bar-button.ts      控制栏按钮注入
   icons.ts                   图标资源
 types/                       共享类型
-test/                        11 个测试文件（tsx 直跑，无测试框架）
+test/                        13 个测试文件（tsx 直跑，无测试框架）
 docs/                        设计记录与专项说明
 public/                      图标与 SVG
 scripts/                     图标应用、对话导出等辅助脚本
@@ -70,7 +70,7 @@ npm run build:chrome
 # 类型检查
 npm run compile
 
-# 测试（11 个文件顺序执行，看退出码）
+# 测试（13 个文件顺序执行，看退出码）
 npm test; echo $?
 ```
 
@@ -84,8 +84,8 @@ npm test; echo $?
 
 1. **VSR 兼容**：视频浮层禁用 `backdrop-filter` / `filter`（含 `-webkit-` 前缀）。`test/test-vsr-styles.js` 断言的是样式声明数，出现即失败；文件头注释里提到该词属说明文字，不计入。
 2. **令牌一致性**：弹窗与设置页的 `:root` 逐项比对颜色、时长、缓动、圆角，防止改一边忘另一边。
-3. **测试判定看退出码**，不要 `grep` 日志。11 个测试文件都做了断言收口（`check()` 计数 + 末尾 `assert` 抛错，或 `assert` 直接抛），任何一条断言失败都会让 `npm test` 返回非零码。`v0.4.1` 起 `test-segmenter.js` 与 `test-scenario.js` 已从 `console.assert` 迁到抛错断言 —— `console.assert` 在 Node 里失败只打印一行、不改变退出码，「全绿」可能是假的，这个坑现在已经补上，不再有例外文件。
-4. **断言口径**：当前 `npm test` 的打印项是 **491**（packs 82 · glossary 68 · segmenter-lang 85 · scenario 94 · retry 59 · segmenter 6 · popup-ui 28 · options-ui 69），全部是 `check()` / `t()` 断言计数；`test-parser / test-settings / test-vsr-styles` 另有 38 条不打印的断言（14 / 19 / 5），合计约 **529** 条。对外引用写「491 打印项 / 约 529 断言」，不要再说「共 201/202 项」。（对照：`0.4.0` 发布当次实测 201 = 53+46+34+28+40；`0.4.1` 的增量来自 `retry 59`（新增文件）、`options-ui 40→69`（两个新选项控件）、`scenario 34→94`（提示词四层装配后按层断言）、`segmenter-lang 73→85`（方案 C 11 条 + 7c 歧义短词 17 条）、`packs 71→82`、`glossary 59→68`。日志里另有 4 行信息性 `✓`（各套件末尾的「…测试通过」提示）不计入打印项。工作区有并行改动时，数字以当次 `npm test` 实测为准。）
+3. **测试判定看退出码**，不要 `grep` 日志。13 个测试文件都做了断言收口（`check()` 计数 + 末尾 `assert` 抛错，或 `assert` 直接抛），任何一条断言失败都会让 `npm test` 返回非零码。`v0.4.1` 起 `test-segmenter.js` 与 `test-scenario.js` 已从 `console.assert` 迁到抛错断言 —— `console.assert` 在 Node 里失败只打印一行、不改变退出码，「全绿」可能是假的，这个坑现在已经补上，不再有例外文件。
+4. **断言口径**：当前 `npm test` 的打印项是 **1260**（options-ui 554 · packs 114 · retry 110 · ai-track 104 · scenario 94 · segmenter-lang 85 · glossary 68 · prompt-layers 67 · popup-ui 58 · segmenter 6），全部是 `check()` / `t()` 断言计数；`test-parser / test-settings / test-vsr-styles` 另有 81 条不打印的断言（14 / 62 / 5），合计约 **1341** 条。对外引用写「1260 打印项 / 约 1341 断言」，不要再说「1166 / 约 1235」或更旧的「1137 / 约 1201」「1202 / 约 1266」「1122 / 约 1186」。（对照：`0.4.0` 发布当次实测 201；`0.4.1` 起 `retry 59`、`options-ui` 一路从 40 增到 494、`packs` 82 → 114、`popup-ui` 49 → 114；`0.4.2` 回退轮把弹窗从「遥控器」方案退回 v0.4.1 完整配置版，`popup-ui` 114 → 32（v0.4.1 基线 28 项 + 4 条回退锁定断言）；随后按「选项同步」把 8 通道、按厂牌 Key 与模型清单同步进弹窗，`popup-ui` 32 → 46、`options-ui` 493 → 494；最后修 4 个界面问题（切厂牌模型被重置 / 预置型号混进下拉 / 弹窗长列表铺满 / 设置页展开瞬跳），`popup-ui` 46 → 58、`options-ui` 494 → 511、`test-settings.js` 45 → 50，总打印项 1137 → 1166、断言约 1201 → 约 1235；`0.4.3` 把「降级顺序 / 逐级降级」的执行链与界面承载并入本版，`retry` 59 → 110（+51，降级链 12 组用例）、`options-ui` 511 → 554（+43，降级顺序列表与拖拽）、`test-settings.js` 50 → 62（+12，`fallbackOrder` 清洗与落盘），总打印项 1166 → 1260、断言约 1235 → 约 1341。日志里另有若干信息性 `✓`（各套件末尾的「…测试通过」提示、`test-segmenter.js` 的用例输出）不计入打印项。工作区有并行改动时，数字以当次 `npm test` 实测为准。）
 
 ## 文档索引
 
