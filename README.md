@@ -105,6 +105,7 @@ npm test; echo $?
 | `docs/CHANGES-0.2.3-FOR-ANTIGRAVITY.md` | 早期交接说明 |
 | `docs/immersive-translate-analysis.md` | 竞品（沉浸式翻译）分析 |
 | `docs/断句金标集标注任务包.xlsx` | 人工标注任务包（220/150/150 行，尚未标注） |
+| `docs/LIVE-AND-ASR-0.5.0.md` | 两项新能力设计：无字幕 ASR 回退 + 直播实时翻译（含分阶段计划，尚未实现） |
 | `docs/conversations/CONVERSATION_HISTORY.md` | 开发过程对话整理（原始转写未入库） |
 | `CHANGELOG.md` | 版本变更记录 |
 
