@@ -1,0 +1,67 @@
+{
+  "_comment": "资料库七篇文档的基线锚点。任何一篇落后于这里的值时，`npm run doc:check` 会失败。更新资料库后同步改这里。",
+  "version": "0.4.3",
+  "tag": "v0.4.3",
+  "commit": "663e2d0",
+  "updatedAt": "2026-11-09",
+  "printed": 1260,
+  "assertions": 1341,
+  "docs": [
+    {
+      "key": "readme",
+      "id": "TyCufhJ13SR3Cug0OlmasF",
+      "title": "索引 README",
+      "syncedAt": "2026-11-09",
+      "syncNote": "补第八至十节：当前版本、同步机制、维护约定"
+    },
+    {
+      "key": "task1",
+      "id": "pOk3qrm3wPiktNyeZrrbNg",
+      "title": "任务一 · 断句引擎",
+      "syncedAt": "2026-11-09",
+      "syncNote": "引擎零改动；弹窗恢复四滑块；token 口径未定"
+    },
+    {
+      "key": "task2",
+      "id": "1ZkIMnAE0vPW7NBzkvy4At",
+      "title": "任务二 · 翻译场景与提示词",
+      "syncedAt": "2026-11-09",
+      "syncNote": "三场景补齐提示词；0.4.3 降级顺序与多级降级"
+    },
+    {
+      "key": "task3",
+      "id": "fHkqs6YpEx3q0K5bgFfkZ5",
+      "title": "任务三 · 术语库",
+      "syncedAt": "2026-11-09",
+      "syncNote": "三包未变；弹窗术语库折叠；注入开关两侧同字段"
+    },
+    {
+      "key": "task4",
+      "id": "MpnoQcELE7apb0wV4RJ2VJ",
+      "title": "任务四 · 界面与设置",
+      "syncedAt": "2026-11-09",
+      "syncNote": "降级顺序 UI、模型记忆、预置退出、分区数订正 8 个、过渡统一"
+    },
+    {
+      "key": "task5",
+      "id": "AuSu3fhoOc9J4XifcUZOAm",
+      "title": "任务五 · 兼容与性能",
+      "syncedAt": "2026-11-09",
+      "syncNote": "VSR 声明数仍 0；浮层移除场景；过渡只动合成层属性"
+    },
+    {
+      "key": "task6",
+      "id": "nFzRljojPWSxIVObyyzrwQ",
+      "title": "任务六 · 质量保障与发布",
+      "syncedAt": "2026-11-09",
+      "syncNote": "断言口径 1260/1341；套件增量；版本与发布流程"
+    },
+    {
+      "key": "liveTest",
+      "id": "YlocANpCcu051UFossyCuM",
+      "title": "直播与 ASR · 功能测试（0.5.0）",
+      "syncedAt": "2026-11-09",
+      "syncNote": "独立测试页：能力未实现，仅 C 组回归可跑"
+    }
+  ]
+}
