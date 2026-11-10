@@ -1,10 +1,17 @@
 import type { SubtitleSentence, ExtensionSettings } from '../types';
+import { safeSendMessage } from './runtime-safe';
 
 export interface TranslationQueueOptions {
   batchSize?: number;
   onSentenceUpdated?: () => void;
   /** 单批请求超时时间，超时后自动释放并发并允许重试 */
   requestTimeoutMs?: number;
+  /**
+   * 扩展上下文失效（重载/更新）时回调一次。
+   * 队列是播放中最频繁的发消息方，主要靠它第一时间发现上下文已死，
+   * 上层据此做一次性降级（清定时器 / 释放单飞锁 / 提示刷新）。
+   */
+  onContextInvalidated?: () => void;
 }
 
 /**
@@ -22,6 +29,7 @@ export class TranslationQueue {
   private maxConcurrency: number = 2;
   private batchSize: number = 8;
   private onSentenceUpdated?: () => void;
+  private onContextInvalidated?: () => void;
   private requestTimeoutMs: number = 20000;
   /** 每次 setSentences 自增，用于丢弃旧数组的在途回调结果 */
   private generation = 0;
@@ -33,6 +41,7 @@ export class TranslationQueue {
     if (options.batchSize) this.batchSize = options.batchSize;
     if (options.onSentenceUpdated) this.onSentenceUpdated = options.onSentenceUpdated;
     if (options.requestTimeoutMs) this.requestTimeoutMs = options.requestTimeoutMs;
+    if (options.onContextInvalidated) this.onContextInvalidated = options.onContextInvalidated;
   }
 
   public updateSettings(settings: ExtensionSettings) {
@@ -156,7 +165,7 @@ export class TranslationQueue {
       }
     }, this.requestTimeoutMs);
 
-    chrome.runtime.sendMessage(
+    safeSendMessage<{ success?: boolean; translations?: string[]; error?: string }>(
       {
         type: 'TRANSLATE_BATCH',
         payload: {
@@ -165,13 +174,16 @@ export class TranslationQueue {
           settings: this.settings
         }
       },
-      (res) => {
-        // 读取 lastError，避免控制台出现未处理的 runtime 警告
-        void chrome.runtime.lastError;
+      (r) => {
+        // 上下文已失效（扩展被重载/更新）：不再抛异常，按「本批失败」处理并通知上层降级
+        if (!r.ok && r.reason === 'invalidated') {
+          if (this.onContextInvalidated) this.onContextInvalidated();
+        }
         if (!finish()) return;
         // 数组已被替换（切视频/重新断句），旧结果直接丢弃
         if (gen !== this.generation) return;
 
+        const res = r.ok ? r.response : null;
         if (res && res.success && Array.isArray(res.translations)) {
           for (let i = 0; i < targets.length; i++) {
             targets[i].translation = res.translations[i] || targets[i].text;

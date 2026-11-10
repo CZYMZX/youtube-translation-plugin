@@ -85,6 +85,34 @@ console.log('--- 测试 1: 内置场景与术语库 ---');
     const prompt = BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '';
     for (const [label, re] of aspects) check(`${id} 覆盖五要素·${label}`, re.test(prompt));
   }
+  // v0.5.0：music 场景的两条拍板规则（专名保留原文 / 长度与韵律对齐原歌词）+ 术语库优先级
+  // 规则 1：除专名保留原文外，其余内容一律翻译成目标语言；规则 2：长度贴近原歌词、韵律对齐原语言。
+  check('music：专名范围写全（人名 / 地名 / 歌曲名 / 作品名）', /人名与艺名[\s\S]*地名[\s\S]*歌曲名与专辑名[\s\S]*作品名/.test(musicPrompt));
+  check('music：专名保留原文 + 其余一切内容必须译成目标语言', /专名保留原文/.test(musicPrompt) && /其余一切内容必须翻译成目标语言/.test(musicPrompt));
+  check(
+    'music：术语库命中优先于「保留原文」，未命中才保留原文',
+    /术语库已给出的条目以术语库的译名为准/.test(musicPrompt) &&
+      /优先于「保留原文」/.test(musicPrompt) &&
+      /术语库未命中的专名才按上面的口径保留原文/.test(musicPrompt)
+  );
+  check(
+    'music：译文长度贴近原歌词（音节数 + 整段篇幅相当）',
+    /译文长度尽量与原歌词相当/.test(musicPrompt) && /音节数/.test(musicPrompt) && /整段篇幅与原文相当/.test(musicPrompt)
+  );
+  check('music：逐行对应，不合并也不拆分', /逐行对应/.test(musicPrompt) && /不把两行并成一行/.test(musicPrompt) && /也不把一行拆成两行/.test(musicPrompt));
+  check(
+    'music：韵律与节奏对齐原语言（长短 / 停顿 / 抑扬 / 平仄）',
+    /节奏与韵律同样要对齐原语言/.test(musicPrompt) && /停顿与气口/.test(musicPrompt) && /平仄/.test(musicPrompt)
+  );
+  check('music：目标语言不写死（正文不出现「中文」这种写死的目标语种）', !/中文/.test(musicPrompt));
+  check(
+    'music：为对齐长度与节奏可调语序，但人称 / 时态 / 情绪 / 意象不许挪',
+    /人称、时态、情绪、意象与叙述对象一个都不能挪/.test(musicPrompt)
+  );
+  check(
+    'music：两条新规则只写在 music 场景（science / gaming 未被顺手改动）',
+    !/专名保留原文|长度与韵律对齐原歌词/.test(sciencePrompt + gamingPrompt)
+  );
   check(
     '三个新场景体量在 400~1200 字（不是三五行的占位）',
     [sciencePrompt, musicPrompt, gamingPrompt].every((p) => p.length >= 400 && p.length <= 1200),

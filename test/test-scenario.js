@@ -42,6 +42,8 @@ function check(name, cond, detail) {
 const promptOf = (id) => BUILTIN_SCENES.find((s) => s.id === id)?.prompt || '';
 const vtuber = promptOf('vtuber');
 const general = promptOf('general');
+// v0.5.0：music 场景新增「专名保留原文」条款，专名译名最容易被写死 —— 纳入同一批红线守卫
+const music = promptOf('music');
 
 // 默认配置下的完整静态骨架（= 默认 vtuber + off + normal + low）
 const base = { ...DEFAULT_SETTINGS };
@@ -204,8 +206,19 @@ check('缩略：两个选项同时切换 → 指纹仍变化', tagOf({ glossaryA
 const mcPack = BUILTIN_GLOSSARY_PACKS.find((p) => p.id === 'mc');
 const mcSamples = (mcPack?.entries || []).filter((e) => ['苦力怕', '末影人', '潜影贝', '下界合金锭'].includes(e.zh));
 check('MC 术语库可用于红线抽样', mcSamples.length >= 3, String(mcSamples.length));
-const hardcoded = [vtuber, general].some((p) => mcSamples.some((e) => p.includes(e.zh)));
+const hardcoded = [vtuber, general, music].some((p) => mcSamples.some((e) => p.includes(e.zh)));
 check('场景 prompt 未写死术语库译名（不绕过术语注入）', !hardcoded);
+// v0.5.0：music 的「专名保留原文」条款最容易顺手写死歌曲 / 主播译名 —— 单独抽一遍歌曲条目
+const songSamples = (BUILTIN_GLOSSARY_PACKS[0]?.entries || []).filter((e) => e.category === 'song');
+check('VTuber 术语库的歌曲条目可用于红线抽样', songSamples.length >= 3, String(songSamples.length));
+const songHardcoded = [vtuber, general, music].some((p) => songSamples.some((e) => p.includes(e.zh)));
+check('场景 prompt 未写死歌曲译名（music 的专名条款同样不许绕过术语注入）', !songHardcoded);
+// v0.5.0：music 同时有「专名保留原文」与术语库「用译名」两条，优先级必须写在 prompt 里，否则模型两套规则乱套
+check(
+  'music：术语库优先于「保留原文」的优先级写进了场景 prompt',
+  /术语库已给出的条目以术语库的译名为准/.test(music) && /术语库未命中的专名才按上面的口径保留原文/.test(music)
+);
+check('music：保留原文的专名不再另配译名（与选项层通用专名条款划清界）', /不再另配目标语言译名/.test(music));
 
 // ── 9. 六条诊断样本：只判「有无规则覆盖」，不是真实译文对照 ────────
 // 真实译文质量需接模型跑，这里固定住「规则不丢」这一层，防止后续重写 prompt 又漏条款。

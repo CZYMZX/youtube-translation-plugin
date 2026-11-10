@@ -1,11 +1,11 @@
 {
   "_comment": "资料库七篇文档的基线锚点。任何一篇落后于这里的值时，`npm run doc:check` 会失败。更新资料库后同步改这里。",
-  "version": "0.4.3",
-  "tag": "v0.4.3",
+  "version": "0.5.1",
+  "tag": "v0.5.1",
   "commit": "663e2d0",
-  "updatedAt": "2026-11-09",
-  "printed": 1260,
-  "assertions": 1341,
+  "updatedAt": "2026-11-10",
+  "printed": 1606,
+  "assertions": 1694,
   "docs": [
     {
       "key": "readme",

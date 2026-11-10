@@ -53,7 +53,7 @@ async function fetchWithTimeout(
 
 export default defineBackground(() => {
   console.log(
-    '%c[YT-Sub-Translator v0.4.3]%c Background service worker active (Immersive Translate Mode)',
+    '%c[YT-Sub-Translator v0.5.1]%c Background service worker active (Immersive Translate Mode)',
     'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
     'color:#16a34a;font-weight:bold;margin-left:4px'
   );
@@ -138,11 +138,18 @@ export default defineBackground(() => {
           return false;
         }
 
-        const requestPlayer = async (client: any, extraHeaders: Record<string, string> = {}) => {
-          const apiUrl = apiKey
-            ? `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}`
-            : 'https://www.youtube.com/youtubei/v1/player';
+        // 页面没有 INNERTUBE_API_KEY 时，任何客户端都只会拿到边缘 403（实测响应体为空）。
+        // 直接跳过全部策略、不发必败请求 —— 本次改动只允许减少请求，不允许增加。
+        // `skipped: true` 是明确语义：请求根本没发生，调用方不得据此判定「该视频无字幕」。
+        if (!apiKey) {
+          console.debug('[YT-Sub-Translator] 跳过 youtubei 兜底：页面未提供 INNERTUBE_API_KEY');
+          sendResponse({ success: false, skipped: true, error: 'No apiKey', tracks: [] });
+          return false;
+        }
 
+        const apiUrl = `https://www.youtube.com/youtubei/v1/player?key=${encodeURIComponent(apiKey)}`;
+
+        const requestPlayer = async (client: any, extraHeaders: Record<string, string> = {}) => {
           const res = await fetchWithTimeout(
             apiUrl,
             {
@@ -162,49 +169,83 @@ export default defineBackground(() => {
             },
             12000
           );
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          // throw 前先把响应体读出来：4xx 不再只有 "HTTP 403"，能看清是边缘拒绝还是业务 JSON
+          if (!res.ok) {
+            const body = await res.text().catch(() => '');
+            const detail = body.replace(/\s+/g, ' ').trim().slice(0, 200) || '<empty body>';
+            console.debug(
+              `[YT-Sub-Translator] youtubei ${client?.clientName || '?'} → HTTP ${res.status} · ${detail}`
+            );
+            const err: any = new Error(`HTTP ${res.status} · ${detail}`);
+            err.httpStatus = res.status;
+            throw err;
+          }
           return await res.json();
         };
 
         (async () => {
+          /**
+           * 策略顺序（0.5.1）：
+           *   1) WEB —— 带页面真实 INNERTUBE key，visitorData / X-Goog-Visitor-Id 有就带；
+           *   2) ANDROID —— 该客户端已失效（20.10.38 恒 403），降为最后手段。
+           * 每条策略独立 try/catch：WEB 失败不再直接中断，但也绝不无谓重试。
+           */
+          const failures: string[] = [];
+          let tracks: any[] = [];
+
+          const webVersion = clientVersion || '2.20240901.00.00';
+          const webClient: any = {
+            hl: 'en',
+            gl: 'US',
+            clientName: 'WEB',
+            clientVersion: webVersion
+          };
+          if (visitorData) webClient.visitorData = visitorData;
+
           try {
-            // 策略 1: ANDROID 客户端（实测 WEB 无 visitorData 时常返回 UNPLAYABLE）
+            const data = await requestPlayer(webClient, {
+              'X-Youtube-Client-Name': '1',
+              'X-Youtube-Client-Version': webVersion,
+              ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {})
+            });
+            tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+          } catch (err: any) {
+            failures.push(`WEB: ${err?.message || err}`);
+          }
+
+          // 策略 2: ANDROID 客户端（最后手段）
+          if (!tracks || tracks.length === 0) {
             const androidClient = {
               hl: 'en',
               gl: 'US',
               clientName: 'ANDROID',
               clientVersion: '20.10.38'
             };
-            const data1 = await requestPlayer(androidClient, {
-              'X-Youtube-Client-Name': '3',
-              'X-Youtube-Client-Version': '20.10.38'
-            });
-            let tracks = data1?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
-
-            // 策略 2: WEB 客户端（补齐 visitorData / client headers）
-            if (!tracks || tracks.length === 0) {
-              const webVersion = clientVersion || '2.20240901.00.00';
-              const webClient: any = {
-                hl: 'en',
-                gl: 'US',
-                clientName: 'WEB',
-                clientVersion: webVersion
-              };
-              if (visitorData) webClient.visitorData = visitorData;
-
-              const data2 = await requestPlayer(webClient, {
-                'X-Youtube-Client-Name': '1',
-                'X-Youtube-Client-Version': webVersion,
-                ...(visitorData ? { 'X-Goog-Visitor-Id': visitorData } : {})
+            try {
+              const data = await requestPlayer(androidClient, {
+                'X-Youtube-Client-Name': '3',
+                'X-Youtube-Client-Version': '20.10.38'
               });
-              tracks = data2?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+              tracks = data?.captions?.playerCaptionsTracklistRenderer?.captionTracks || [];
+            } catch (err: any) {
+              failures.push(`ANDROID: ${err?.message || err}`);
             }
-
-            sendResponse({ success: true, tracks });
-          } catch (err: any) {
-            console.error('[YT-Sub-Translator] Fetch youtubei captions failed:', err);
-            sendResponse({ success: false, error: err.message, tracks: [] });
           }
+
+          if (tracks && tracks.length > 0) {
+            sendResponse({ success: true, tracks });
+            return;
+          }
+
+          // 4xx / 纯「无字幕」属预期失败 → debug；5xx 与网络异常仍是 error
+          const hasUnexpected = failures.some((f) => !/HTTP 4\d\d/.test(f));
+          const log = hasUnexpected ? console.error : console.debug;
+          log(
+            `[YT-Sub-Translator] Fetch youtubei captions failed (0 tracks): ${
+              failures.join(' | ') || 'no strategy returned tracks'
+            }`
+          );
+          sendResponse({ success: false, error: failures.join(' | ') || 'No tracks', tracks: [] });
         })();
 
         return true;

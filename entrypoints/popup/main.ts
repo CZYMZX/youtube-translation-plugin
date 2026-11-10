@@ -1,7 +1,7 @@
 ﻿/**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - 扩展弹出设置面板 (Popup Main Controller)
- * 当前版本: v0.4.3 (独立高级设置页)
+ * 当前版本: v0.5.1 (独立高级设置页)
  *
  * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
  * 1. 翻译服务引擎参数折叠规范：当选择大模型服务（DeepSeek、OpenAI、Gemini）时，
@@ -1449,8 +1449,16 @@ function renderSceneList(): void {
     scenarioSelect.value = activeId;
   }
 
+  const activeScene = scenes.find((s) => s.id === activeId);
   if (sceneActiveBadgeEl) {
-    sceneActiveBadgeEl.textContent = scenes.find((s) => s.id === activeId)?.name || '通用日常';
+    sceneActiveBadgeEl.textContent = activeScene?.name || '通用日常';
+  }
+  /* v0.5.0：收起态多一行副标题，写清「当前这个场景是干什么的」，
+     否则折叠后只剩一个名字 + 数字，信息量太低 */
+  const sceneDescEl = document.getElementById('scene-active-desc');
+  if (sceneDescEl) {
+    sceneDescEl.textContent =
+      activeScene?.hint || activeScene?.description || '决定译文语气、人称与敬语';
   }
   /* 收起态摘要：「当前场景名 · 共 N 个」（场景名在 #scene-active-badge 里） */
   if (sceneSectionCountEl) {

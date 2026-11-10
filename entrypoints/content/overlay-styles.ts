@@ -164,6 +164,146 @@ export const OVERLAY_STYLES = String.raw`
           text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95);
         }
 
+        /* ==========================================================================
+           歌词轨卡拉OK逐字点亮（v0.5.0）
+           --------------------------------------------------------------------------
+           只允许三样东西：color / opacity / text-shadow。
+           • 三态语义：**未到 = 半透明白，已到 = 用户选的原文字色，当前 = 同色 + 发光**；
+             具体颜色由浮层按用户配色注入这三个变量，这里只给兜底默认值；
+           • **「未到」的柔和靠颜色 alpha，不靠 opacity**：opacity 会把同一 span 上的
+             text-shadow（当前字的光晕）一起压淡，且与 k-done 的过渡不好控；
+             alpha 只影响字形本身，语义更精确，也不碰任何合成层开关。
+           • 官方笔色走 span 的内联 color（优先级高于下面三条 class 规则），
+             所以 k-done / k-cur 无须再为「有笔色」另写覆盖规则；
+           • k-pend 带 !important 是必要的：内联色会让整行一上来就全亮，
+             必须让「未到」态压回半透明白，进度推进后才由内联笔色接管；
+           • 颜色切换靠 class + CSS 变量，渲染层每帧只切「边界那两个 span」的 class；
+           • 过渡只作用于 color / opacity，都是合成层属性；
+           • 「当前字」的发光用 text-shadow（绘制效果，不会把视频拉进合成层），
+             本文件仍然不得出现任何滤镜类声明 —— VSR 红线要求其声明数恒为 0。
+           ========================================================================== */
+        .k-char {
+          white-space: pre-wrap;
+          transition: color 120ms linear, opacity 120ms linear;
+        }
+
+        .k-char.k-pend {
+          /* 未到：半透明白（alpha 0.5）。亮度只压字形、不压光晕；
+             对比度依据见 overlay.ts 的 KARAOKE_PEND_COLOR 注释里的实测数字。 */
+          color: var(--k-pend, rgba(255, 255, 255, 0.5)) !important;
+        }
+
+        .k-char.k-done {
+          /* 已到：用户选的原文字色（有笔色时被内联色接管） */
+          color: var(--k-done, #e2e8f0);
+        }
+
+        .k-char.k-cur {
+          /* 当前字：同「已到」色 + 光晕（有笔色时 currentColor 自动取官方色） */
+          color: var(--k-cur, #e2e8f0);
+          text-shadow: 0 0 10px currentColor, 0 2px 5px rgba(0, 0, 0, 0.9);
+        }
+
+        /* ==========================================================================
+           逐词高亮（仅 ASR 词级时间戳的句子会加 .k-word）
+           --------------------------------------------------------------------------
+           适用范围：**只有**「自动字幕（ASR）+ 官方词级时间戳」的句子才会带
+           .k-word（判定在 overlay.ts：sentence.wordLevel === true）。手动上传字幕、
+           逐字（character-level）字幕、歌词轨、不支持逐词的 ASR 句**都不带**，
+           它们继续走上面三条既有规则 —— 本组规则不改动既有三条的语义。
+
+           • **按词推进**：同一个词的字符共享同一个 startMs ⇒ 整词在同一帧一起
+             变 k-done（见 overlay.ts 的 indexAtTimings 二分取「最后一个
+             startMs<=now」的下标 = 该词的最后一个字符）。
+           • **未播放到的词 = 灰色半透明**：用 rgba(255,255,255,0.35) 实现，
+             **不用 opacity** —— opacity 会把**整行**（含已播放的词）一起压暗，
+             违反「已播放的词保持正常高亮」这条要求。
+           • **已播放 / 当前词 = --k-word-hi**：用户可配的 wordHighlightColor
+             （原文侧；默认**跟随**用户的原文色 settings.origColor），由浮层注入。
+           • **官方笔色优先**：带官方笔色（内联 color）的 span **不加** .k-word
+             （见 overlay.ts 建 span 的那一处），所以这里的 !important 压不到
+             官方笔色上 —— 内联笔色永远赢。
+           • k-cur 的光晕用 currentColor ⇒ 自动跟随 --k-word-hi 的颜色。
+           • **译文侧另有一条**（.k-word-t → --k-word-hi-trans，默认**跟随**译文色
+             settings.transColor）—— 见下面「逐词高亮 · 译文侧」那一组。
+           ========================================================================== */
+        .k-char.k-word.k-pend {
+          /* 未播放到的词：灰色 + 半透明（半透明靠 alpha，不靠 opacity） */
+          color: var(--k-word-pend, rgba(255, 255, 255, 0.35)) !important;
+        }
+
+        .k-char.k-word.k-done {
+          /* 已播放的词：用户选的逐词高亮色（原文侧） */
+          color: var(--k-word-hi, #ffffff);
+        }
+
+        .k-char.k-word.k-cur {
+          /* 当前词：同「已播放」色 + 光晕（光晕跟随 --k-word-hi） */
+          color: var(--k-word-hi, #ffffff);
+          text-shadow: 0 0 10px currentColor, 0 2px 5px rgba(0, 0, 0, 0.9);
+        }
+
+        /* ==========================================================================
+           逐词高亮 · **译文侧**（v0.5.0 双路）
+           --------------------------------------------------------------------------
+           译文侧的 span 额外挂 .k-word-t（见 overlay.ts 的 buildKaraokeClass），
+           于是已播放 / 当前词用**另一条**颜色：--k-word-hi-trans
+           （默认跟随用户的译文色 settings.transColor），与原文侧的 --k-word-hi
+           （默认跟随 settings.origColor）**各设各的**。
+
+           • 两条规则的特异度相同（三个 class）⇒ **必须排在上面三条之后**，
+             靠源码顺序取胜（.k-word-t 的 span 同时带 .k-word）。
+           • **未播放词的灰色半透明两路一致**（--k-word-pend，同一条 !important
+             规则），所以这里不需要、也不应该再写一条 .k-word-t.k-pend。
+           • k-cur 的光晕仍用 currentColor ⇒ 自动跟随译文侧高亮色。
+           ========================================================================== */
+        .k-char.k-word-t.k-done {
+          /* 已播放的词：译文侧的逐词高亮色 */
+          color: var(--k-word-hi-trans, #ffffff);
+        }
+
+        .k-char.k-word-t.k-cur {
+          /* 当前词：同「已播放」色 + 光晕（光晕跟随 --k-word-hi-trans） */
+          color: var(--k-word-hi-trans, #ffffff);
+          text-shadow: 0 0 10px currentColor, 0 2px 5px rgba(0, 0, 0, 0.9);
+        }
+
+        /* 译文缺失/失败：占位保高，避免上下布局跳动；容器内不含任何字符（含零宽） */
+        .k-placeholder {
+          display: block;
+          min-height: 1.35em;
+        }
+
+        /* 译文远短于原文：整句淡入（时长由内联 animation-duration 给出，句末留 200ms 停留） */
+        .k-whole {
+          display: inline-block;
+          opacity: 0;
+          animation-name: k-fade-in;
+          animation-duration: 520ms;
+          animation-timing-function: linear;
+          animation-fill-mode: forwards;
+        }
+
+        @keyframes k-fade-in {
+          from {
+            opacity: 0;
+          }
+          to {
+            opacity: 1;
+          }
+        }
+
+        /* 无障碍：用户要求减少动态效果时，颜色跳变与淡入一律归零 */
+        @media (prefers-reduced-motion: reduce) {
+          .k-char {
+            transition: none;
+          }
+          .k-whole {
+            animation: none;
+            opacity: 1;
+          }
+        }
+
         .sentence-ai-badge {
           position: absolute;
           top: 7px;
@@ -690,6 +830,45 @@ export const OVERLAY_STYLES = String.raw`
         .qp-accordion-body-inner {
           min-height: 0;
           overflow: hidden;
+        }
+
+        /* v0.5.0：目标语言下拉。用原生 select 而不是分段控件 —— 9 种语言在 320px
+           面板里排不下，强行分段会挤成两行小字。 */
+        .qp-select {
+          width: 100%;
+          box-sizing: border-box;
+          padding: 7px 10px;
+          border-radius: 8px;
+          border: 1px solid rgba(255, 255, 255, 0.16);
+          background: rgba(255, 255, 255, 0.06);
+          color: #fafafa;
+          font-size: 12px;
+          line-height: 1.4;
+          cursor: pointer;
+          outline: none;
+          appearance: none;
+          -webkit-appearance: none;
+          background-image: linear-gradient(45deg, transparent 50%, #a1a1aa 50%),
+            linear-gradient(135deg, #a1a1aa 50%, transparent 50%);
+          background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
+          background-size: 5px 5px, 5px 5px;
+          background-repeat: no-repeat;
+          padding-right: 26px;
+        }
+
+        .qp-select:hover {
+          border-color: rgba(255, 255, 255, 0.28);
+          background-color: rgba(255, 255, 255, 0.1);
+        }
+
+        .qp-select:focus-visible {
+          border-color: rgba(255, 255, 255, 0.4);
+          box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12);
+        }
+
+        .qp-select option {
+          background: #18181b;
+          color: #fafafa;
         }
 
         .qp-accordion-item.expanded .qp-accordion-body {

@@ -88,8 +88,11 @@ async function boot(): Promise<void> {
 
   bindNav();
   bindControls();
+  bindWordColorEvents();
   renderScenarios();
   reflectSettings();
+  /* 颜色区的展开 / 收起跟着「自动字幕逐词显现」走（勾选态已由 reflectSettings 同步） */
+  syncWordColorBlock();
   applyPreview();
   /* 默认只展开「正在使用」的那个厂牌（其余折叠，点整行展开） */
   expandedProviderId = settings.providerId || '';
@@ -127,6 +130,8 @@ async function boot(): Promise<void> {
       void getStoredSettings().then((next) => {
         settings = next;
         reflectSettings();
+        /* 颜色区的展开 / 收起跟着「自动字幕逐词显现」走（勾选态已由 reflectSettings 同步） */
+        syncWordColorBlock();
         applyPreview();
         renderScenarios();
         renderProviderList();
@@ -246,8 +251,10 @@ function reflectSettings(): void {
     if (el instanceof HTMLInputElement) {
       if (el.type === 'checkbox') {
         el.checked = Boolean(value);
-      } else if (el.value !== String(value ?? '')) {
-        el.value = String(value ?? '');
+      } else {
+        /* 取值域特殊的项先归一再写进控件（逐词高亮颜色只认 hex） */
+        const shown = DISPLAY_NORMALIZERS[key] ? DISPLAY_NORMALIZERS[key]!(value) : String(value ?? '');
+        if (el.value !== shown) el.value = shown;
       }
       if (el.type === 'range') syncRangeOutput(key, Number(value));
       return;
@@ -277,6 +284,8 @@ function reflectSettings(): void {
   syncServiceChrome();
   /* 「自动降级」开关的开合跟着 settings 走：弹窗改完、存储回声、进页面都对齐到这里 */
   syncFallbackDepend();
+  /* 逐词高亮颜色：「跟随」勾选态 / 取色器可用性 / 显示值都跟着 settings 走 */
+  syncWordColorRows();
 }
 
 const RANGE_FORMAT: Record<string, (v: number) => string> = {
@@ -295,6 +304,159 @@ function syncRangeOutput(key: string, value: number): void {
   if (out) out.textContent = (RANGE_FORMAT[key] || String)(value);
 }
 
+/* ══════════════════════════════════════════════════════════════════════════
+ * 逐词高亮颜色（v0.5.0 任务·设置页）：原文 / 译文两路，默认「跟随」
+ * ══════════════════════════════════════════════════════════════════════════
+ * 1) 存盘口径：每个颜色项只有两种合法取值 ——
+ *    ''（空串）= 跟随用户在「字幕样式」里选的原文色 / 译文色；
+ *    '#rgb' / '#rrggbb' = 用户单独指定的颜色。其它一律回落空串（= 跟随）。
+ * 2) 显示口径 ≠ 存盘口径：<input type="color"> 不接受空串，跟随时它显示
+ *    **跟随色的实际值**，但存储里仍是空串 —— 两者必须分开处理，不能把跟随色写进存储。
+ * 3) 位置：并入「自动字幕逐词显现」正下方，只有该开关打开时才向下展开。
+ * 4) 不做能力检测：能不能选颜色只看开关，与当前视频支不支持词级时间戳无关。
+ */
+
+/** 一个逐词高亮颜色项：存储键 / 跟随时取哪个设置项当颜色 / 「跟随」复选框 id */
+interface WordColorItem {
+  /** 存储键（原文侧 / 译文侧各一个） */
+  key: 'wordHighlightColor' | 'wordHighlightTransColor';
+  /** 跟随时取哪个设置项当颜色：原文侧 → origColor，译文侧 → transColor */
+  followKey: 'origColor' | 'transColor';
+  /** 「跟随」复选框（本地 UI 状态，不进存储） */
+  followId: string;
+}
+
+const WORD_COLOR_ITEMS: WordColorItem[] = [
+  { key: 'wordHighlightColor', followKey: 'origColor', followId: 'word-highlight-follow-orig' },
+  { key: 'wordHighlightTransColor', followKey: 'transColor', followId: 'word-highlight-follow-trans' }
+];
+
+/** 只接受 #rgb / #rrggbb（大小写不敏感） */
+const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/**
+ * 旧版本的默认值是纯白。那不是用户自己挑的（当时的取色器默认是置灰的，
+ * 实际上没人能主动改成纯白），按新语义应视作「跟随」——
+ * 否则升级上来的用户会莫名其妙地卡在「自定义白色」上，永远不会跟随原文色。
+ */
+const LEGACY_WORD_COLOR_DEFAULT = '#ffffff';
+
+/**
+ * 逐词高亮颜色的取值归一：空串（= 跟随）或合法 hex 原样保留，其它一律回落空串。
+ * 为什么要归一：渲染层把这一项拼进 CSS 变量值，任意字符串都不能塞进去；
+ * 这里再兜一次，老数据 / 手改过的 storage 也不会漏网。
+ */
+function sanitizeWordColor(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const value = raw.trim();
+  if (!value) return '';
+  if (value.toLowerCase() === LEGACY_WORD_COLOR_DEFAULT) return '';
+  return HEX_COLOR_RE.test(value) ? value : '';
+}
+
+/** 读设置里的某个逐词高亮颜色值（已归一：'' = 跟随） */
+function readWordColor(item: WordColorItem): string {
+  const raw = (settings as unknown as Record<string, unknown>)[item.key];
+  return sanitizeWordColor(raw);
+}
+
+/** 跟随色：原文侧取 origColor、译文侧取 transColor（存储层已保证是 #rrggbb） */
+function followColorOf(item: WordColorItem): string {
+  const raw = (settings as unknown as Record<string, unknown>)[item.followKey];
+  if (typeof raw === 'string' && /^#[0-9a-f]{6}$/i.test(raw)) return raw;
+  return item.followKey === 'origColor' ? DEFAULT_SETTINGS.origColor : DEFAULT_SETTINGS.transColor;
+}
+
+/**
+ * 取色器的显示值：跟随时显示跟随色（**存储里仍是空串**），自定义时显示存的那个 hex。
+ */
+function displayWordColor(item: WordColorItem, raw?: unknown): string {
+  const stored = raw === undefined ? readWordColor(item) : sanitizeWordColor(raw);
+  return stored || followColorOf(item);
+}
+
+/** 少数取值域特殊的设置项：显示前先归一（key → 归一函数）。
+ *  逐词高亮颜色跟随时存的是空串，而 <input type="color"> 不接受空串 ——
+ *  直接写进去会被浏览器当成 #000000，界面上就会出现「存的是跟随、显示的是黑」。 */
+const DISPLAY_NORMALIZERS: Partial<Record<string, (raw: unknown) => string>> = {
+  wordHighlightColor: (raw) => displayWordColor(WORD_COLOR_ITEMS[0], raw),
+  wordHighlightTransColor: (raw) => displayWordColor(WORD_COLOR_ITEMS[1], raw)
+};
+
+/**
+ * 两个颜色项的控件状态：勾选态 / 取色器可用性 / 显示值，全部由**存储里的实际值**推导。
+ * 「跟随」勾选 = 存的是空串；取消勾选 = 存的是 hex，取色器可编辑。
+ */
+function syncWordColorRows(): void {
+  for (const item of WORD_COLOR_ITEMS) {
+    const follow = document.getElementById(item.followId) as HTMLInputElement | null;
+    const input = document.querySelector<HTMLInputElement>(`input[data-setting="${item.key}"]`);
+    const following = readWordColor(item) === '';
+
+    if (follow) follow.checked = following;
+    if (input) {
+      input.disabled = following;
+      const shown = displayWordColor(item);
+      if (input.value !== shown) input.value = shown;
+    }
+  }
+}
+
+/**
+ * 颜色区的展开 / 收起：只看「自动字幕逐词显现」开关（设置里的实际值），不看 DOM 瞬时值。
+ * 收起态不可聚焦（inert），焦点若在里面就交回给开关，别把焦点留在收起的内容上。
+ */
+function syncWordColorBlock(): void {
+  const block = $('#word-color-block');
+  if (!block) return;
+
+  const toggle = $<HTMLInputElement>('input[data-setting="asrWordReveal"]');
+  const open = settings.asrWordReveal !== false;
+
+  if (toggle) {
+    toggle.setAttribute('aria-expanded', String(open));
+    toggle.setAttribute('aria-controls', 'word-color-block');
+  }
+  block.inert = !open;
+
+  if (open) {
+    /* 先摘 hidden 并强制一次布局，让「0fr + opacity 0」的起点先落地，过渡才播得出来 */
+    block.hidden = false;
+    void block.offsetHeight;
+    block.classList.add('is-open');
+  } else {
+    block.classList.remove('is-open');
+    if (block.contains(document.activeElement)) toggle?.focus();
+  }
+}
+
+/**
+ * 「跟随」复选框：勾选 = 跟随（存空串），取消勾选 = 自定义（预填跟随色并存 hex）。
+ * 取消勾选时必须预填当前跟随色，否则取色器会变成黑色（浏览器给空值的默认色）。
+ */
+function bindWordColorEvents(): void {
+  for (const item of WORD_COLOR_ITEMS) {
+    const follow = document.getElementById(item.followId) as HTMLInputElement | null;
+    follow?.addEventListener('change', () => {
+      if (follow.checked) {
+        void updateWordColor(item.key, '');
+      } else {
+        const seed = followColorOf(item);
+        const input = document.querySelector<HTMLInputElement>(`input[data-setting="${item.key}"]`);
+        if (input) input.value = seed;
+        void updateWordColor(item.key, seed);
+      }
+      syncWordColorRows();
+    });
+  }
+}
+
+/** 写一个逐词高亮颜色值（键名在类型上还没定型，先按 unknown 中转） */
+function updateWordColor(key: WordColorItem['key'], value: string): void {
+  const patch = { [key]: value } as unknown as Partial<ExtensionSettings>;
+  void update(patch);
+}
+
 /* ══════════════════════════ 保存 ══════════════════════════ */
 
 let saveTimer: number | undefined;
@@ -307,8 +469,22 @@ let pendingPatch: Partial<ExtensionSettings> = {};
  * `silent` 用于「正在输入的输入框」：Key / Base URL 每敲一个字都会走这里，
  * 若跟着重绘整个厂牌列表，输入框会被重建、光标直接跳走。
  */
-async function update(patch: Partial<ExtensionSettings>, options: { silent?: boolean } = {}): Promise<void> {
+async function update(rawPatch: Partial<ExtensionSettings>, options: { silent?: boolean } = {}): Promise<void> {
+  const patch: Partial<ExtensionSettings> = { ...rawPatch };
+  /* 两个逐词高亮颜色项过一遍归一（空串 = 跟随，或 #rgb / #rrggbb）。
+     它们**永远**跟着 patch 走 ⇒ 只要本页保存过一次，落到设置里的就一定是
+     这两种值之一 —— 哪怕原值是手改过的非法值。
+     存储通道仍是 utils/storage.ts 那一条，这里只归一取值，不另写存取。 */
+  for (const item of WORD_COLOR_ITEMS) {
+    const incoming = (rawPatch as unknown as Record<string, unknown>)[item.key];
+    const next = sanitizeWordColor(incoming !== undefined ? incoming : readWordColor(item));
+    (patch as unknown as Record<string, unknown>)[item.key] = next;
+  }
   settings = { ...settings, ...patch };
+  /* 「字幕样式」里的原文色 / 译文色改了 → 跟随时取色器显示的颜色要立刻跟着变 */
+  if (patch.origColor !== undefined || patch.transColor !== undefined) syncWordColorRows();
+  /* 「自动字幕逐词显现」开关变了 → 颜色区跟着展开 / 收起（依据设置里的实际值） */
+  if (patch.asrWordReveal !== undefined) syncWordColorBlock();
   pendingPatch = { ...pendingPatch, ...patch };
   // 预览必须读合并后的 settings：早期把 applyPreview() 放在合并之前，
   // 导致滑块/取色器改动整整滞后一次输入才反映到预览上。

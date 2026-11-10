@@ -18,7 +18,7 @@
         </span>
         <span class="brand-text">
           <strong>字幕断句翻译器</strong>
-          <span class="brand-sub">高级设置<i id="app-version">v0.4.3</i></span>
+          <span class="brand-sub">高级设置<i id="app-version">v0.5.1</i></span>
         </span>
       </div>
       <div class="topbar-actions">
@@ -650,6 +650,83 @@
                 <label class="color-field"><span>背景</span><input type="color" data-setting="bgColor" /></label>
                 <label class="color-field"><span>原文</span><input type="color" data-setting="origColor" /></label>
                 <label class="color-field"><span>译文</span><input type="color" data-setting="transColor" /></label>
+              </div>
+            </div>
+
+            <!-- v0.5.0 阶段 B 普通 ASR 轨：读官方词级时间，按「词」显现；与歌词轨是两条独立机制 -->
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">自动字幕逐词显现</span>
+                <span class="row-desc">读官方自动字幕自带的词级时间戳，让译文跟原文按词逐个点亮；没有词级时间的轨自动退回整句显示。</span>
+                <span class="row-note">与「歌词逐字点亮」互不影响，后者读的是官方笔色；本项只作用于普通自动字幕。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="自动字幕逐词显现">
+                  <input type="checkbox" data-setting="asrWordReveal" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
+              </div>
+            </div>
+
+            <!-- v0.5.0 任务·设置页：逐词高亮配色（原文 / 译文两路）。
+                 位置：并入「自动字幕逐词显现」正下方，只有该开关打开时才向下展开。
+                 语义：默认「跟随」——原文侧跟「字幕样式」里选的原文色、译文侧跟译文色；
+                 存储里存**空串**表示跟随，只有用户单独指定才存 hex（显示值 ≠ 存储值）。
+                 不做能力检测：只要「自动字幕逐词显现」开着就能选颜色，与当前视频支不支持
+                 词级时间戳无关。
+                 「跟随」复选框是本地 UI 状态（不进存储），勾选态由两个颜色项是否为空串推导。 -->
+            <div class="word-color-block" id="word-color-block" hidden>
+              <div class="word-color-block-inner">
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-title">原文逐词高亮色</span>
+                    <span class="row-desc">默认跟随「字幕样式」里选的原文色；取消勾选「跟随原配色」即可单独指定。</span>
+                    <span class="row-note" id="word-highlight-orig-note">跟随时显示原文色且不可改；要自己的颜色就取消勾选。</span>
+                  </div>
+                  <div class="row-control">
+                    <label class="check-field">
+                      <input type="checkbox" id="word-highlight-follow-orig" />
+                      <span>跟随原配色</span>
+                    </label>
+                    <label class="color-field">
+                      <span>高亮</span>
+                      <input type="color" data-setting="wordHighlightColor" disabled aria-describedby="word-highlight-orig-note" />
+                    </label>
+                  </div>
+                </div>
+
+                <div class="row">
+                  <div class="row-text">
+                    <span class="row-title">译文逐词高亮色</span>
+                    <span class="row-desc">默认跟随「字幕样式」里选的译文色；取消勾选「跟随译配色」即可单独指定。</span>
+                    <span class="row-note" id="word-highlight-trans-note">跟随时显示译文色且不可改；要自己的颜色就取消勾选。</span>
+                  </div>
+                  <div class="row-control">
+                    <label class="check-field">
+                      <input type="checkbox" id="word-highlight-follow-trans" />
+                      <span>跟随译配色</span>
+                    </label>
+                    <label class="color-field">
+                      <span>高亮</span>
+                      <input type="color" data-setting="wordHighlightTransColor" disabled aria-describedby="word-highlight-trans-note" />
+                    </label>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- v0.5.0 歌词轨：默认关闭，只在识别为歌词轨时才生效 -->
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">歌词逐字点亮（自动检测）</span>
+                <span class="row-desc">自动检测官方字幕是否带「当前字高亮」，有才启用逐字点亮；没有时保持关闭。同一段歌词只翻译一次，副歌重复出现不重复请求。</span>
+                <span class="row-note">判定依据是着色笔成对下发，不是零宽空格。该轨不含真实字级时间，逐字节奏为估算；关掉即回到旧版行为。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="歌词逐字点亮">
+                  <input type="checkbox" data-setting="lyricKaraoke" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
               </div>
             </div>
           </div>

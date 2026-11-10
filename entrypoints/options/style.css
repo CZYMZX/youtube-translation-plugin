@@ -1472,6 +1472,61 @@ select.gloss-input option {
   border-radius: 50%;
 }
 
+/* ── 「跟随」复选框 ──
+   与 .color-field 同一套行内控件外观（胶囊 + 玻璃边 + 12px 弱化字），
+   不新造控件体系；勾选 / 取消用浏览器原生渲染（:root 已声明 color-scheme: dark）。 */
+.check-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 9px 4px 7px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.check-field input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--text-main);
+  cursor: pointer;
+}
+
+/* ── 逐词高亮颜色区（v0.5.0 任务·设置页）──
+   并入「自动字幕逐词显现」正下方，只有该开关打开时才向下展开。
+   展开 / 收起走 grid-template-rows: 0fr → 1fr + opacity，与 .fold-panel /
+   .provider-panel / .depend-panel 逐字同一条声明（只动网格行与透明度，
+   不碰 height / top / left）。 */
+.word-color-block {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--dur-base) var(--spring-soft),
+    opacity var(--dur-base) var(--ease-out-expo);
+}
+
+.word-color-block.is-open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+
+/* 收起态靠 hidden 属性；作者样式会压过 UA 的 [hidden] { display: none }，这里显式盖掉 */
+.word-color-block[hidden] {
+  display: none;
+}
+
+/* 内层负责 overflow: hidden 与 min-height: 0（收起时高度才能真正归零，不留空白） */
+.word-color-block-inner {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
 /* ── 徽标 ── */
 .pill {
   display: inline-flex;
@@ -2331,6 +2386,7 @@ tr.is-editing {
   .provider-panel,
   .fold-panel,
   .details-body,
+  .word-color-block,
   .fold-chevron,
   .provider-chevron,
   .provider-advanced > summary::before,
@@ -2373,6 +2429,15 @@ tr.is-editing {
   }
 
   .depend-panel:not(.is-open) {
+    opacity: 0 !important;
+  }
+
+  /* 逐词高亮颜色区：展开即终态，收起仍是 0fr + 透明 */
+  .word-color-block {
+    opacity: 1 !important;
+  }
+
+  .word-color-block:not(.is-open) {
     opacity: 0 !important;
   }
 

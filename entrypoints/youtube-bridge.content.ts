@@ -6,7 +6,7 @@ export default defineContentScript({
   runAt: 'document_start',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.4.3]%c MAIN-world bridge loaded (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.5.1]%c MAIN-world bridge loaded (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -140,20 +140,77 @@ export default defineContentScript({
       );
     }
 
+    /* ── 模拟点击节流（0.5.1 A3）──────────────────────────────────────────────
+     * 无轨视频上「模拟点击激活原生字幕按钮」曾刷 22 次/16s（≈0.7s 一次）：
+     * 每点一次播放器就白跑一轮 timedtext，最后还是拿不到字幕。
+     * 三道闸门：无轨直接放弃 → 间隔 ≥1500ms → 同一视频最多 3 次。
+     */
+    const TRIGGER_MIN_INTERVAL_MS = 1500;
+    /** 内容脚本看门狗恰好也是 1500ms 一轮，留 150ms 抖动容差，否则每隔一轮就被边界卡掉 */
+    const TRIGGER_JITTER_TOLERANCE_MS = 150;
+    const TRIGGER_MAX_PER_VIDEO = 3;
+    /**
+     * 「这条视频刚才确实有轨」的记忆窗口。
+     * 播放器重建轨道列表（onCaptionsTrackListChanged 连发十几次）的瞬间，
+     * getCaptionTracks() 的 6 条途径可能同时返回空 —— 此时若直接 return，
+     * 唯一那次 force 重置就会被吞掉，有轨视频会永远拿不到数据（实测）。
+     */
+    const TRACKS_MEMORY_MS = 10000;
+    let lastTriggerAt = 0;
+    let triggerVid = '';
+    let triggerCountForVid = 0;
+    let tracksSeenVid = '';
+    let tracksSeenAt = 0;
+
     /**
      * 借鉴沉浸式翻译核心机制：主动激活/唤醒 YouTube 播放器原生字幕模块
      * 解决“用户未开启原生 CC 时，YouTube 播放器根本不发起 timedtext 请求、导致插件检测不到字幕”的根本痛点
      */
     function triggerSubtitle(force = false) {
+      const vid = String(getPlayer()?.getVideoData?.()?.video_id || '');
+
+      // 闸门 1：7 条取轨途径都拿不到 baseUrl → 点按钮不可能点出字幕来，直接放弃。
+      // 但「刚看过有轨」的 10s 内允许放行，避开播放器重建轨道列表时的瞬时空窗。
+      const tracks = getCaptionTracks();
+      const hasTracksNow = !!(tracks && tracks.length > 0);
+      if (hasTracksNow) {
+        tracksSeenVid = vid;
+        tracksSeenAt = Date.now();
+      }
+      const tracksTrusted =
+        hasTracksNow ||
+        (!!vid && vid === tracksSeenVid && Date.now() - tracksSeenAt <= TRACKS_MEMORY_MS);
+      if (!tracksTrusted) return;
+
+      // 闸门 2 / 3：同一视频限次 + 最小间隔（切视频自动重置）
+      if (vid && vid !== triggerVid) {
+        triggerVid = vid;
+        triggerCountForVid = 0;
+        lastTriggerAt = 0;
+      }
+      if (triggerCountForVid >= TRIGGER_MAX_PER_VIDEO) return;
+      const now = Date.now();
+      if (now - lastTriggerAt < TRIGGER_MIN_INTERVAL_MS - TRIGGER_JITTER_TOLERANCE_MS) return;
+
+      // 只有**真的点下去**才消耗配额与节流窗口：
+      // 按钮已经是按下状态时的非 force 调用是空操作（YouTube 不会因此发请求），
+      // 让它白白吃掉 3 次配额，会把真正有用的 force 重置挤掉。
+      const spend = () => {
+        lastTriggerAt = now;
+        triggerCountForVid++;
+      };
+
       const playerEl = document.querySelector('.html5-video-player');
       const btn = (playerEl?.querySelector('.ytp-subtitles-button') || document.querySelector('.ytp-subtitles-button')) as HTMLElement | null;
       if (btn) {
         const isPressed = btn.getAttribute('aria-pressed') === 'true';
         if (!isPressed) {
-          console.log('[YT-Sub-Translator] 借鉴沉浸式翻译: 模拟点击激活原生字幕按钮...');
+          spend();
+          console.debug('[YT-Sub-Translator] 借鉴沉浸式翻译: 模拟点击激活原生字幕按钮...');
           btn.click();
         } else if (force) {
-          console.log('[YT-Sub-Translator] 借鉴沉浸式翻译: 强制重置刷新字幕按钮...');
+          spend();
+          console.debug('[YT-Sub-Translator] 借鉴沉浸式翻译: 强制重置刷新字幕按钮...');
           btn.click();
           setTimeout(() => {
             if (btn.getAttribute('aria-pressed') !== 'true') {
@@ -166,6 +223,8 @@ export default defineContentScript({
 
       const player = getPlayer();
       if (player && typeof player.toggleSubtitles === 'function') {
+        spend();
+        console.debug('[YT-Sub-Translator] 借鉴沉浸式翻译: 调用 toggleSubtitles 唤醒原生字幕...');
         player.toggleSubtitles();
       }
     }

@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - 播放器覆盖层与交互核心 (SubtitleOverlay)
- * 当前版本: v0.4.3 (VSR 红线约束下的浮层实现)
+ * 当前版本: v0.5.1 (VSR 红线约束下的浮层实现)
  *
  * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
  * 1. 纯净黑白毛玻璃视觉体系：除字幕框和译文颜色允许用户自由调色外，所有控制面板、
@@ -42,8 +42,335 @@ import {
   ICON_ALERT,
   ICON_AI_HEXASTAR
 } from '../../utils/icons';
-import type { SubtitleSentence, ExtensionSettings } from '../../types';
+import type { SubtitleSentence, ExtensionSettings, KaraokeWindow } from '../../types';
+import { estimateCharTimings, type CharTiming } from '../../utils/lyric-track';
+import { stripInvisible } from '../../utils/invisible-text';
 import { OVERLAY_STYLES } from './overlay-styles';
+
+/**
+ * 卡拉OK渲染的**三态逐字路径**（v0.5.0 渲染层，见 `buildKaraokeSpans`）：
+ *
+ *   1. **没有译文**（空串 / 翻译失败标记）→ 译文位 `k-placeholder` 占位、不写字符，
+ *      只画原文进度。
+ *   2. **未翻译、保持原样**（译文归一化后 == 原文归一化）→ 译文位显示**原文文本**，
+ *      时间表**直接复用原文那份 `win.charTimings`**（同一份数组引用，不是另算一份），
+ *      于是两侧走**完全同一条逐字路径**：同一时刻 `k-done` / `k-cur` 数量一致、
+ *      推进节奏一致、笔色也一致。
+ *   3. **已翻译** → 译文位显示译文，时间表按轨分流：ASR 轨走 token 表
+ *      （CJK 每字 / 拉丁空格词，按进度百分比均匀分配），歌词轨保持原样
+ *      （`KARAOKE_WHOLE_LINE_RATIO` 整句淡入分支 + 按译文自身字符均分）。
+ *
+ * 原文侧**始终**用它自己的 `win.charTimings`：数据层（`utils/asr-timing.ts`
+ * 的 `buildAsrCharTimings`）在拿到**官方词级时间戳**时保留词级口径
+ * （同一个词的字符共享同一个 `startMs`）⇒ 原文行是**逐词点亮**（整词一起亮，
+ * 与 YouTube 一致）；只有帧推断 / 均分兜底那种**字级**表才逐字跳。
+ * 译文被翻译过时**不会**再去套原文那份表（那会让两侧节奏打架）。
+ */
+
+/**
+ * 「未到」态：**半透明白 rgba(255,255,255,0.5)**，不是纯白。
+ * ---------------------------------------------------------------------------
+ * 语义仍是「没到那个字就是白色，到了才变成用户选的颜色」，只是把「白色」换成
+ * 带 alpha 的白：未唱部分不再是一整行刺眼的纯白，唱过才实心亮起来 —— 与译文侧
+ * 已有的「未唱灰半透明」观感对齐。
+ * 有官方笔色的轨用 span 内联色（优先级更高），与这个兜底互不干扰；
+ * 但「未到」态由 CSS 的 `!important` 压回本值，所以笔色轨未唱部分也走半透明白。
+ *
+ * 为什么用**颜色 alpha** 而不是 `opacity`：opacity 作用于整个 span，会把
+ * 「当前字」的 text-shadow 光晕一起压淡，且与 k-done 的过渡不好控；
+ * alpha 只压字形自身，`text-shadow` 照旧生效。
+ *
+ * 取值 0.5 是算出来的（WCAG 相对亮度比，背景 = 字幕卡片 rgba(15,23,42,0.75)
+ * 叠在视频画面上；取暗/中灰/亮三种画面）：
+ *   alpha  未高亮 vs 背景          已高亮(#e2e8f0) vs 未高亮
+ *   0.35   3.20 / 2.98 / 2.63      4.67 / 3.53 / 2.96   ← 逐词态现状
+ *   0.50   5.32 / 4.50 / 3.75      2.80 / 2.34 / 2.07   ← 本值（两条阈值都过）
+ *   0.55   6.15 / 5.10 / 4.18      2.43 / 2.07 / 1.86   ← 亮画面下已分不清
+ *   0.60   7.12 / 5.78 / 4.67      2.10 / 1.82 / 1.67   ← 同上，更糊
+ * 阈值：未高亮 vs 背景 ≥ 3:1（仍可读）、已高亮 vs 未高亮 ≥ 2:1（一眼分出唱到哪）。
+ * 于是 0.5 是**上限**而不是下限：再亮就牺牲「唱到哪」的可辨性。
+ */
+const KARAOKE_PEND_COLOR = 'rgba(255, 255, 255, 0.5)';
+
+/*
+ * 歌词轨专用（v0.5.0 原样保留）：译文远短于原文时退化为「整句淡入 + 句末停留」。
+ * 这套参数**只服务于歌词轨**；自动字幕（ASR）轨走 token 化逐词进度，不用它们。
+ */
+const KARAOKE_HOLD_TAIL_MS = 200;
+const KARAOKE_FADE_MIN_MS = 120;
+const KARAOKE_FADE_MAX_MS = 700;
+const KARAOKE_WHOLE_LINE_RATIO = 0.4;
+
+type KaraokeState = 'done' | 'cur' | 'pend';
+
+/**
+ * 逐字 span 的状态切换：只动 class。颜色正常由 CSS 变量决定，不逐帧写内联色；
+ * 唯一的例外是**建 span 时**写入的官方笔色（静态写一次，不属于每帧写入）。
+ */
+function setKaraokeState(el: HTMLElement, state: KaraokeState) {
+  el.classList.toggle('k-done', state === 'done');
+  el.classList.toggle('k-cur', state === 'cur');
+  el.classList.toggle('k-pend', state === 'pend');
+}
+
+/**
+ * 逐词高亮 span 的初始 class（v0.5.0 任务·渲染层）
+ * ---------------------------------------------------------------------------
+ * 只有「**官方词级时间戳**」的句子（`sentence.wordLevel === true`）才带 `.k-word`：
+ *   - 词级 ⇒ 同一个词的字符共享同一个 `startMs` ⇒ **整词在同一帧一起点亮**；
+ *   - 未播放到的词 = 灰色半透明（`--k-word-pend`），已播放 = 用户配色（`--k-word-hi`）。
+ * 手动上传字幕 / 逐字字幕 / 歌词轨 / 无词级时间戳的 ASR 句**都不带**它，
+ * 继续走既有 `.k-char.k-pend / .k-done / .k-cur` 三条规则（语义一行未改）。
+ *
+ * ⚠️ **官方笔色优先**（这条决定了 `!important` 放在哪）：
+ *   CSS 里 `.k-char.k-word.k-pend` 带 `!important`（要把未播放的词压回半透明灰）。
+ *   如果给**带内联笔色**（官方 `t.color`）的 span 也加 `.k-word`，这条 `!important`
+ *   会**直接盖掉官方笔色**（`!important` 的样式表声明压过内联非 important 声明）。
+ *   所以规则是：**有笔色就不加 `.k-word`** —— 该 span 走既有 k-pend / k-done / k-cur
+ *   语义，内联笔色优先级高于 class 规则，官方颜色永远赢。
+ *   （实测：ASR 轨的 pens 为空、歌词轨才带笔色，而歌词轨根本不是词级 —— 这条
+ *   互斥是"结构上不可能撞车"，这里再加一道保险防止将来数据层变化。）
+ *
+ * ── 原文侧 / 译文侧分开（v0.5.0 双路）────────────────────────────────────
+ * 译文侧的 span 额外挂 `.k-word-t`，让 CSS 用**另一条**颜色
+ * （`--k-word-hi-trans`，默认跟随用户的译文色）而不是原文侧那条（`--k-word-hi`）。
+ * 未播放词的灰色半透明（`--k-word-pend`）**两路一致**，不区分。
+ */
+function buildKaraokeClass(
+  wordLevel: boolean,
+  hasPenColor: boolean,
+  side: 'orig' | 'trans' = 'orig'
+): string {
+  if (!wordLevel || hasPenColor) return 'k-char k-pend';
+  return side === 'trans' ? 'k-char k-pend k-word k-word-t' : 'k-char k-pend k-word';
+}
+
+/** 文本按码点计长（emoji 不会被算成两个） */
+function charLenOf(text: string): number {
+  return Array.from(text).length;
+}
+
+/* ============================================================================
+ * 译文 token 化（v0.5.0 修复「中文译文整句同现」）
+ * ==========================================================================*/
+
+/** 假名 / 汉字（含扩展A）/ 谚文 / CJK 部首与兼容区（口径与 utils/lyric-track 的 CJK_CHAR_RE 一致；U+3000 归空白） */
+const KARAOKE_CJK_CHAR_RE =
+  /[\u2E80-\u2EFF\u3040-\u30FF\u31F0-\u31FF\u3400-\u4DBF\u4E00-\u9FFF\uF900-\uFAFF\uAC00-\uD7AF]/;
+const KARAOKE_WS_CHAR_RE = /[\s\u3000]/;
+/** \p{P} 标点 + \p{S} 符号（含全角标点与货币/数学符号） */
+const KARAOKE_PUNCT_CHAR_RE = /[\p{P}\p{S}]/u;
+/** 归一化用：全局版空白 / 标点正则（判定「未翻译、保持原样」时要把它们全去掉） */
+const KARAOKE_WS_G_RE = /[\s\u3000]/g;
+const KARAOKE_PUNCT_G_RE = /[\p{P}\p{S}]/gu;
+
+/**
+ * 「未翻译、保持原样」判定用的**归一化口径**（纯函数）：
+ *   1. 去零宽字符（`stripInvisible`：U+200B–U+200F / U+FEFF / U+2060）；
+ *   2. 去**全部**空白（含全角空格 U+3000、NBSP）；
+ *   3. 去标点与符号（\p{P} + \p{S}，与 `tokenizeTransText` 同一口径）；
+ *   4. 转小写。
+ * 于是「同语言没翻译」「只差标点 / 大小写 / 空白」都会归到**同一条逐字路径**。
+ */
+function normalizeKaraokeText(text: string): string {
+  if (!text) return '';
+  return stripInvisible(text)
+    .replace(KARAOKE_WS_G_RE, '')
+    .replace(KARAOKE_PUNCT_G_RE, '')
+    .toLowerCase();
+}
+
+/**
+ * 「译文 == 原文（归一化后）」= 未翻译、保持原样。
+ * 这是**三态判定**的第二态：译文位不再另算一份 token 表，而是与原文共用
+ * `win.charTimings`（见 `buildKaraokeSpans`）。
+ */
+function isUntranslatedKaraoke(transText: string, origText: string): boolean {
+  if (!transText) return false;
+  const t = normalizeKaraokeText(transText);
+  if (!t) return false;
+  return t === normalizeKaraokeText(origText);
+}
+
+/**
+ * 译文某个字符位置对应的原文颜色（按**字符比例**映射，与时间表无关）。
+ * 歌词轨与自动字幕轨共用；原文没有笔色时返回 null（走用户配色）。
+ */
+function transColorAt(
+  srcTimings: CharTiming[],
+  srcLen: number,
+  transLen: number,
+  charOffset: number
+): string | null {
+  if (srcLen <= 0 || transLen <= 0) return null;
+  const j = Math.min(srcLen - 1, Math.floor((charOffset * srcLen) / transLen));
+  return srcTimings[j]?.color ?? null;
+}
+
+/** 原文已唱字符里出现最多的颜色 —— 歌词轨整句淡入分支用它给译文上色 */
+function pickMainColor(timings: CharTiming[]): string | null {
+  const cnt = new Map<string, number>();
+  for (const t of timings) {
+    if (!t.color) continue;
+    cnt.set(t.color, (cnt.get(t.color) || 0) + 1);
+  }
+  let best: string | null = null;
+  let bestN = 0;
+  for (const [c, n] of cnt) {
+    if (n > bestN) {
+      best = c;
+      bestN = n;
+    }
+  }
+  return best;
+}
+
+/** 一个译文 token：`text` 是渲染文本（含贴上的空白/标点），`offset` 是首字符在整句里的码点下标（供颜色按字符比例映射） */
+interface TransToken {
+  text: string;
+  offset: number;
+}
+
+/**
+ * 译文切 token（纯函数，无副作用）：
+ *   - **CJK（汉字/假名/谚文）每字一个 token**；
+ *   - 拉丁字母/数字/其它文字按**空格词**聚合为一个 token（词内连续字符一起亮，
+ *     词内字符共享同一 `startMs`；这是**译文自己的口径**——原文 ASR 已是字级，
+ *     不再是整词显现）；
+ *   - **标点/符号贴在前 token 末尾**（前 token 存在、中间没有空白、且前 token
+ *     末字符不是标点，如「了。」的「。」跟「了」一起亮）；不满足任一条件
+ *     （行首、空白后、前 token 已以标点结尾）就**独立成一个小 token**；
+ *   - **空白贴在前 token 末尾**（渲染需要词间距；行首空白挂到下一个 token 开头），
+ *     保证 tokens 依序拼接 = 原文整句，显示不丢字不加字。
+ */
+function tokenizeTransText(text: string): TransToken[] {
+  const chars = Array.from(text);
+  const tokens: TransToken[] = [];
+  let buf = ''; // 正在攒的拉丁词（含贴后的标点与尾随空白）
+  let bufOffset = -1;
+  let leadSpace = false; // 词首空白：前面还没有 token 可贴
+  let spaceAfterLast = true; // 上个 token 之后是否隔了空白（决定标点贴不贴前词）
+  const flush = () => {
+    if (buf) {
+      tokens.push({ text: (leadSpace ? ' ' : '') + buf, offset: bufOffset });
+      buf = '';
+      bufOffset = -1;
+      leadSpace = false;
+    }
+  };
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i];
+    if (KARAOKE_WS_CHAR_RE.test(ch)) {
+      if (buf) {
+        /**
+         * 拉丁词遇到空白 → **词结束，落成一个独立 token**。
+         * （v0.5.0 渲染层修复：原来这里把空白直接拼进 `buf`，于是
+         *  「Tonight we begin together right now」整句只攒出 **1 个 token** ——
+         *  译文整句一次跳变，「译文逐字生效」完全失效。）
+         * 空白仍贴在这个词的末尾（渲染需要词间距），保证 tokens 依序拼接 = 原文整句。
+         */
+        flush();
+        if (tokens.length > 0) tokens[tokens.length - 1].text += ch;
+        spaceAfterLast = true;
+      } else if (tokens.length > 0) {
+        tokens[tokens.length - 1].text += ch;
+        spaceAfterLast = true;
+      } else {
+        leadSpace = true;
+      }
+      continue;
+    }
+    if (KARAOKE_CJK_CHAR_RE.test(ch)) {
+      flush();
+      tokens.push({ text: (leadSpace ? ' ' : '') + ch, offset: i });
+      leadSpace = false;
+      spaceAfterLast = false;
+      continue;
+    }
+    if (KARAOKE_PUNCT_CHAR_RE.test(ch)) {
+      if (buf) {
+        buf += ch; // 词内/词尾标点：跟拉丁词一起亮（"word," 一个 token）
+        continue;
+      }
+      const last = tokens[tokens.length - 1];
+      const lastChar = last ? Array.from(last.text).pop() ?? '' : '';
+      if (last && !spaceAfterLast && lastChar && !KARAOKE_PUNCT_CHAR_RE.test(lastChar)) {
+        last.text += ch; // 贴前词：CJK 或拉丁词后的标点（"了。"）
+      } else {
+        tokens.push({ text: (leadSpace ? ' ' : '') + ch, offset: i });
+        leadSpace = false;
+      }
+      spaceAfterLast = false;
+      continue;
+    }
+    // 普通字符（拉丁/数字/其它文字）：攒进当前词
+    if (!buf) bufOffset = i;
+    buf += ch;
+    spaceAfterLast = false;
+  }
+  flush();
+  // 病态兜底：非空文本却一个 token 都没攒出来（如纯空白），整句一个 token，不空渲染
+  if (tokens.length === 0 && chars.length > 0) {
+    tokens.push({ text, offset: 0 });
+  }
+  return tokens;
+}
+
+/**
+ * **译文 token** 时间表：在 `[startMs, endMs]` 上按 token 数量**均匀分配**——第 k 个
+ * token 的点亮时刻 ≈ `startMs + span × k / N`（「按进度百分比」）；同一 token 内所有
+ * 字符共享同一 `startMs`（一个词 / 一个汉字一起跳变，`indexAtTimings` 取
+ * 「最后一个 startMs<=now」即可命中）；token 的 `endMs` = 下一 token 起点，末 token
+ * 对齐 `win.endMs`。`span >= N` 时起点严格递增（相邻 floor 差 ≥1）；极短窗口
+ * （span < N）按 1ms 密排并钳到 endMs，个别 token 同刻跳变，只发生在病态输入。
+ *
+ * 适用范围：**只有「已翻译」分支走这张表**。
+ * 「未翻译、保持原样」分支**不复用它**（改用原文那份 `win.charTimings`），
+ * 原文侧也**从不**用它（原文走自己的字级表）。
+ */
+function buildTransTokenTimings(win: KaraokeWindow, tokens: TransToken[]): CharTiming[] {
+  const n = tokens.length;
+  if (n === 0) return [];
+  const span = Math.max(0, win.endMs - win.startMs);
+  const starts = new Array<number>(n);
+  for (let k = 0; k < n; k++) {
+    starts[k] =
+      span >= n
+        ? win.startMs + Math.floor((span * k) / n)
+        : Math.min(win.startMs + k, win.endMs);
+  }
+  const out: CharTiming[] = new Array(n);
+  for (let k = 0; k < n; k++) {
+    const endMs = k + 1 < n ? Math.max(starts[k], starts[k + 1]) : Math.max(starts[k], win.endMs);
+    out[k] = { char: tokens[k].text, startMs: starts[k], endMs, estimated: true };
+  }
+  return out;
+}
+
+/**
+ * 当前时刻在逐字时间表里的位置：
+ *   -1 = 还没开始（全部未点亮）；n = 已经唱完（全部点亮，**不回退、不循环**）；
+ *   其余 = 当前正在唱的字符下标。
+ */
+function indexAtTimings(timings: CharTiming[], nowMs: number): number {
+  const n = timings.length;
+  if (n === 0) return -1;
+  if (nowMs < timings[0].startMs) return -1;
+  if (nowMs >= timings[n - 1].endMs) return n;
+  let lo = 0;
+  let hi = n - 1;
+  let found = 0;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    if (timings[mid].startMs <= nowMs) {
+      found = mid;
+      lo = mid + 1;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return found;
+}
 
 function hexToRgba(hex: string, opacity: number): string {
   if (!hex || hex === 'transparent' || hex === '#00000000') {
@@ -59,6 +386,27 @@ function hexToRgba(hex: string, opacity: number): string {
   const g = (num >> 8) & 255;
   const b = num & 255;
   return `rgba(${r}, ${g}, ${b}, ${opacity / 100})`;
+}
+
+/**
+ * 逐词高亮色白名单（v0.5.0 任务·渲染层）
+ * ---------------------------------------------------------------------------
+ * `settings.wordHighlightColor` / `settings.wordHighlightTransColor` 会被拼进
+ * `style` 的 CSS 变量值 ⇒ **只允许 hex**：`#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa`。
+ * 其它任何字符串（`red; background:url(...)` 这类）一律**返回空串**。
+ *
+ * ⚠️ **语义已改（v0.5.0 双路）**：本函数**不再**自己回退到某个默认色，而是
+ * 「空串或非法值 → 返回空串」。空串代表「**跟随**」，由调用方决定回退到
+ * `settings.origColor`（原文侧）/ `settings.transColor`（译文侧）。
+ * 与 `utils/storage.ts` 的 `sanitizeColor` 同族口径，但渲染层再兜一次底 ——
+ * 设置值可能来自旧版本 / 手改过的 local storage。
+ */
+function sanitizeWordHighlightColor(raw: unknown): string {
+  if (typeof raw !== 'string') return '';
+  const v = raw.trim();
+  if (!v) return '';
+  if (/^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(v)) return v;
+  return '';
 }
 
 export class SubtitleOverlay {
@@ -119,6 +467,31 @@ export class SubtitleOverlay {
   private playerControlsObserver: MutationObserver | null = null;
   private isControlBarShowing: boolean = false;
   private currentScaleFactor: number = 1.0;
+
+  /* ══════════ v0.5.0 歌词轨卡拉OK渲染状态（开关关闭时全部为空，不参与任何分支） ══════════ */
+  /** 摊平后的「句子 × 显示窗口」索引，按窗口 startMs 升序；空数组 = 当前不是歌词轨 */
+  private karaokeIndex: Array<{ s: SubtitleSentence; w: KaraokeWindow; key: string }> = [];
+  /** 建索引时绑定的句子数组引用：引用没变就不重建（翻译推进不会改引用） */
+  private karaokeIndexSource: SubtitleSentence[] | null = null;
+  /** 已建好 span 结构的窗口键；变了才重建 DOM（**绝不每帧重建**） */
+  private karaokeBuiltKey = '';
+  private karaokeOrigSpans: HTMLElement[] = [];
+  private karaokeTransSpans: HTMLElement[] = [];
+  /** 上一次涂到的字符下标，用于「只切边界那两个 span」 */
+  private karaokeOrigPainted = -1;
+  private karaokeTransPainted = -1;
+  private karaokeTransTimings: CharTiming[] = [];
+  /**
+   * 歌词轨整句淡入分支标记：true = 译文是一个 `.k-whole` 整句 span（靠 CSS 动画），
+   * 不再逐帧涂。**仅歌词轨**会用；自动字幕（ASR）轨恒为 false。
+   */
+  private karaokeTransWhole = false;
+  /** 当前显示窗口的结束时间，用于句间停顿的清除判定 */
+  private lastKaraokeEndMs = 0;
+  /** 最近一次渲染用的有效时间：设置变更（改颜色/字号）时按它重画，不跳回句首 */
+  private lastEffectiveTimeMs = 0;
+  /** 译文逐字时间记忆化（键 = 窗口区间 + 译文） */
+  private karaokeTransCache = new Map<string, CharTiming[]>();
 
   private onSeekCallback?: (seconds: number) => void;
   private onSettingsChangeCallback?: (newSettings: Partial<ExtensionSettings>) => void;
@@ -239,6 +612,10 @@ export class SubtitleOverlay {
   }
 
   public destroy() {
+    this.teardownKaraoke();
+    this.karaokeIndex = [];
+    this.karaokeIndexSource = null;
+    this.lastEffectiveTimeMs = 0;
     if (this.playerResizeObserver) {
       this.playerResizeObserver.disconnect();
       this.playerResizeObserver = null;
@@ -368,11 +745,26 @@ export class SubtitleOverlay {
   }
 
   public updateSettings(newSettings: ExtensionSettings) {
+    /* v0.5.0：关掉卡拉OK时把 span 残留清干净，普通渲染路径才能拿到纯净容器 */
+    const karaokeOff = newSettings.lyricKaraoke !== true;
     this.settings = newSettings;
+    if (karaokeOff) {
+      this.teardownKaraoke();
+      this.karaokeIndex = [];
+      this.karaokeIndexSource = null;
+    }
+
     this.applyStyles();
     this.syncQuickPanelValues();
     if (this.currentSentence) {
-      this.renderCurrentSentence(this.currentSentence);
+      /* 卡拉OK句：按「最近一次有效时间」重画（不跳回句首），结构按新配色/字号重建 */
+      const hit = karaokeOff ? null : this.findKaraokeWindowAt(this.lastEffectiveTimeMs);
+      if (hit) {
+        this.karaokeBuiltKey = '';
+        this.renderKaraoke(hit.s, hit.w, this.lastEffectiveTimeMs);
+      } else {
+        this.renderCurrentSentence(this.currentSentence);
+      }
     }
     // 设置变更（含颜色滑块拖动）不再重建整份剧本列表，只刷新已有行的译文
     this.updateDrawerTranslations();
@@ -423,6 +815,22 @@ export class SubtitleOverlay {
     }
     this.syncQuickPanelValues();
     this.updateDrawerTranslations();
+
+    /**
+     * v0.5.0：译文是异步回来的，而逐字推进只在 timeupdate（约 4Hz）里发生。
+     * 视频暂停时没有 timeupdate —— 若不在这里补一次重画，用户暂停后改设置/等译文
+     * 会看到「译文位一直空着」直到下次播放。这里按最近一次有效时间重画一次，
+     * 结构未变时 buildKey 命中缓存，只是不重建 DOM。
+     * 仅在开关打开时执行，普通字幕路径不受影响。
+     */
+    if (this.settings.lyricKaraoke === true && this.lastEffectiveTimeMs > 0) {
+      this.ensureKaraokeIndex();
+      const hit = this.findKaraokeWindowAt(this.lastEffectiveTimeMs);
+      if (hit) {
+        this.currentSentence = hit.s;
+        this.renderKaraoke(hit.s, hit.w, this.lastEffectiveTimeMs);
+      }
+    }
   }
 
   public setTrackEmpty(empty: boolean, _reason?: string) {
@@ -446,6 +854,28 @@ export class SubtitleOverlay {
     // 默认内置 200ms 的声学前瞻补偿（彻底消除原 ASR 字幕通常约 0.2 秒的延迟迟滞），并叠加用户微调
     const ACOUSTIC_LEAD_IN_MS = 200;
     const effectiveTime = currentTimeMs + ACOUSTIC_LEAD_IN_MS + (this.settings.syncOffsetMs || 0);
+
+    /**
+     * v0.5.0 歌词轨卡拉OK分支。
+     * 只有「用户开了开关」且「数据里确实有歌词显示窗口」才进来；
+     * 否则走下面 0.4.3 的原逻辑（一行未改）。
+     * 驱动频率仍是 timeupdate（约 4Hz），不新增 rAF 循环 —— 暂停时没有 timeupdate，
+     * 逐字进度自然停住，也不需要额外监听 play/pause。
+     */
+    if (this.isKaraokeActive()) {
+      const hit = this.findKaraokeWindowAt(effectiveTime);
+      if (hit) {
+        this.currentSentence = hit.s;
+        this.lastKaraokeEndMs = hit.w.endMs;
+        this.renderKaraoke(hit.s, hit.w, effectiveTime);
+        if (this.isDrawerOpen) {
+          this.highlightDrawerItem(hit.s.id);
+        }
+      } else if (this.currentSentence && effectiveTime - this.lastKaraokeEndMs > 1800) {
+        this.clearCurrentDisplay();
+      }
+      return;
+    }
 
     // 智能平滑保留窗口：如果处于两句之间的微小停顿，平滑保持上一句显示，避免闪烁消失
     const matched = this.findSentenceAt(effectiveTime);
@@ -552,6 +982,411 @@ export class SubtitleOverlay {
       this.aiBtnEl.classList.remove('done');
     }
     if (this.aiClearBtnEl) this.aiClearBtnEl.classList.add('hidden');
+  }
+
+  /* ══════════════════════════════════════════════════════════════════════════
+   * v0.5.0 歌词轨卡拉OK渲染
+   * ----------------------------------------------------------------------------
+   * 性能约定（任务五性能红线）：
+   *   - span 结构**每个显示窗口只建一次**，之后每帧只切边界 span 的 class；
+   *   - 不改 fontSize / 布局属性，只改 class（color / opacity / text-shadow 由 CSS 管）；
+   *   - 驱动沿用 timeupdate（约 4Hz），不新增 rAF 循环，暂停即停；
+   *   - 过渡只有 120ms 的 color/opacity，`prefers-reduced-motion` 下归零。
+   * ========================================================================== */
+
+  /**
+   * 是否走逐字渲染：按**句子类型**分流，两个开关各管各的（v0.5.0 阶段 B 解耦）。
+   *
+   * - 歌词句（`lyricTrack === true && asrTimed !== true`）→ 需要 `lyricKaraoke === true`；
+   * - ASR 句（`asrTimed === true`）→ 需要 `asrWordReveal !== false`（缺省视为默认 true）。
+   *
+   * 只要存在「对应开关已开」的那一类句子就允许逐字渲染；两类句子都没有（普通 VOD）
+   * 返回 false，保持 0.4.3 的整句渲染行为。这样关掉「歌词逐字点亮」不会连带关掉
+   * 「自动字幕逐词显现」，反之亦然。
+   *
+   * ⚠️ 保留既有守卫：至少一句带 `lyricTrack`；`ensureKaraokeIndex()` 之后还要求
+   * 索引非空 —— 否则「部分句子挂窗口」会让没窗口的句子在索引里查不到、整条不显示。
+   */
+  private isKaraokeActive(): boolean {
+    // 没有一句带 lyricTrack → 普通 VOD，绝不走逐字渲染（0.4.3 行为）
+    if (!this.allSentences.some((s) => s.lyricTrack === true)) return false;
+
+    const lyricOn = this.settings.lyricKaraoke === true;
+    const asrOn = this.settings.asrWordReveal !== false; // 缺省 = 默认 true
+    const anyEnabled = this.allSentences.some((s) =>
+      s.asrTimed === true ? asrOn : (s.lyricTrack === true && lyricOn)
+    );
+    if (!anyEnabled) return false;
+
+    this.ensureKaraokeIndex();
+    return this.karaokeIndex.length > 0;
+  }
+
+  /**
+   * 建「句子 × 显示窗口」的摊平索引（一次遍历，之后按引用复用）。
+   * 副歌重复出现 → 同一句有多个窗口 → 每次出现都能命中，但翻译只做一次。
+   */
+  private ensureKaraokeIndex() {
+    if (this.karaokeIndexSource === this.allSentences) return;
+    this.karaokeIndexSource = this.allSentences;
+    const index: Array<{ s: SubtitleSentence; w: KaraokeWindow; key: string }> = [];
+    for (const s of this.allSentences) {
+      const wins = s.karaokeWindows;
+      if (!wins || wins.length === 0) continue;
+      for (let i = 0; i < wins.length; i++) {
+        index.push({ s, w: wins[i], key: `${s.id}:${i}:${wins[i].startMs}` });
+      }
+    }
+    index.sort((a, b) => a.w.startMs - b.w.startMs);
+    this.karaokeIndex = index;
+  }
+
+  /** 二分查找当前时间命中的显示窗口（命中较晚开始的一段优先，避免上一句抢占） */
+  private findKaraokeWindowAt(time: number) {
+    const arr = this.karaokeIndex;
+    if (arr.length === 0) return null;
+
+    let lo = 0;
+    let hi = arr.length - 1;
+    let found = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (arr[mid].w.startMs <= time) {
+        found = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
+    }
+    if (found < 0) return null;
+
+    // 回看 2 段：重叠裁剪会在窗口之间留下 ≤80ms 的缝，容差内不闪没
+    const from = Math.max(0, found - 2);
+    for (let i = found; i >= from; i--) {
+      const it = arr[i];
+      if (time >= it.w.startMs && time <= it.w.endMs + 120) return it;
+    }
+    return null;
+  }
+
+  /**
+   * 译文 token 时间表：token 化（CJK 每字 / 拉丁空格词）后在窗口上**均匀分配**
+   * （按进度百分比点亮），与译文自身长短无关——ASR 轨不再用「按字符数与原文
+   * 比较、短了就整句淡入」那套（中文 10 个字对着英文 35 个字符必然误判，
+   * 导致整句同现）。
+   * 缓存键机制保留（键 = 窗口区间 + 译文）。
+   *
+   * 适用范围：**只有「已翻译」分支**会调它；「未翻译、保持原样」分支走的是
+   * 原文那份 `win.charTimings`（同一份表），不经过这里。
+   */
+  private getKaraokeTransTimings(
+    win: KaraokeWindow,
+    text: string,
+    tokenized: boolean
+  ): CharTiming[] {
+    const key = `${tokenized ? 'tk' : 'ch'}-${win.startMs}-${win.endMs}|${text}`;
+    const cached = this.karaokeTransCache.get(key);
+    if (cached) return cached;
+    /**
+     * tokenized = true  → 自动字幕（ASR）轨：CJK 每字 / 拉丁空格词，按进度百分比均匀分配；
+     * tokenized = false → 歌词轨（v0.5.0 原样）：按译文自身字符均分。
+     */
+    const timings = tokenized
+      ? buildTransTokenTimings(win, tokenizeTransText(text))
+      : estimateCharTimings({ text, startMs: win.startMs, endMs: win.endMs });
+    if (this.karaokeTransCache.size > 64) this.karaokeTransCache.clear();
+    this.karaokeTransCache.set(key, timings);
+    return timings;
+  }
+
+  /** 取译文（失败/空一律当作「没有译文」，只画原文进度） */
+  private resolveKaraokeTranslation(sentence: SubtitleSentence): string {
+    const t = sentence.translation;
+    if (!t) return '';
+    if (t.startsWith('[翻译失败') || t.startsWith('[翻译异常') || t.startsWith('[AI精翻')) return '';
+    return t;
+  }
+
+  /**
+   * 建/复用 span 结构。只有窗口、句子或译文变化时才重建。
+   * 原文 span 数与 `charTimings.length` 严格 1:1 —— 注意 `timing.char` 可能是**整句**
+   * （短句走整片分支），所以进展按 span 下标推进，不假设每个 span 只有一个字符。
+   *
+   * v0.5.0 渲染层：**译文与「未翻译、保持原样的原文」走同一条逐字路径**。
+   * 三态（判定见文件头的说明）：
+   *   1. `transText === ''`（没有译文 / 翻译失败标记）→ 译文位 `k-placeholder` 占位、
+   *      不写任何字符，只画原文进度；
+   *   2. `untranslated`（译文归一化后 == 原文归一化）→ 译文位显示**原文文本**，
+   *      时间表**直接复用原文那份 `win.charTimings`**（同一份数组引用），
+   *      两侧同步逐字推进；
+   *   3. 已翻译 → 译文位显示译文，ASR 轨走 token 表、歌词轨保持原样。
+   *
+   * 原文侧**始终**用它自己的 `win.charTimings`（数据层给什么粒度就按什么粒度点亮：
+   * 官方词级时间戳 ⇒ **整词一起亮**；帧推断 / 均分 ⇒ 逐字），不会因为译文被翻译过
+   * 就重复处理。
+   */
+  private buildKaraokeSpans(sentence: SubtitleSentence, win: KaraokeWindow, transText: string) {
+    const origEl = this.origEl;
+    const transEl = this.transEl;
+    if (!origEl || !transEl) return;
+
+    origEl.textContent = '';
+    transEl.textContent = '';
+    transEl.classList.remove('loading', 'error');
+    this.karaokeOrigSpans = [];
+    this.karaokeTransSpans = [];
+    this.karaokeTransTimings = [];
+    this.karaokeOrigPainted = -1;
+    this.karaokeTransPainted = -1;
+    this.karaokeTransWhole = false;
+
+    /**
+     * v0.5.0 任务·渲染层：这条句子是不是「**官方词级时间戳**」的句子。
+     * 数据层在 `buildAsrCharTimings` 命中 `source === 'offset'` 时打 true
+     * （`content/index.ts` 的 `attachAsrWordTimings` 写进 `sentence.wordLevel`）。
+     * 只有 true 的句子才带 `.k-word`（逐词高亮配色）；
+     * 歌词轨 / 手动字幕 / 帧推断 / 均分兜底 一律 false。
+     */
+    const wordLevel = sentence.wordLevel === true;
+
+    const origFrag = document.createDocumentFragment();
+    for (const t of win.charTimings) {
+      const span = document.createElement('span');
+      /* v0.5.0 任务·渲染层：词级句（官方词级时间戳）才带 .k-word；
+         有官方笔色的 span 不带（笔色优先，见 buildKaraokeClass 的注释）。 */
+      span.className = buildKaraokeClass(wordLevel, !!t.color);
+      // 零宽字符已在数据层（invisible-text.ts）剥掉，这里不做任何字符替换，只用 textContent
+      span.textContent = t.char;
+      /**
+       * 官方笔色透传（v0.5.0 渲染层）：只在**建 span 时**写一次内联色，之后每帧
+       * 只切 class。内联色优先级高于 `k-done` / `k-cur` 的 color 规则，所以有笔色
+       * 的字不会被用户配色覆盖；「未到」态由 CSS 里 `k-pend` 的半透明白压回去
+       * （该规则带 !important，否则内联色会让整行一上来就全亮）。
+       */
+      if (t.color) span.style.color = t.color;
+      origFrag.appendChild(span);
+      this.karaokeOrigSpans.push(span);
+    }
+    origEl.appendChild(origFrag);
+
+    if (!transText) {
+      // 译文缺失/失败：占位保高，避免布局跳动；**不写任何字符**（含零宽）
+      transEl.classList.add('k-placeholder');
+      return;
+    }
+    transEl.classList.remove('k-placeholder');
+
+    const srcTimings = win.charTimings;
+    const srcLen = srcTimings.length;
+    const transLen = charLenOf(transText);
+
+    /* ══════════════════════════════════════════════════════════════════════
+     * 三态判定：译文 / 未翻译（保持原样） / 没有译文
+     * ---------------------------------------------------------------------
+     * 第二态「未翻译、保持原样」：插件没翻译（或翻译服务回落到原文）时，
+     * 译文内容与原文相同 —— 这时**不再另算一份 token 表**（那正是以前两侧
+     * 不对称的根源：原文按字级表逐字、译文按 token 表整段跳）。
+     * 改为**直接复用原文那份 `win.charTimings`**：
+     *   - 时间表是**同一个数组引用**（不是拷贝），`indexAtTimings` 在两侧
+     *     必然算出同一个下标 → 同一时刻 `k-done` / `k-cur` 数量一致；
+     *   - span 也照抄原文那份（字符、笔色一比一）→ 两行内容与配色完全相同；
+     *   - 颜色映射（`transColorAt`）在这里不需要再跑一遍：同一份表 → 颜色一致。
+     * ══════════════════════════════════════════════════════════════════ */
+    if (isUntranslatedKaraoke(transText, sentence.text)) {
+      this.karaokeTransTimings = win.charTimings;
+      const transFrag = document.createDocumentFragment();
+      for (const t of win.charTimings) {
+        const span = document.createElement('span');
+        /* 译文侧：加 .k-word-t ⇒ 已播放时取译文侧那条颜色（--k-word-hi-trans） */
+        span.className = buildKaraokeClass(wordLevel, !!t.color, 'trans');
+        span.textContent = t.char;
+        if (t.color) span.style.color = t.color;
+        transFrag.appendChild(span);
+        this.karaokeTransSpans.push(span);
+      }
+      transEl.appendChild(transFrag);
+      return;
+    }
+
+    /* ══════════════════════════════════════════════════════════════════════
+     * 分流：歌词轨 vs 自动字幕（ASR）轨（**已翻译**才走这里）
+     * ---------------------------------------------------------------------
+     * 歌词轨（v0.5.0 已交付、已调好的效果）——**保持原样，一行不改**：
+     *   译文远短于原文 → 整句淡入（`.k-whole`）；否则按译文自身字符均分逐字点亮。
+     * 自动字幕（ASR）轨（v0.5.x 新增）——token 化 + 按进度百分比逐词点亮：
+     *   CJK 每字一个 token、拉丁按空格词；句内按 token 数均匀分配时间。
+     *   这样中文译文不会再因为「比英文原文短」而整句同现。
+     *
+     * 注：未翻译时译文 == 原文，长度相同 → 歌词轨的「整句淡入」分支
+     * **不会**触发，天然走上面的逐字路径。
+     * ══════════════════════════════════════════════════════════════════ */
+    if (sentence.asrTimed !== true) {
+      const origLen = srcTimings.reduce((acc, t) => acc + charLenOf(t.char), 0);
+      if (origLen > 0 && transLen < origLen * KARAOKE_WHOLE_LINE_RATIO) {
+        // 译文远短于原文：逐字会「一闪一闪」，退化为整句淡入 + 句末 200ms 停留
+        this.karaokeTransWhole = true;
+        const span = document.createElement('span');
+        span.className = 'k-char k-whole';
+        span.textContent = transText;
+        const spanMs = Math.max(0, win.endMs - win.startMs);
+        const fadeMs = Math.min(
+          KARAOKE_FADE_MAX_MS,
+          Math.max(KARAOKE_FADE_MIN_MS, spanMs - KARAOKE_HOLD_TAIL_MS)
+        );
+        span.style.animationDuration = `${fadeMs}ms`;
+        const wholeColor = pickMainColor(srcTimings);
+        if (wholeColor) span.style.color = wholeColor;
+        transEl.appendChild(span);
+        this.karaokeTransSpans = [span];
+        return;
+      }
+
+      this.karaokeTransTimings = this.getKaraokeTransTimings(win, transText, false);
+      const frag = document.createDocumentFragment();
+      let charOffset = 0;
+      for (const t of this.karaokeTransTimings) {
+        const span = document.createElement('span');
+        span.textContent = t.char;
+        const c = transColorAt(srcTimings, srcLen, transLen, charOffset);
+        if (c) span.style.color = c;
+        /* 有官方笔色 ⇒ 不带 .k-word（笔色优先）；无笔色 ⇒ 词级句才带 */
+        span.className = buildKaraokeClass(wordLevel, !!c, 'trans');
+        charOffset += charLenOf(t.char);
+        frag.appendChild(span);
+        this.karaokeTransSpans.push(span);
+      }
+      transEl.appendChild(frag);
+      return;
+    }
+
+    // ── 自动字幕（ASR）轨 · 已翻译：译文走 token 表（token 内字符共享 startMs） ──
+    //    注意这是**译文自己**的表：原文侧始终用 `win.charTimings`（字级），
+    //    两侧**不共用**时间表 —— 共用会让两侧节奏打架。
+    this.karaokeTransTimings = this.getKaraokeTransTimings(win, transText, true);
+    const tokens = tokenizeTransText(transText);
+    const transFrag = document.createDocumentFragment();
+    /**
+     * v0.5.0：译文跟随原文配色。
+     * 按**字符比例**做位置映射（不是按时间）—— 译文 token 首字符在第 `offset`
+     * 个字符处，取原文第 `floor(offset * 原文长度 / 译文长度)` 个字符的颜色。
+     * 这样彩虹行的译文也能拿到完整渐变，单色行译文整行同色；原文未唱位置是
+     * null，译文对应位置就不写内联色，仍由 `k-pend` 的半透明白兜底。
+     * 注意：颜色与点亮时间是两回事，token 化只改时间，不碰这个映射。
+     */
+    for (let i = 0; i < tokens.length; i++) {
+      const span = document.createElement('span');
+      span.textContent = tokens[i].text;
+      const c = transColorAt(srcTimings, srcLen, transLen, tokens[i].offset);
+      if (c) span.style.color = c;
+      /* 有官方笔色 ⇒ 不带 .k-word（笔色优先）；无笔色 ⇒ 词级句才带 */
+      span.className = buildKaraokeClass(wordLevel, !!c, 'trans');
+      transFrag.appendChild(span);
+      this.karaokeTransSpans.push(span);
+    }
+    transEl.appendChild(transFrag);
+  }
+
+  /**
+   * 每帧只做这件事：把「上一个当前字」降级为已完成、新当前字升级为高亮。
+   * 前进时写入量与位移成正比（4Hz 下通常 1–2 个 span），
+   * 后退（用户拖动进度条）或跳跃较大时才整段重涂 —— 一行最多几十个 span，代价可忽略。
+   *
+   * 下标**每次都由 `indexAtTimings(timings, nowMs)` 从时间表反算**，不依赖上一帧
+   * 积累的状态，所以拖动回退时「已完成」会按 startMs 正确退回「未到」，
+   * 官方笔色 span 也跟着退回半透明白（不会残留全亮）。
+   */
+  private paintKaraoke(
+    spans: HTMLElement[],
+    timings: CharTiming[],
+    nowMs: number,
+    painted: number
+  ): number {
+    if (spans.length === 0 || timings.length === 0) return painted;
+    const idx = indexAtTimings(timings, nowMs);
+    if (idx === painted) return painted;
+
+    if (idx > painted) {
+      const from = Math.max(0, painted);
+      for (let i = from; i < idx && i < spans.length; i++) setKaraokeState(spans[i], 'done');
+      if (idx < spans.length) setKaraokeState(spans[idx], 'cur');
+      return idx;
+    }
+
+    for (let i = 0; i < spans.length; i++) {
+      setKaraokeState(spans[i], i < idx ? 'done' : i === idx ? 'cur' : 'pend');
+    }
+    return idx;
+  }
+
+  /**
+   * 卡拉OK渲染入口。
+   * 视觉参数（字号/位置/描边/阴影）全部复用 `.original-text` / `.translated-text`
+   * 现有样式令牌，这里只负责三态与排版开关。
+   */
+  private renderKaraoke(sentence: SubtitleSentence, win: KaraokeWindow, nowMs: number) {
+    if (!this.containerEl || !this.origEl || !this.transEl) return;
+    this.lastEffectiveTimeMs = nowMs;
+
+    const { displayMode, layoutOrder } = this.settings;
+
+    if (displayMode === 'translation_only') {
+      this.origEl.style.display = 'none';
+      this.transEl.style.display = 'block';
+    } else if (displayMode === 'original_only') {
+      this.origEl.style.display = 'block';
+      this.transEl.style.display = 'none';
+    } else {
+      this.origEl.style.display = 'block';
+      this.transEl.style.display = 'block';
+    }
+
+    this.containerEl.style.flexDirection =
+      layoutOrder === 'translation_top' ? 'column-reverse' : 'column';
+
+    if (this.sentenceAiBadgeEl) {
+      this.sentenceAiBadgeEl.classList.toggle('hidden', !sentence.isAi);
+    }
+    this.containerEl.classList.add('active');
+
+    const transText = this.resolveKaraokeTranslation(sentence);
+    const buildKey = `${win.startMs}:${win.endMs}:${sentence.id}:${transText}`;
+    if (buildKey !== this.karaokeBuiltKey) {
+      this.buildKaraokeSpans(sentence, win, transText);
+      this.karaokeBuiltKey = buildKey;
+    }
+
+    /* 原文逐字：按 span 下标推进（char 可能是整句，不看长度） */
+    this.karaokeOrigPainted = this.paintKaraoke(
+      this.karaokeOrigSpans,
+      win.charTimings,
+      nowMs,
+      this.karaokeOrigPainted
+    );
+
+    /* 译文：歌词轨的整句淡入分支由 CSS 动画负责，只有逐字/逐词分支才逐帧涂 */
+    if (!this.karaokeTransWhole && this.karaokeTransSpans.length > 0) {
+      this.karaokeTransPainted = this.paintKaraoke(
+        this.karaokeTransSpans,
+        this.karaokeTransTimings,
+        nowMs,
+        this.karaokeTransPainted
+      );
+    }
+  }
+
+  /** 清掉卡拉OK残留（关掉开关或重建时调用），保证回到普通渲染后 DOM 干净 */
+  private teardownKaraoke() {
+    this.karaokeBuiltKey = '';
+    this.karaokeOrigSpans = [];
+    this.karaokeTransSpans = [];
+    this.karaokeOrigPainted = -1;
+    this.karaokeTransPainted = -1;
+    this.karaokeTransWhole = false;
+    this.karaokeTransTimings = [];
+    this.karaokeTransCache.clear();
+    if (this.transEl) this.transEl.classList.remove('k-placeholder', 'k-whole');
+    if (this.origEl) this.origEl.textContent = '';
+    if (this.transEl) this.transEl.textContent = '';
   }
 
   private renderCurrentSentence(sentence: SubtitleSentence) {
@@ -979,6 +1814,60 @@ export class SubtitleOverlay {
     }
 
     /**
+     * 【v0.5.0 歌词轨卡拉OK三态色】
+     * 语义（用户拍板）：**未到 = 半透明白，已到 = 用户自己选的原文色**；
+     * 「当前」与「已过」的可辨识差异由 CSS 的 text-shadow 发光给出
+     * （text-shadow 不是滤镜类效果，不会把视频拉进合成层，VSR 红线安全）。
+     *
+     * 这条链只服务**无笔色**的轨（兜底）。有官方笔色的轨走 span 内联色，
+     * 优先级高于这三档，两条链互不覆盖。
+     * 译文轨不上官方色，保持 v0.5.0 现状（已过/当前=译文色，未到=同色 42%）。
+     */
+    this.origEl.style.setProperty('--k-pend', KARAOKE_PEND_COLOR);
+    this.origEl.style.setProperty('--k-done', origColor);
+    this.origEl.style.setProperty('--k-cur', origColor);
+    this.transEl.style.setProperty('--k-done', transColor);
+    this.transEl.style.setProperty('--k-cur', transColor);
+    this.transEl.style.setProperty('--k-pend', hexToRgba(transColor, 42));
+
+    /**
+     * 【v0.5.0 任务·渲染层】逐词高亮色 —— **双路**（原文侧 / 译文侧各一个）。
+     *
+     * 语义（用户拍板）：逐词高亮的颜色**默认跟随用户在「字幕样式」里选的颜色** ——
+     * 选了「蓝色译文 + 白色原文」，逐词就应当是「译文亮蓝、原文亮白」；
+     * 只有用户**单独改过**逐词颜色时才用那个自定义值。
+     *
+     * 落实方式：两个设置项的取值口径都是「**空串 = 跟随**」
+     * （`wordHighlightColor` 跟 `origColor`、`wordHighlightTransColor` 跟 `transColor`），
+     * 所以这里用「自定义值 || 跟随色 || 兜底白」三段式取值：
+     *
+     *   hiOrig  = 自定义(wordHighlightColor)      || 跟随(origColor)      || '#ffffff'
+     *   hiTrans = 自定义(wordHighlightTransColor)  || 跟随(transColor)     || '#ffffff'
+     *
+     * 只被 `.k-char.k-word.k-done / .k-cur`（原文侧）与
+     * `.k-char.k-word-t.k-done / .k-cur`（译文侧）消费 —— 而 `.k-word` **只有**带官方
+     * 词级时间戳的句子才会有（`sentence.wordLevel === true`），所以这条变量对
+     * 手动字幕 / 逐字字幕 / 歌词轨**完全不生效**。
+     *
+     * 值走 hex 白名单（`sanitizeWordHighlightColor`：空串或非法值 → 空串）：
+     * **绝不把任意字符串拼进 style**。
+     */
+    const hiOrig =
+      sanitizeWordHighlightColor(this.settings.wordHighlightColor) ||
+      sanitizeWordHighlightColor(this.settings.origColor) ||
+      '#ffffff';
+    const hiTrans =
+      sanitizeWordHighlightColor(this.settings.wordHighlightTransColor) ||
+      sanitizeWordHighlightColor(this.settings.transColor) ||
+      '#ffffff';
+    /* 两个变量都注入到两个容器上：CSS 变量沿 DOM 继承，
+       这样 `.original-text` / `.translated-text` 各自都拿得到两套值。 */
+    this.origEl.style.setProperty('--k-word-hi', hiOrig);
+    this.origEl.style.setProperty('--k-word-hi-trans', hiTrans);
+    this.transEl.style.setProperty('--k-word-hi', hiOrig);
+    this.transEl.style.setProperty('--k-word-hi-trans', hiTrans);
+
+    /**
      * 【v0.1.0 改动注释：剧本抽屉当前句选择框颜色动态同步】
      * 响应用户需求：当前播放句的高亮选中边框、微光背景与呼吸发光效果，必须实时与
      * 用户配置的当前译文颜色 (transColor) 保持一致。
@@ -1088,6 +1977,20 @@ export class SubtitleOverlay {
         statusEl.style.color = '#e4e4e7';
         statusEl.style.cursor = 'default';
         statusEl.title = '';
+      }
+    }
+
+    // 0. 同步目标语言（v0.5.0 新增，接替旧版场景选择框那一格）
+    const langSelect = this.shadow.querySelector('#qp-target-lang') as HTMLSelectElement | null;
+    const langBadge = this.shadow.querySelector('#qp-badge-lang') as HTMLElement | null;
+    if (langSelect) {
+      const want = this.settings.targetLang || 'zh-CN';
+      // 只有选项里确实有这一项才赋值，避免把 select 拍成空值
+      if (Array.from(langSelect.options).some((o) => o.value === want)) {
+        langSelect.value = want;
+      }
+      if (langBadge) {
+        langBadge.textContent = langSelect.options[langSelect.selectedIndex]?.text || want;
       }
     }
 
@@ -1423,6 +2326,20 @@ export class SubtitleOverlay {
         this.showToast('正在重新翻译整段视频...');
       }
     });
+
+    // 目标语言：改完立刻回写 settings。content 侧收到 SETTINGS_UPDATED 后
+    // 走 prevLang !== settings.targetLang 分支自动重译，这里不用手动触发。
+    const langSelect = this.shadow.querySelector('#qp-target-lang') as HTMLSelectElement | null;
+    // 闭包里 TS 不再收窄 this.shadow，先在外部取到 badge 引用
+    const langBadge = this.shadow.querySelector('#qp-badge-lang') as HTMLElement | null;
+    if (langSelect) {
+      langSelect.addEventListener('change', () => {
+        const value = langSelect.value;
+        const label = langSelect.options[langSelect.selectedIndex]?.text || value;
+        if (langBadge) langBadge.textContent = label;
+        this.updateAndNotify({ targetLang: value });
+      });
+    }
 
     this.shadow.querySelectorAll('.qp-close').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -1799,6 +2716,41 @@ export class SubtitleOverlay {
                 <span class="qp-status-icon-wrap hourglass-flip-anim" style="color:#ffffff;">${ICON_HOURGLASS}</span>
                 <span>正在多通道检测字幕...</span>
               </span>
+            </div>
+
+            <!-- 折叠模块 0：目标语言（v0.5.0，接替旧版「翻译场景」选择框那一格） -->
+            <div class="qp-accordion-item" data-accordion="lang">
+              <button type="button" class="qp-accordion-header" title="选择译文语言（改动后自动重译）">
+                <div class="qp-accordion-header-left">
+                  <span class="qp-accordion-icon" style="display:inline-flex;width:14px;height:14px;align-items:center;color:#d4d4d8;">
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+                      <circle cx="8" cy="8" r="6" />
+                      <path d="M2.2 8h11.6" />
+                      <path d="M8 2c1.7 1.9 2.5 3.8 2.5 6S9.7 12.1 8 14c-1.7-1.9-2.5-3.8-2.5-6S6.3 3.9 8 2z" />
+                    </svg>
+                  </span>
+                  <span class="qp-accordion-title">目标语言</span>
+                </div>
+                <div class="qp-accordion-header-right">
+                  <span class="qp-accordion-badge" id="qp-badge-lang">简体中文</span>
+                  <span class="qp-accordion-arrow">▸</span>
+                </div>
+              </button>
+              <div class="qp-accordion-body">
+                <div class="qp-accordion-body-inner">
+                  <select class="qp-select" id="qp-target-lang" aria-label="目标翻译语言">
+                    <option value="zh-CN">简体中文</option>
+                    <option value="zh-TW">繁体中文</option>
+                    <option value="en">英语</option>
+                    <option value="ja">日语</option>
+                    <option value="ko">韩语</option>
+                    <option value="fr">法语</option>
+                    <option value="de">德语</option>
+                    <option value="es">西班牙语</option>
+                    <option value="ru">俄语</option>
+                  </select>
+                </div>
+              </div>
             </div>
 
             <!-- 折叠模块 1：双语排版模式 (纯中文无图标 · 4段平滑滑块) -->

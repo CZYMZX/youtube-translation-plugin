@@ -627,3 +627,84 @@ sendResponse({ success: true, translations: detail.translations, failed: detail.
 2. **ASR 相关 Key 是否复用现有 `providerKeys`**：默认复用 `providerKeys.openai` / `providerKeys.gemini`；仅自定义端点需要独立的 `asrCustomApiKey`。
 3. **`liveMode` 是否默认 `'auto'`**：若默认开，所有直播观众（含无 CC、未配 ASR Key 的用户）都会看到"实时模式"提示，需确认是否接受。
 4. **断句金标集**（`docs/断句金标集标注任务包.xlsx`）仍未标注，直播/ASR 的断句质量只能靠人工听感验收，无法给 P/R/F1。
+
+---
+
+## 十二、字幕时间机制：A / B 两套（0.5.0 阶段 B 实测补记，2026-11-10）
+
+> 本节是**后补的实测记录**，不是设计推断。它修正了 `docs/LYRIC-TRACK-0.5.0.md` 早期把歌词轨结论泛化到所有 `caps=asr` 轨的表述。
+> 口径：**三个样本、两套机制**。A = 歌词轨；B = 普通 ASR 轨（英文 `XGxIE1hr0w4` 与日文 `VyV7nxzYEqA` 都属于 B，只是词边界习惯不同）。
+> `utils/asr-timing.ts` 头注释里的 A/B/C 是**样本编号**（C = 日文样本），不是第三套机制。
+
+### 12.1 两套机制对照
+
+| | **A · 歌词轨**（Mfcj1AdnzhQ，日本歌词轨） | **B · 普通 ASR 轨**（BBC 英文 + 日文单样本） |
+| --- | --- | --- |
+| 下发形态 | **同一句重复帧**：1238 个 event 是同一句的加长 / 着色快照 | **一次给全片**：65/38 个文本行 + `aAppend:1` 纯 `"\n"` 换行标记，没有「同一句反复下发加长帧」 |
+| `tOffsetMs` | **全 0**（14288 个 seg，正数计数 0） | **每词正数偏移**：英文 313 / 日文 237；另各有 65 / 38 个行首词隐含 0（不带该字段） |
+| `pens` | **231 支带 `fcForeColor`** → 已唱前缀逐字上色 | **`[{}]` 空画笔**，无颜色 |
+| 字/词级时间怎么来 | `tOffsetMs` 拿不到 → 靠笔色推「**首帧非白**」（`extractLineColors` / `attachCharColors`） | **直接可读**：`event.tStartMs + seg.tOffsetMs`，无需帧推断、无需笔色 |
+| 显现单位 | 逐**字符**上色 | 逐**词 / ASR token** 显现；同词字符共享 `startMs`（整词一起亮） |
+| roll-up | — | `wsWinStyles.sdScrollDir=3`、`wpWinPositions.rcRows=2`（英文/日文逐字段相同） |
+| 本项目落点 | `utils/lyric-track.ts`（v1 已落地） | `utils/asr-timing.ts#buildAsrCharTimings` 的 `'offset'` 路由（`source='offset'`） |
+
+**播放器机制（B 轨，DOM 实测）**：`.ytp-caption-segment` 每行一个 span，播放器按 `video.currentTime` 与
+`tStartMs + tOffsetMs` 比较，词到点就把**整行 `textContent` 换成更长的快照**，从而看起来「一个字蹦出来」，
+其实是**一个词 / ASR token**。
+**它不是 CSS 动画**（没有逐字 transition / keyframes），**也不是服务器逐帧推送**（json3 一次给全片、没有持续的字级流）。
+因此本项目的逐词显现也是「按 `currentTime` 比较词时间 → 重绘整行」，而不是给每个字符加动画。
+
+> **为什么必须分两套**：早期把「`tOffsetMs` 全 0」「重复加长帧」当成所有自动轨的共性，导致 B 轨被误判成
+> 「没有官方字级时间、只能均分估算」。实测 B 轨 30/30 句（英文）都能直接读到官方词时间；`offset` 路由
+> 按句子时间范围**跨 event 拼接**整条词时间轴后，命中率从 3/30 提到 30/30。
+> `no-char-time` / `asr-kind` 这两条识别信号本身不变，但只能作为歌词轨 A 的判据之一，不能套到 B 上。
+
+### 12.2 三个样本实测数字表（**事实**）
+
+| 样本 | 视频 / 轨 | event | 文本行 | `aAppend:1` 换行 | 词 seg | 正数 `tOffsetMs` | 首词隐含 0 | `pens` | 词间隔 min/中位/max (ms) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| **A 歌词轨** | `Mfcj1AdnzhQ` / 日本歌词轨 `caps=asr`（记作 `a.ja`） | 1238（重复帧，去重 62 行） | — | 0 | 14288 | **0** | 0 | 231 支带 `fcForeColor` | —（时间取首帧非白） |
+| **B 英文 ASR** | `XGxIE1hr0w4` / 唯一 `a.en` asr 轨（BBC） | 130 = 1 窗口定义 + 65 文本行 + 64 换行 | 65 | 64 | 378 | **313** | 65 | `[{}]` | 79 / 320 / 1121 |
+| **C 日文 ASR** | `VyV7nxzYEqA` / 唯一 `ja`·`kind=asr`·`vssId=a.ja` 轨 | 76 = 1 窗口定义 + 38 文本行 + 37 换行 | 38 | 37 | 275 | **237** | 38 | `[{}]` | 19 / 360 / 1480 |
+
+补充实测（**事实**）：
+
+- 两条 B 轨 `pens=[{}]`、roll-up 字段逐字段相同、同 event 内偏移**反序 0**；英文 28480 行 7 词锚点 =
+  `28480/29480/29640/30279/30519/30840/31439`，90880 行 8 词锚点；日文按文节 / 形态素切分、
+  **seg 无前导空格**、`[音楽]` 这类非词汇标记本身也带偏移；日文 1079 行 7 词锚点 =
+  `1079/1360/1719/2280/2520/3120/3320`。
+- 完整管线（`extractCaptionTokens` → `segmentCaptionTokens` → `buildAsrCharTimings`）命中率：
+  英文 **30/30 句 `offset`**（改前 3/30；官方词锚点 26 → **366**）、日文 **16/17 句**。
+- 单 event 回归：英文 28480 行 7 词 / 35 字全 `estimated=false`（改前为 0，阶段 B 核心回归）、
+  90880 行 8 词 / 39 字全 false。
+- 歌词轨夹具（`test/fixtures/lyric-track-sample.json`）：`extractLineColors` 首色 `#37BABA`、3 轮着色、
+  彩虹窗口 `12830–15532`、单色行首帧非白 `18168`、笔色命中 58 行 —— **本次改动前后不变**（v1 成果回归）。
+- 夹具：`test/fixtures/asr-word-timing-en.json`（19.5 KB）/ `asr-word-timing-ja.json`（13.2 KB），
+  只保留 `events`(`tStartMs`/`dDurationMs`/`aAppend`/`segs[].utf8`/`tOffsetMs`) + `pens` /
+  `wsWinStyles` / `wpWinPositions`，可在仓库内复算，不依赖 `D:` 盘外部文件。
+
+### 12.3 事实边界与推断（**分列，别当结论**）
+
+**事实边界**
+
+1. **日文只有 `VyV7nxzYEqA` 这一个样本实测**。上表 C 行、日文 16/17 命中、日文按文节切分 /
+   seg 无前导空格 / `[音楽]` 带偏移，**全部只针对这一条轨**；**不得外推成「所有日文 ASR 轨都带词级时间」**。
+2. A 歌词轨的「`tOffsetMs` 全 0」同样只针对 `Mfcj1AdnzhQ` 这一条日本歌词轨；普通 ASR 轨恰恰带正数
+   `tOffsetMs`，二者不可混为一谈（`docs/LYRIC-TRACK-0.5.0.md` §一 / §3.1 / §九 / §十 已按此口径限定）。
+3. 完整管线「英文 30/30」是**这一个英文样本**在本仓断句层默认设置下的实测值，不是通用命中率承诺。
+
+**推断（未验证）**
+
+4. B 机制（一次给全片 + 每词 `tOffsetMs` + 空画笔）在**其他语言 / 其他视频**上是否普遍成立，目前只有
+   2 个样本（1 英 1 日），未做批量抽样；`asrWordReveal` 默认开启后若遇到不带偏移的轨，
+   `buildAsrCharTimings` 会按设计退回 `'inferred'` / `'estimated'` 并标 `estimated=true`，不会冒充官方时间。
+5. 词间隔最长 1121 / 1480 ms 说明 B 轨存在明显的停顿词；播放器「整行重绘」的精确触发时机
+   （是否与 `timeupdate` 4Hz 对齐）未做帧级测量，本节的播放器机制描述来自 DOM 形态观察。
+6. A 与 B 是否会在同一视频的不同轨上同时出现、以及切换轨时如何避免两套时间互相污染，尚未实测。
+
+### 12.4 与设计文档其余章节的关系
+
+本节只记录**字幕时间机制**的实测结论，不改动 §三～§八 的直播 / 无字幕 ASR 架构设计：
+那里的 `AsrSource`（`tabCapture` → STT 转写流）是**无 CC 时自己抓音频转写**，与这里的
+「YouTube 自带 ASR 字幕轨的官方词级时间」是两条完全不同的数据源，不要混为一谈。
+

@@ -85,8 +85,10 @@
 
 html, body {
   width: 380px;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
+  box-sizing: border-box;
+  /* 视口层不滚 —— 滚动交给 .popup-container，滚动条才会落在弹窗内部，
+     而不是贴着窗口右缘向外溢出、把整个 popup 撑到 385px */
+  overflow: hidden;
 }
 
 html {
@@ -94,8 +96,8 @@ html {
 }
 
 body {
+  width: 100%;
   min-height: 480px;
-  overflow-y: scroll;
   background-color: var(--bg-primary);
   /* 极致纯净黑白微弱环境光晕，为毛玻璃折射提供深邃黑白层次 */
   background-image: radial-gradient(circle at 50% 0%, rgba(255, 255, 255, 0.07) 0%, transparent 65%);
@@ -108,25 +110,21 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
-/* 统一精致极简滚动条 (同时作用于 html 与 body，槽位永远恒定，彻底消除切换Tab时的左右抖动) */
-html::-webkit-scrollbar,
-body::-webkit-scrollbar {
+/* 统一精致极简滚动条（作用在真正的滚动容器 .popup-container 上） */
+.popup-container::-webkit-scrollbar {
   width: 5px;
 }
 
-html::-webkit-scrollbar-track,
-body::-webkit-scrollbar-track {
+.popup-container::-webkit-scrollbar-track {
   background: transparent;
 }
 
-html::-webkit-scrollbar-thumb,
-body::-webkit-scrollbar-thumb {
+.popup-container::-webkit-scrollbar-thumb {
   background: rgba(255, 255, 255, 0.16);
   border-radius: 999px;
 }
 
-html::-webkit-scrollbar-thumb:hover,
-body::-webkit-scrollbar-thumb:hover {
+.popup-container::-webkit-scrollbar-thumb:hover {
   background: rgba(255, 255, 255, 0.32);
 }
 
@@ -138,6 +136,29 @@ body::-webkit-scrollbar-thumb:hover {
   flex-direction: column;
   gap: 14px;
   position: relative;
+  /*
+   * v0.5.0：弹窗唯一的滚动容器。
+   * 放在容器内而不是视口层 —— 滚动条落在 380px 的 padding box 内侧，
+   * 视觉上「收进弹窗」，不会贴着窗口右缘外溢把 popup 撑宽。
+   * scrollbar-gutter: stable 保证滚动条出现/消失时内容宽度不变（切页签不跳）。
+   */
+  max-height: 600px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+
+/*
+ * 关键修正：容器限高 + flex column 时，子项默认 flex-shrink: 1 会被**压扁**，
+ * 内容溢出父级 overflow 裁剪。预览块带 backdrop-filter，会创建独立合成层、
+ * 绕过 overflow: hidden 直接浮在后面的色板上（实测截图：预览块压住"字幕背景颜色"）。
+ * 禁止压缩后，超出的部分由容器滚动，布局不再塌陷。
+ */
+.popup-container > * {
+  flex-shrink: 0;
+}
+
+.tab-content > * {
+  flex-shrink: 0;
 }
 
 /* ==========================================================================
@@ -1199,10 +1220,11 @@ label {
   width: 100%;
   min-height: 40px;
   display: flex;
-  align-items: center;
+  /* 两行文字（标题行 + 副标题）改为顶对齐；图标随之居上 */
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 8px;
-  padding: 8px 10px;
+  gap: 10px;
+  padding: 10px 12px;
   border: 1px solid var(--border-glass);
   border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.04);
@@ -1222,12 +1244,47 @@ label {
   border-color: var(--border-glass-bright);
 }
 
+/* 左侧图标：给折叠行一个视觉锚点，收起态也不显得空 */
+.section-icon {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  margin-top: 1px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-body);
+}
+
 .section-toggle-main {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  gap: 4px;
   min-width: 0;
+  flex: 1;
+}
+
+/* 标题 + 徽标一行；徽标可换行，不会把标题挤没 */
+.section-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   flex-wrap: wrap;
+  min-width: 0;
+}
+
+/* 副标题：收起态也能看到「这一项是干什么的 / 当前用什么」 */
+.section-sub {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-dim);
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 1;
+  -webkit-box-orient: vertical;
 }
 
 .section-summary {
@@ -1263,6 +1320,64 @@ label {
 .pack-section.is-open .section-chevron {
   transform: rotate(90deg);
   border-left-color: #ffffff;
+}
+
+/* ── 内置资源概览（v0.5.0）：补充折叠态的信息密度 ── */
+.builtin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.builtin-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.builtin-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-body);
+}
+
+.builtin-note {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.builtin-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.builtin-label {
+  flex-shrink: 0;
+  width: 34px;
+  font-size: 11px;
+  line-height: 20px;
+  color: var(--text-muted);
+}
+
+.builtin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  min-width: 0;
+}
+
+.builtin-chip {
+  font-size: 10.5px;
+  line-height: 20px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-body);
+  white-space: nowrap;
 }
 
 .section-body {
