@@ -5,7 +5,8 @@ import {
   type SubtitleSentence,
   type ExtensionSettings,
   type Json3CaptionData,
-  type KaraokeWindow
+  type KaraokeWindow,
+  type CaptionToken
 } from '../../types';
 import { getStoredSettings } from '../../utils/storage';
 import { extractCaptionTokens, segmentCaptionTokens } from '../../utils/segmenter';
@@ -46,7 +47,7 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.5.1]%c Content-script active (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.6.0]%c Content-script active (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -75,6 +76,44 @@ export default defineContentScript({
     let trackCascadeActive = false;
     // 记录已消费的字幕 token 数，允许后续更完整的截获结果覆盖先到的分片/广告字幕
     let lastCaptionTokenCount = 0;
+
+    /* ── 「截获到分段数据」的恢复探测（0.5.1 修复） ────────────────────────────
+     * 现象：播放中 seek 会让播放器只请求 **seek 点附近的分段** timedtext，
+     * 零拷贝截获到的是一次残缺数据（实测 41 tokens / 6 句，而整轨是 370 tokens / 30 句）。
+     * 它照样建出了句子 → `currentSentences.length > 0` → 看门狗被停掉，而后面所有
+     * 「重新拉整轨」的入口都带着 `currentSentences.length === 0` 守卫，
+     * 于是**永远不再探测**，整条视频永久停在 6 句，界面看起来还像"加载成功了"。
+     *
+     * 应对：判为不完整时**不收工** —— 保留现有句子（不清空，界面不闪空）、不停看门狗，
+     * 由看门狗按下面的节流参数重探，直到拿到整轨或放弃。
+     * 注意与 A1 负缓存无关：这里「已拿到部分数据」，与「无轨」是两回事，绝不写负缓存。
+     */
+    /** 当前这批句子是否由「分段数据」建出来（true 时放开重拉守卫） */
+    let captionDataIncomplete = false;
+    /** 已重探次数（上限 PARTIAL_RELOAD_MAX_ATTEMPTS） */
+    let partialReloadAttempts = 0;
+    /** 首次判定不完整的时刻（放弃窗口的起点） */
+    let partialSinceMs = 0;
+    /** 上一次重探的时刻（节流起点） */
+    let lastPartialReloadAt = 0;
+    /** 最多重探几次：3 次足够覆盖「播放器再请求一次整轨」的时延，又不至于变成新的风暴 */
+    const PARTIAL_RELOAD_MAX_ATTEMPTS = 3;
+    /** 两次重探的最小间隔：候选轨瀑布本身有 3 条候选，5s 是它们的自然回包量级 */
+    const PARTIAL_RELOAD_MIN_INTERVAL_MS = 5000;
+    /** 25s 内拿不到整轨就放弃，保留现有部分数据（不再重拉，用户继续看残缺字幕） */
+    const PARTIAL_RELOAD_GIVE_UP_MS = 25_000;
+    /**
+     * **每视频**重探总量上限（跨「放弃窗口」累计，只在切视频时清零）。
+     *
+     * 为什么需要它：`partialReloadAttempts` 是**窗口内**计数，每次重新判定残缺都会清零。
+     * 用户反复 seek 时，播放器每次都只吐一段分段 → 每次都重开一个 25s 窗口、每窗口又给 3 次
+     * → 光靠窗口内计数是拦不住的（一次拖进度条就多 3 次请求）。
+     * 总量 6 = 两个窗口，覆盖「第一次自动分段 + 用户主动拖一次」的常见情形；
+     * 超过后不再重探，但**不封死**：后续若有完整整轨响应到达，仍按 `tokens > lastCaptionTokenCount` 自然替换。
+     */
+    const PARTIAL_RELOAD_MAX_TOTAL = 6;
+    /** 每视频累计重探次数（不随窗口重置） */
+    let partialReloadTotal = 0;
     // 当前视频原声语言（由 MAIN world 从 playerResponse 读出），用于选对字幕轨
     let currentSourceLang = '';
     // AI 全篇精翻的运行代际：切视频时自增，旧循环立即失效，避免把旧字幕写进新视频
@@ -553,6 +592,12 @@ export default defineContentScript({
       currentLoadingTrackUrl = '';
       lastCaptionTokenCount = 0;
       trackCascadeActive = false;
+      // 分段数据恢复探测的计数必须跟着视频走，否则上一部视频用掉的 3 次配额会卡住新视频
+      captionDataIncomplete = false;
+      partialReloadAttempts = 0;
+      partialSinceMs = 0;
+      lastPartialReloadAt = 0;
+      partialReloadTotal = 0;
       currentSourceLang = '';
       currentTrackHint = {};
       lastAttachedSentences = null;
@@ -606,8 +651,17 @@ export default defineContentScript({
           return;
         }
         captionsWatchdogAttempts++;
-        if (currentSentences.length > 0) {
+        if (currentSentences.length > 0 && !captionDataIncomplete) {
           stopCaptionsWatchdog();
+          return;
+        }
+        /**
+         * 已拿到「分段」数据：看门狗**不许停**，它就是重探的驱动。
+         * 这里也**不许**走下面的模拟点击 —— 点击是给「一条轨都没拿到」用的，
+         * 本情形播放器已经有轨、已经吐过一次数据，再点只会让它再请求一次分段 timedtext。
+         */
+        if (captionDataIncomplete) {
+          reloadPartialCaption('watchdog');
           return;
         }
 
@@ -778,7 +832,8 @@ export default defineContentScript({
         return;
       }
 
-      if (currentSentences.length > 0) return;
+      // 已有句子就收工 —— 除非这批句子是「分段数据」建出来的（那就必须继续探整轨）
+      if (currentSentences.length > 0 && !captionDataIncomplete) return;
 
       const now = Date.now();
 
@@ -790,7 +845,8 @@ export default defineContentScript({
       }
       // MAIN world 已权威确认无轨就不再模拟点击：点一次等于让播放器白跑一轮 timedtext。
       // 注意这里**只看** noTracksConfirmed —— youtubei 的 0 token 不能用来停点击。
-      if (!isNoTracksConfirmed(vid)) {
+      // 另外：`captionDataIncomplete` 时也不点（见 reloadPartialCaption 的说明）。
+      if (!isNoTracksConfirmed(vid) && !captionDataIncomplete) {
         window.postMessage({ source: 'YT_SUB_TRANSLATOR_CONTENT', action: 'TRIGGER_SUBTITLES' }, '*');
       }
 
@@ -805,7 +861,9 @@ export default defineContentScript({
       // 策略 3: 若前两项未生效，通过后台 YouTubei API 双模式兜底
       // 已确认无轨 / 该 vid 的 youtubei 正在冷却 → 直接跳过
       // （这就是原来 14~22 次 403 的来源）
-      if (isNoTracksConfirmed(vid) || isYoutubeiBlocked(vid)) return;
+      // 分段数据恢复期间也跳过：本条修复只允许走「零拷贝兜底 + 候选轨」两条既有通道，
+      // youtubei 对「有轨但只吐分段」的视频没有帮助，只会在 25s 窗口里白烧请求。
+      if (isNoTracksConfirmed(vid) || isYoutubeiBlocked(vid) || captionDataIncomplete) return;
       // 单飞：handleVideoChange 会连发 6 次探测，同一视频只允许一条在途请求
       if (trackFetchInFlight === vid) return;
       trackFetchInFlight = vid;
@@ -995,8 +1053,8 @@ export default defineContentScript({
             console.log(`[YT-Sub-Translator] 借鉴沉浸式翻译: 零拷贝装载原生字幕 (${tokens.length} tokens)`);
             lastCaptionTokenCount = tokens.length;
             lastCaptionData = data;
+            // 注意：是否停看门狗由 processCaptionData 按「完整性」决定（见 applyCaptionCompleteness）
             processCaptionData(data);
-            stopCaptionsWatchdog();
           }
         } catch (e) {
           console.warn('[YT-Sub-Translator] 解析截获的原生字幕数据失败:', e);
@@ -1009,7 +1067,7 @@ export default defineContentScript({
           url.startsWith('https://') &&
           url.includes('/api/timedtext') &&
           url.length <= 4096 &&
-          currentSentences.length === 0 &&
+          (currentSentences.length === 0 || captionDataIncomplete) &&
           url !== currentLoadingTrackUrl
         ) {
           console.log('[YT-Sub-Translator] Direct timedtext URL intercepted from YouTube player');
@@ -1022,10 +1080,23 @@ export default defineContentScript({
                 return;
               }
               const response = r.response;
-              if (response && response.success && response.data && currentSentences.length === 0) {
-                lastCaptionData = response.data;
-                processCaptionData(response.data);
-                stopCaptionsWatchdog();
+              if (
+                response &&
+                response.success &&
+                response.data &&
+                (currentSentences.length === 0 || captionDataIncomplete)
+              ) {
+                /**
+                 * 与 :994 同一口径：只接受比已消费数据更完整的响应。
+                 * 分段恢复期间这条路径会再次被打开（守卫放宽），若不加这一条，
+                 * 一次同样残缺的回包会把 46 tokens 的句子重建一遍（界面抖 + 翻译重跑）。
+                 */
+                const gotTokens = extractCaptionTokens(response.data);
+                if (gotTokens.length > lastCaptionTokenCount) {
+                  lastCaptionTokenCount = gotTokens.length;
+                  lastCaptionData = response.data;
+                  processCaptionData(response.data);
+                }
               }
             }
           );
@@ -1119,7 +1190,8 @@ export default defineContentScript({
      */
     function handleCaptionTracks(tracks: YouTubeCaptionTrack[], sourceLang = '') {
       if (!tracks || tracks.length === 0) return;
-      if (currentSentences.length > 0) return;
+      // 分段恢复期间必须放行：候选轨是唯一能整轨拿到数据的既有通道（见 reloadPartialCaption）
+      if (currentSentences.length > 0 && !captionDataIncomplete) return;
       // 单飞：同一时刻只允许一条候选音轨瀑布，避免重复广播造成 N 倍并发请求
       if (trackCascadeActive) return;
       trackCascadeActive = true;
@@ -1185,7 +1257,8 @@ export default defineContentScript({
       };
 
       const tryFetchCandidate = () => {
-        if (currentSentences.length > 0) {
+        // 已经有句子（且不是分段恢复）就不必再试下一条候选
+        if (currentSentences.length > 0 && !captionDataIncomplete) {
           finishCascade();
           return;
         }
@@ -1212,7 +1285,12 @@ export default defineContentScript({
           fetchUrl += '&fmt=json3';
         }
 
-        if (fetchUrl === currentLoadingTrackUrl && currentSentences.length > 0) {
+        /**
+         * 同一条 URL 已经试过且有句子 → 不重复拉（省一次必败请求）。
+         * 分段恢复期间例外：候选轨是允许的两条通道之一，这条 URL 8s 冷却过期后必须能再试，
+         * 否则「放宽守卫」只是摆设（这里会把整条通道直接掐掉）。
+         */
+        if (fetchUrl === currentLoadingTrackUrl && currentSentences.length > 0 && !captionDataIncomplete) {
           finishCascade();
           return;
         }
@@ -1232,11 +1310,23 @@ export default defineContentScript({
             if (response && response.success && response.data) {
               const tokens = extractCaptionTokens(response.data);
               if (tokens.length > 0) {
-                console.log(`[YT-Sub-Translator] ✓ Successfully loaded track [${track.languageCode}] (${tokens.length} tokens).`);
-                lastCaptionTokenCount = tokens.length;
-                lastCaptionData = response.data;
-                processCaptionData(response.data);
-                stopCaptionsWatchdog();
+                /**
+                 * 分段恢复期间这条路径会再次打开（守卫放宽）：这里的回包若**不比已消费
+                 * 数据更完整**就忽略，别用一份同样残缺的数据把句子推倒重建（界面抖 + 翻译重跑）。
+                 * 首次装载时 lastCaptionTokenCount === 0，任何非空回包都放行，行为不变。
+                 */
+                if (tokens.length > lastCaptionTokenCount) {
+                  console.log(`[YT-Sub-Translator] ✓ Successfully loaded track [${track.languageCode}] (${tokens.length} tokens).`);
+                  lastCaptionTokenCount = tokens.length;
+                  lastCaptionData = response.data;
+                  // 停不停看门狗由 processCaptionData 按完整性决定
+                  processCaptionData(response.data);
+                  finishCascade();
+                  return;
+                }
+                console.log(
+                  `[YT-Sub-Translator] Track [${track.languageCode}] 回包 ${tokens.length} tokens 不比已消费的 ${lastCaptionTokenCount} 更完整，忽略`
+                );
                 finishCascade();
                 return;
               } else {
@@ -1572,6 +1662,158 @@ export default defineContentScript({
       return hit;
     }
 
+    /** 当前播放器时长（毫秒）。拿不到 / 非有限 / ≤0 一律 NaN（直播的 Infinity 也归到这里） */
+    function currentVideoDurationMs(): number {
+      const v = videoElement || (document.querySelector('video') as HTMLVideoElement | null);
+      const dur = v?.duration;
+      if (typeof dur !== 'number' || !Number.isFinite(dur) || dur <= 0) return NaN;
+      return dur * 1000;
+    }
+
+    /** 这批 token 的时间跨度（毫秒）；没有任何可用时间戳时返回 null */
+    function tokenTimeSpan(tokens: CaptionToken[]): { first: number; last: number; span: number } | null {
+      let first = Infinity;
+      let last = -Infinity;
+      for (const t of tokens) {
+        if (Number.isFinite(t.start) && t.start < first) first = t.start;
+        if (Number.isFinite(t.end) && t.end > last) last = t.end;
+      }
+      if (!Number.isFinite(first) || !Number.isFinite(last)) return null;
+      return { first, last, span: last - first };
+    }
+
+    /**
+     * 这批字幕数据是否覆盖了整条视频（= 不是「seek 触发的分段 timedtext」）。
+     *
+     * 判据只用「token 时间跨度 vs 视频时长」，**不用句数/条数硬阈值** ——
+     * 不同视频疏密差异极大（62 行歌词 vs 1166 句 ASR），任何条数阈值都必然误判。
+     *
+     *     完整 ⇔ span ≥ dur × 0.5 且 last ≥ dur × 0.6
+     *
+     * 依据（实测样本）：
+     *   - 英文 `XGxIE1hr0w4` 370 tokens / dur 233.5s / first 2.6s / last 228.0s → 完整（span 96%、last 98%）
+     *   - 日文 `VyV7nxzYEqA` 251 tokens / dur 216.5s                            → 完整
+     *   - seek 分段那次 41 tokens 只覆盖几十秒（实测 41 tokens 跨 ~38s / 233s）→ 不完整
+     * 片尾没有对白是正常现象，0.6 已经留了 40% 余量，**不要收紧到 0.8**。
+     *
+     * **宁可漏判不可误判**：拿不准就判「完整」。误判成残缺会对正常视频反复重拉；
+     * 漏判只是维持 0.5.1 之前的行为（不重探），不会更差 —— 所以时长拿不到、
+     * 时长非有限（直播）、短视频、token 没时间戳，全部直接返回 true。
+     */
+    function isCaptionDataComplete(rawData: Json3CaptionData, tokens: CaptionToken[]): boolean {
+      if (!rawData || tokens.length === 0) return true;
+      const durMs = currentVideoDurationMs();
+      if (!Number.isFinite(durMs)) return true; // 拿不到时长（预热 NaN / 直播 Infinity）→ 不判
+      if (durMs < 60_000) return true; // 短视频不值得判：一次 seek 就可能盖住一半
+      const span = tokenTimeSpan(tokens);
+      if (!span) return true;
+      return span.span >= durMs * 0.5 && span.last >= durMs * 0.6;
+    }
+
+    /**
+     * 记录完整性判定结果 —— 「停不停看门狗」的唯一决策点。
+     *
+     * 完整：照旧收工（停看门狗、清计数）。
+     * 不完整：**不收工** —— 保留现有句子（不清空，用户正看着那几行）、继续跑看门狗，
+     *        由看门狗按 5s 节流 / 3 次上限重探整轨，25s 拿不到才放弃。
+     */
+    function applyCaptionCompleteness(complete: boolean, tokens: CaptionToken[]) {
+      if (complete) {
+        captionDataIncomplete = false;
+        partialReloadAttempts = 0;
+        partialSinceMs = 0;
+        lastPartialReloadAt = 0;
+        stopCaptionsWatchdog();
+        return;
+      }
+
+      if (!captionDataIncomplete) {
+        // 首次判定残缺：起 25s 放弃窗口，计数清零
+        captionDataIncomplete = true;
+        partialSinceMs = Date.now();
+        partialReloadAttempts = 0;
+        lastPartialReloadAt = 0;
+        const span = tokenTimeSpan(tokens);
+        const durMs = currentVideoDurationMs();
+        const fmt = (ms: number) => (Number.isFinite(ms) ? `${(ms / 1000).toFixed(1)}s` : '?');
+        console.warn(
+          `[YT-Sub-Translator] 截获到分段数据（${tokens.length} tokens，覆盖 ${fmt(span?.first ?? NaN)}~${fmt(
+            span?.last ?? NaN
+          )} / 视频 ${fmt(durMs)}），继续探测整轨（最多 ${PARTIAL_RELOAD_MAX_ATTEMPTS} 次，${PARTIAL_RELOAD_MIN_INTERVAL_MS / 1000}s 一次，${
+            PARTIAL_RELOAD_GIVE_UP_MS / 1000
+          }s 内拿不到就放弃）`
+        );
+      }
+      // 关键：**不停看门狗** —— 它是重探的唯一驱动（不模拟点击，见 reloadPartialCaption）
+      if (!captionsWatchdogTimer) startCaptionsWatchdog();
+    }
+
+    /**
+     * 重探一次整轨。**只走两条既有通道，不模拟点击**：
+     *   ① 候选轨：REQUEST_TRACKS 让 MAIN world 重播 CAPTION_TRACKS_FOUND → handleCaptionTracks；
+     *   ② 零拷贝兜底：页面现成的 captionTracks（DOM script 扫描，零网络）+ 播放器自己再请求
+     *      timedtext 时被放宽的守卫接住（CAPTURED_TIMEDTEXT_URL / _RESPONSE）。
+     *
+     * 为什么不点原生字幕按钮：点击是给「一条轨都没拿到」用的（A3 配额 3 次/video）。
+     * 本情形播放器**已经有轨、已经吐过一次数据**，再点只会让它再请求一次分段 timedtext，
+     * 白烧 A3 的成果，还换不来整轨。
+     */
+    function reloadPartialCaption(trigger: string) {
+      if (!captionDataIncomplete) return;
+      const now = Date.now();
+      // 每视频总量上限优先判：窗口内计数会被反复 seek 清零，只有它挡得住「拖一次进度条 +3 次请求」
+      if (partialReloadTotal >= PARTIAL_RELOAD_MAX_TOTAL) {
+        giveUpPartialReload('total');
+        return;
+      }
+      if (partialReloadAttempts >= PARTIAL_RELOAD_MAX_ATTEMPTS) {
+        giveUpPartialReload('attempts');
+        return;
+      }
+      if (now - partialSinceMs >= PARTIAL_RELOAD_GIVE_UP_MS) {
+        giveUpPartialReload('timeout');
+        return;
+      }
+      if (lastPartialReloadAt && now - lastPartialReloadAt < PARTIAL_RELOAD_MIN_INTERVAL_MS) return;
+
+      partialReloadAttempts++;
+      partialReloadTotal++;
+      lastPartialReloadAt = now;
+      console.log(
+        `[YT-Sub-Translator] 分段数据恢复探测 ${partialReloadAttempts}/${PARTIAL_RELOAD_MAX_ATTEMPTS}` +
+          `（本视频累计 ${partialReloadTotal}/${PARTIAL_RELOAD_MAX_TOTAL}，触发: ${trigger}）`
+      );
+
+      // 通道 ①：请 MAIN world 重播候选轨广播（这条路径不带模拟点击）
+      window.postMessage({ source: 'YT_SUB_TRANSLATOR_CONTENT', action: 'REQUEST_TRACKS' }, '*');
+
+      // 通道 ②：页面里现成的 captionTracks，直接进既有候选轨瀑布
+      const domTracks = scanTracksFromDomScripts();
+      if (domTracks && domTracks.length > 0) {
+        handleCaptionTracks(domTracks, currentSourceLang);
+      }
+    }
+
+    /**
+     * 放弃重探：**保留**现有部分数据与 UI（用户正在看那几行），只是不再重拉。
+     * 用 debug 不用 warn —— 这是预期降级而非错误，别刷控制台。
+     */
+    function giveUpPartialReload(reason: 'attempts' | 'timeout' | 'total') {
+      if (!captionDataIncomplete) return;
+      captionDataIncomplete = false;
+      console.debug(
+        `[YT-Sub-Translator] 分段数据恢复放弃（${
+          reason === 'timeout'
+            ? `${PARTIAL_RELOAD_GIVE_UP_MS / 1000}s 内没拿到整轨`
+            : reason === 'total'
+              ? `本视频累计已达 ${PARTIAL_RELOAD_MAX_TOTAL} 次`
+              : `已重探 ${PARTIAL_RELOAD_MAX_ATTEMPTS} 次`
+        }），保留现有 ${currentSentences.length} 句，不再重拉`
+      );
+      // 计数不清零也没关系：captionDataIncomplete=false 后看门狗下一拍会自行停掉，
+      // 下次真拿到整轨时由 applyCaptionCompleteness(true) 一起清。
+    }
+
     function processCaptionData(rawData: Json3CaptionData) {
       /* v0.5.0：先试逐字路径（需要「识别为歌词轨 + 确有当前字高亮」两个条件） */
       const karaoke = tryBuildKaraokeSentences(rawData);
@@ -1583,12 +1825,15 @@ export default defineContentScript({
           overlay.setSentences(currentSentences, true);
           overlay.resetAiProgress();
         }
+        // 歌词轨不参与完整性判定（本来就分段渲染 + 有显示窗口机制），照旧收工
+        stopCaptionsWatchdog();
         void restoreAiTrackThenStartPipeline();
         return;
       }
 
       /* 没走高亮路径时，歌词轨仍要清洗 —— 否则会退回 1166 句碎片 + 读音污染 */
-      const data = cleanLyricCaptionData(rawData) ?? rawData;
+      const cleanedLyric = cleanLyricCaptionData(rawData);
+      const data = cleanedLyric ?? rawData;
 
       const tokens = extractCaptionTokens(data);
       console.log(`[YT-Sub-Translator] Tokens count: ${tokens.length}`);
@@ -1600,6 +1845,8 @@ export default defineContentScript({
           overlay.setSentences([]);
           overlay.setTrackEmpty(true, 'empty_track');
         }
+        // 0 token 属于「轨道空」，不是分段残缺：照旧收工（负缓存由候选轨那侧记账）
+        stopCaptionsWatchdog();
         return;
       }
 
@@ -1619,6 +1866,16 @@ export default defineContentScript({
         overlay.setSentences(currentSentences, true);
         overlay.resetAiProgress();
       }
+
+      /**
+       * 完整性判定（0.5.1）：
+       *   - 完整（或判不出来）→ 停看门狗，一切照旧；
+       *   - 不完整（seek 触发的分段 timedtext）→ 不停看门狗，转入有限次重探。
+       *
+       * 歌词轨（清洗过的那条分支）不参与判定：歌词轨本来就分段渲染（副歌重复、
+       * 中间有大段没词的间奏），用「跨度占比」判它必然误判成残缺。
+       */
+      applyCaptionCompleteness(cleanedLyric ? true : isCaptionDataComplete(rawData, tokens), tokens);
 
       // 先查本地 AI 精翻整轨（内存 → IndexedDB）：命中就先把已翻的那部分铺出来，
       // 再决定要不要跑机器翻译预翻译（全篇都 AI 翻过时完全不用发请求）。
