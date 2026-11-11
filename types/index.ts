@@ -3,6 +3,8 @@
  */
 /* 仅类型引用（编译期擦除）：逐字时间结构的唯一真相在 utils/lyric-track.ts，这里不复制一份 */
 import type { CharTiming } from '../utils/lyric-track';
+/* 仅类型引用（编译期擦除）：字体条目的形状与清洗只在 utils/fonts.ts 定义一份 */
+import type { CustomFontPack } from '../utils/fonts';
 
 export interface YouTubeCaptionTrack {
   baseUrl: string;
@@ -246,7 +248,32 @@ export interface ExtensionSettings {
   displayMode: 'bilingual' | 'translation_only' | 'original_only';
   layoutOrder: 'translation_top' | 'original_top'; // 默认推荐上译下原（沉浸式翻译标准体验）
   fontSize: number; // px，默认 20
+  /**
+   * v0.5.6：字幕字体。取值是**字体 id**：
+   * - 内置字体 id（见 `utils/fonts.ts#BUILTIN_FONTS`，如 'yahei' / 'noto-jp'）；
+   * - 自定义字体 id（`font-xxx`，从 `customFonts` 里查）；
+   * - 'system'（默认）= 跟随 YouTube 自带字体（渲染层清掉内联 font-family）。
+   *
+   * 声明为可选：老版本存下来的设置里没有这一项，且弹窗保存的是部分字段的字面量；
+   * 运行时一律经 sanitizeSettings 补齐为 DEFAULT_SETTINGS 里的 'system'。
+   */
+  fontFamily?: string;
+  /**
+   * v0.5.6：用户上传的字体包（含 base64 dataUrl）。
+   * **只存 `chrome.storage.local`**（键 `yt_sub_translator_fonts`）：单个字体动辄几百 KB ~ 几 MB，
+   * 远超 sync 的 100KB 总配额；sync 里连元数据都不放，只留 `fontFamily`。
+   * 读取时由 `utils/storage.ts#getStoredSettings` 合并回来，调用方无感。
+   */
+  customFonts?: CustomFontPack[];
   bgOpacity: number; // 0 ~ 100，默认 75
+  /**
+   * v0.5.5：播放器内「快捷设置面板」高度（px，0 ~ 900）。
+   * - `0` = 自适应：面板高度由内容决定（auto）；
+   * - `> 0` = 固定高度：面板高度锁定该值，内容超出时**面板内**滚动。
+   * 默认 429 = 折叠态真实内容高 417 + 12px 余量（Edge 156 / 1700×1080 实测），
+   * 保证开箱折叠态底部两个按钮完整可见且不出现滚动条。
+   */
+  quickPanelHeight: number;
   bgColor: string; // 背景颜色十六进制值，默认 '#0f172a'
   origColor: string; // 原文字体颜色，默认 '#e2e8f0'
   transColor: string; // 译文字体颜色，默认 '#38bdf8'
@@ -462,7 +489,12 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   displayMode: 'bilingual',
   layoutOrder: 'translation_top', // 默认上译下原
   fontSize: 20,
+  /* v0.5.6：字幕字体默认「系统默认」（= 不写 font-family，跟随 YouTube）；字体包只存 local */
+  fontFamily: 'system',
+  customFonts: [],
   bgOpacity: 75,
+  /* v0.5.5：快捷面板固定高度 = 折叠态实测内容高 417 + 12px 余量（0 = 自适应） */
+  quickPanelHeight: 429,
   bgColor: '#0f172a',
   origColor: '#e2e8f0',
   transColor: '#38bdf8',

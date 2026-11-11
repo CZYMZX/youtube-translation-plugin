@@ -13,6 +13,20 @@ export const OVERLAY_STYLES = String.raw`
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
           user-select: text;
           --ease-elastic: cubic-bezier(0.34, 0.96, 0.6, 0.99);
+          /* 浮层短过渡时长令牌（v0.5.2）：新增规则用它，不散落硬编码时长 */
+          --dur-fast: 0.2s;
+          /* 快捷面板定位令牌（v0.5.5）。四条各自只管一件事，别再让它们互相换算：
+             --qp-bottom-gap：面板底边到播放器底边的距离 = 贴住控制栏上沿。全屏 / 非全屏 /
+                              剧场三种状态下这个数是同一个（面板随宿主一起缩放，不按屏幕高算），
+                              这正是「全屏前后布局对齐」的来源。
+             --qp-top-gap   ：顶部保留区，**只**参与 max-height。它不是定位值，别拿它定 top。
+             --qp-height    ：面板高度。auto = 按内容自适应；JS 会按设置写具体 px（0 = 自适应）。
+             --qp-max-h     ：高度上限，口径同 v0.5.1 发版值 calc(100% - 68px)，
+                              所以面板顶边最靠上也就是距播放器顶边 10px（= 68 - 58）。 */
+          --qp-bottom-gap: 58px;
+          --qp-top-gap: 68px;
+          --qp-height: auto;
+          --qp-max-h: max(160px, calc(100% - var(--qp-top-gap)));
         }
 
         *, *::before, *::after {
@@ -71,6 +85,34 @@ export const OVERLAY_STYLES = String.raw`
           opacity: 1;
           transform: translateX(-50%) translateY(0) scale(1);
           pointer-events: auto;
+        }
+
+        /* 透明背景（bgColor = #00000000）：摘掉卡片的柔和外扩阴影与描边。
+         * 那条 box-shadow（0 16px 38px rgba(0,0,0,.55)）是给半透明底色「收边」用的，
+         * 底色透明后它只剩一圈悬空的黑色雾影 —— 即用户要去的「字幕模糊」。
+         * 文字自身的 text-shadow 保留（亮画面上的可读性靠它）。
+         * 只用 box-shadow / border，不动 filter，避免把视频拉进合成层影响 VSR。 */
+        .subtitle-box.bg-transparent {
+          box-shadow: none;
+          border-color: transparent;
+        }
+
+        /* 透明背景下的可读性兜底：没有底色压暗，字完全靠自身阴影从画面里「浮」出来。
+         * 三层叠加 = 近距描边（0 1px 2px，压住笔画边缘）+ 中距扩散（0 0 4px，分离背景）
+         * + 远距柔散（0 2px 10px，制造纵深）。深色/亮色/花色背景都能压住。
+         * 依旧只用 text-shadow —— filter / drop-shadow 会把视频拉进合成层，影响 N 卡 VSR。 */
+        .subtitle-box.bg-transparent .original-text {
+          text-shadow:
+            0 1px 2px rgba(0, 0, 0, 0.95),
+            0 0 4px rgba(0, 0, 0, 0.9),
+            0 2px 10px rgba(0, 0, 0, 0.75);
+        }
+
+        .subtitle-box.bg-transparent .translated-text {
+          text-shadow:
+            0 1px 2px rgba(0, 0, 0, 0.95),
+            0 0 4px rgba(0, 0, 0, 0.92),
+            0 2px 10px rgba(0, 0, 0, 0.8);
         }
 
         .subtitle-box:hover .controls-bar,
@@ -330,11 +372,21 @@ export const OVERLAY_STYLES = String.raw`
            ========================================================================== */
         .quick-panel {
           position: absolute;
-          bottom: 58px;
+          /* v0.5.5：恢复 bottom 贴底定位。
+             曾经写成「top: 68px 钉死顶边、向下生长」，那是相对**宿主容器**的固定距离：
+             全屏时宿主变成整屏，68px 就跑到画面上方，面板整体上移 + 下方大片空白；
+             非全屏时又不贴底（1700×1080 窗口、播放器高 662 时下方悬空 175px）。现在顶边让给内容，
+             底边钉在控制栏上沿 58px 处 —— 全屏 / 非全屏 / 剧场三种状态的下边距完全一致。
+             「展开时触发元素不动」不再靠钉顶边，而是靠高度固定（见 --qp-height）：
+             高度不变 ⇒ 底边不动 ⇒ 顶边自然不动。 */
+          top: auto;
+          bottom: var(--qp-bottom-gap);
           right: 18px;
           width: 320px;
-          height: min(470px, calc(100% - 68px));
-          max-height: calc(100% - 68px);
+          /* 高度是「确定值」：要么 auto（按内容自适应），要么由 JS 按设置写 px。
+             不再每帧量内容高再回写 —— 那条路一旦量少 1px，视图就滚、底部按钮就被切。 */
+          height: var(--qp-height);
+          max-height: var(--qp-max-h);
           box-sizing: border-box;
           background: rgba(18, 18, 22, 0.9);
           border: 1px solid rgba(255, 255, 255, 0.16);
@@ -349,8 +401,10 @@ export const OVERLAY_STYLES = String.raw`
           opacity: 0;
           visibility: hidden;
           transform: translateY(12px) scale(0.96);
+          /* height 不进过渡：高度是配置值，不该自己「动画」到目标值 */
           transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), transform 0.35s var(--ease-elastic), visibility 0.25s;
           z-index: 120;
+          /* 圆角裁切靠它；滚动条在 .qp-view 内部，面板本身不滚 */
           overflow: hidden;
           overscroll-behavior: contain;
           overscroll-behavior-y: contain;
@@ -421,6 +475,15 @@ export const OVERLAY_STYLES = String.raw`
           scrollbar-gutter: stable;
           overscroll-behavior: contain;
           transition: opacity 0.25s ease, visibility 0.25s;
+        }
+
+        /* v0.5.5：视图是 column flex，子项默认 flex-shrink:1 —— 内容一超出面板高度，
+           子项会被**压扁**而不是让视图滚动：实测展开一个手风琴后状态行 30→28px、
+           两条分隔线 1→0px，于是被点的那一行 header 反而上移了 2px（用户看到的
+           「选项往上跳」的最后一截就是这么来的）。这里一律禁止压缩，
+           超出就老老实实交给 overflow-y:auto 滚。 */
+        .qp-view > * {
+          flex-shrink: 0;
         }
 
         .qp-view::-webkit-scrollbar {
@@ -832,44 +895,9 @@ export const OVERLAY_STYLES = String.raw`
           overflow: hidden;
         }
 
-        /* v0.5.0：目标语言下拉。用原生 select 而不是分段控件 —— 9 种语言在 320px
-           面板里排不下，强行分段会挤成两行小字。 */
-        .qp-select {
-          width: 100%;
-          box-sizing: border-box;
-          padding: 7px 10px;
-          border-radius: 8px;
-          border: 1px solid rgba(255, 255, 255, 0.16);
-          background: rgba(255, 255, 255, 0.06);
-          color: #fafafa;
-          font-size: 12px;
-          line-height: 1.4;
-          cursor: pointer;
-          outline: none;
-          appearance: none;
-          -webkit-appearance: none;
-          background-image: linear-gradient(45deg, transparent 50%, #a1a1aa 50%),
-            linear-gradient(135deg, #a1a1aa 50%, transparent 50%);
-          background-position: calc(100% - 14px) 50%, calc(100% - 9px) 50%;
-          background-size: 5px 5px, 5px 5px;
-          background-repeat: no-repeat;
-          padding-right: 26px;
-        }
-
-        .qp-select:hover {
-          border-color: rgba(255, 255, 255, 0.28);
-          background-color: rgba(255, 255, 255, 0.1);
-        }
-
-        .qp-select:focus-visible {
-          border-color: rgba(255, 255, 255, 0.4);
-          box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.12);
-        }
-
-        .qp-select option {
-          background: #18181b;
-          color: #fafafa;
-        }
+        /* v0.5.3：目标语言下拉（.qp-select）与翻译场景卡片（.qp-scene-*）随
+           「删除两个折叠块」一并移除 —— 面板里只留一行只读指示，
+           改这两项请去扩展弹窗（那边有自己的控件与样式，不走本文件）。 */
 
         .qp-accordion-item.expanded .qp-accordion-body {
           grid-template-rows: 1fr;
@@ -1513,5 +1541,19 @@ export const OVERLAY_STYLES = String.raw`
 
         .hidden {
           display: none !important;
+        }
+
+        /* ==========================================================================
+           无障碍：用户要求减少动态效果时，快捷面板的「横滑 + 手风琴展开」
+           一律降级为瞬时切换（放在文件末尾，才能盖住前面同特异性的 transition 声明）。
+           面板高度 v0.5.5 起是配置值、本来就没有过渡，不在此列。
+           ========================================================================== */
+        @media (prefers-reduced-motion: reduce) {
+          .quick-panel,
+          .qp-views-slider,
+          .qp-accordion-body,
+          .qp-accordion-arrow {
+            transition: none;
+          }
         }
 `;

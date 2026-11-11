@@ -179,11 +179,32 @@ body {
   gap: 10px;
 }
 
+/* 品牌图标：28px 玻璃方块 + 白色符号（与设置页 .brand-mark 同一套配方）。
+   原来是 28×28 的位图红块（图片自带底色），换成内联 SVG 后底色改由 CSS 给，
+   图标本体是矢量，任意 DPI 不糊；颜色绑 --text-main 而不是写死 #fff，
+   页面将来加浅色主题时符号自动变黑。 */
 .header-logo-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 39px;
+  height: 39px;
+  flex-shrink: 0;
   border-radius: 8px;
+  background: rgba(255, 255, 255, 0.06);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
   border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text-main);
   transition: transform var(--transition-fast);
+}
+
+/* 24px 画布 → 墨迹 23×13.5 居中（SVG 视窗已收紧到墨迹包围盒 43 128 426 256，
+   不再是 512 全画布；同等容器下比收紧前大约 20%）。
+   与设置页 .brand-mark（24px）、浮层 .qp-logo（24px）同一档。 */
+.header-logo-icon svg {
+  width: 34px;
+  height: 34px;
+  display: block;
 }
 
 .header-logo-icon:hover {
@@ -956,6 +977,18 @@ label {
     box-shadow var(--dur-fast) var(--ease-out-expo);
 }
 
+/* 字幕背景设为「透明」时，预览块必须一起去掉毛玻璃（.is-bg-transparent 由 updatePreview 切换）。
+   真实字幕链路上没有任何 backdrop-filter，预览若还糊着就与实拍观感不一致 ——
+   用户说的「透明不只是去掉颜色，还要没有背景模糊」正是指这一条。
+   注意：本文件其余 backdrop-filter 是面板/卡片/滑块/页签的 UI 装饰，不受本规则影响、也不该动。
+   声明顺序刻意「前缀在前、标准在后」：构建的 CSS 压缩会把同规则的 -webkit- 变体当作标准属性的
+   替代、只保留后出现的那个，写成 -webkit- 在前才能让产物里留下标准的 backdrop-filter（Edge 认
+   标准属性，不认 -webkit- 前缀）。 */
+.preview-box.is-bg-transparent {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
 .preview-ai {
   position: absolute;
   top: 7px;
@@ -968,9 +1001,7 @@ label {
   color: #fbbf24;
   pointer-events: none;
   filter: drop-shadow(0 1px 3px rgba(0, 0, 0, 0.7));
-}
-
-.preview-ai svg {
+}.preview-ai svg {
   width: 100%;
   height: 100%;
   display: block;

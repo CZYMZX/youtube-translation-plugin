@@ -13,8 +13,17 @@ import {
   isModelIconKey,
   resolveProviderByService
 } from './models';
+/* 带 base64 的字体包只能进 local：清洗规则与体积上限在 utils/fonts.ts 里定义一份 */
+import { DEFAULT_FONT_FAMILY, sanitizeCustomFonts as sanitizeFontPacks, type CustomFontPack } from './fonts';
 
 const STORAGE_KEY = 'yt_sub_translator_settings';
+/**
+ * 自定义字体包（含 base64 dataUrl）的 local 键。
+ * 与设置分开存的两个理由：
+ *   1. `chrome.storage.sync` 单键 8KB / 总量 100KB，一个中文字体就几百 KB ~ 几 MB；
+ *   2. dataUrl 属于「体积大、不需要跨设备同步」的数据，放 sync 只会让每次保存都超配额失败。
+ */
+const FONTS_KEY = 'yt_sub_translator_fonts';
 /**
  * 敏感字段（Key）单独存 local，用这个键。
  * 为什么不能继续放 sync：`chrome.storage.sync` 会随浏览器账号同步到云端，
@@ -57,7 +66,12 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
 }
 
 function sanitizeColor(value: unknown, fallback: string): string {
-  return typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+  if (typeof value !== 'string') return fallback;
+  // `#00000000` 是「完全透明无底色」这个合法预设（bgColor 的棋盘格色块），
+  // 8 位 hex 仅此一例：渲染侧 hexToRgba 对它特判返回 'transparent'。
+  // 历史上这里的正则只放行 6 位，导致点透明后立刻被洗回默认色 —— 表现为「点了没反应」。
+  if (value.toLowerCase() === '#00000000') return '#00000000';
+  return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
 }
 
 /**
@@ -221,8 +235,24 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.maxCharsPerSentence = clampNumber(merged.maxCharsPerSentence, 12, 80, 28);
   merged.fontSize = clampNumber(merged.fontSize, 12, 48, 20);
   merged.bgOpacity = clampNumber(merged.bgOpacity, 0, 100, 75);
+  /* v0.5.5：快捷面板高度。0 = 自适应，其余按 px 夹到 0 ~ 900（超过 900 对 4K 全屏也没意义）。
+     clampNumber 内部 Number.isFinite 判定，所以显式写 0 不会被当成「未设置」而回落默认值。 */
+  merged.quickPanelHeight = clampNumber(
+    merged.quickPanelHeight,
+    0,
+    900,
+    DEFAULT_SETTINGS.quickPanelHeight
+  );
   merged.offsetY = clampNumber(merged.offsetY, 30, 94, 82);
   merged.syncOffsetMs = clampNumber(merged.syncOffsetMs, -2000, 2000, 0);
+
+  /* v0.5.6：字幕字体。只接受「id 形状」的短标识（内置 id / font-xxx / system），
+     任意字符串不能进样式层；不认识的自定义 id 这里**不判死**（字体列表可能还没读到 local），
+     由渲染层 resolveSubtitleFont 回退到 'system'。 */
+  const fontFamilyRaw = typeof merged.fontFamily === 'string' ? merged.fontFamily.trim() : '';
+  merged.fontFamily = /^[A-Za-z0-9_-]{1,64}$/.test(fontFamilyRaw) ? fontFamilyRaw : DEFAULT_FONT_FAMILY;
+  /* 自定义字体包：逐条清洗（缺 dataUrl / 非法 base64 / 超单文件上限的条目单独丢弃） */
+  merged.customFonts = sanitizeFontPacks(merged.customFonts);
 
   merged.bgColor = sanitizeColor(merged.bgColor, DEFAULT_SETTINGS.bgColor);
   merged.origColor = sanitizeColor(merged.origColor, DEFAULT_SETTINGS.origColor);
@@ -453,6 +483,28 @@ async function stripSecrets(area: 'sync' | 'local', raw: Record<string, unknown>
   if (!ok) console.warn(`[Storage] 迁移后重写 chrome.storage.${area} 失败（下次读取会重试）`);
 }
 
+/* ══════════════════════ 自定义字体（只进 local） ══════════════════════
+ * 读写口径：读 → 逐条清洗（utils/fonts.ts#sanitizeCustomFonts，坏条目单独丢弃）；
+ *           写 → 整份替换（字体是不可变条目，没有「半份覆盖」的语义）。
+ * 什么时候写：只有 `saveStoredSettings({ customFonts })` 显式带了这一项才写 ——
+ * 每敲一个字都重写几 MB base64 是不可接受的。设置页删/加字体都会显式带这一项。
+ */
+
+/** 读取本机全部自定义字体（local 不可用时返回 []，不阻断设置读取） */
+export async function loadCustomFonts(): Promise<CustomFontPack[]> {
+  if (typeof chrome === 'undefined' || !chrome.storage) return [];
+  const raw = await readAreaKey('local', FONTS_KEY, 1500);
+  if (!raw) return [];
+  return sanitizeFontPacks(raw.fonts);
+}
+
+/** 整份写入自定义字体；失败返回 false（配额 / 权限问题由调用方决定怎么提示） */
+export async function writeCustomFonts(fonts: CustomFontPack[]): Promise<boolean> {
+  const ok = await writeAreaKey('local', FONTS_KEY, { version: 1, fonts });
+  if (!ok) console.warn('[Storage] 自定义字体写入 chrome.storage.local 失败（可能超出配额）');
+  return ok;
+}
+
 /**
  * 获取当前用户配置
  * 读取顺序：sync → local → 默认值；敏感字段一律以 local 的 SECRETS_KEY 为准（覆盖）。
@@ -463,18 +515,22 @@ export async function getStoredSettings(): Promise<ExtensionSettings> {
     return { ...DEFAULT_SETTINGS };
   }
 
-  /* 三个读并行：多一次 local 读换来更短的启动路径（原本 sync 命中时压根不读 local） */
-  const [syncValue, localValue, localSecrets] = await Promise.all([
+  /* 四个读并行：多两次 local 读换来更短的启动路径（原本 sync 命中时压根不读 local） */
+  const [syncValue, localValue, localSecrets, localFonts] = await Promise.all([
     readAreaKey('sync', STORAGE_KEY, READ_TIMEOUT_MS),
     readAreaKey('local', STORAGE_KEY, 1000),
-    readSecrets()
+    readSecrets(),
+    loadCustomFonts()
   ]);
 
   const base = (syncValue || localValue) as Partial<ExtensionSettings> | null;
   const baseArea: 'sync' | 'local' = syncValue ? 'sync' : 'local';
 
+  /* 字体包**只**来自 local：sync 那一份即便历史残留了也不采信（单键 8KB 塞不下字体） */
+  const fonts = localFonts;
+
   if (!base) {
-    return sanitizeSettings({ ...(localSecrets || {}) });
+    return sanitizeSettings({ ...(localSecrets || {}), customFonts: fonts });
   }
 
   /* 迁移：老数据 Key 还写在 sync/settings 里 → 搬到 local，并把那份里的 Key 抹掉 */
@@ -484,10 +540,12 @@ export async function getStoredSettings(): Promise<ExtensionSettings> {
     const merged: SecretState = { ...migrated, ...(localSecrets || {}) };
     await writeSecrets(merged);
     await stripSecrets(baseArea, base as Record<string, unknown>);
-    return sanitizeSettings({ ...base, ...merged });
+    return sanitizeSettings({ ...base, ...merged, customFonts: fonts });
   }
 
-  return sanitizeSettings({ ...base, ...(localSecrets || {}) });
+  const mergedSettings = sanitizeSettings({ ...base, ...(localSecrets || {}) });
+  /* 字体包只来自 local（loadCustomFonts 内部已逐条清洗），不参与 sync 那一份的合并 */
+  return { ...mergedSettings, customFonts: fonts };
 }
 
 // 串行化“读-改-写”，避免 popup 与快捷面板并发保存时互相覆盖字段
@@ -509,9 +567,19 @@ export function saveStoredSettings(
       const current = await getStoredSettings();
       const updated = sanitizeSettings({ ...current, ...newSettings });
 
-      /* sync 里必须**不含** Key：显式删掉三个敏感字段，再写 */
+      /* v0.5.6：字体包整份写 local（只有调用方显式给了 customFonts 才写）。
+         写失败直接抛：settings 里刚加的字体其实没落盘，静默成功会让用户重开页面后
+         发现字体凭空消失 —— 让 update() 的 catch 弹出「保存失败」更诚实。 */
+      if (newSettings.customFonts !== undefined) {
+        const okFonts = await writeCustomFonts(updated.customFonts || []);
+        if (!okFonts) throw new Error('FONT_WRITE_FAILED');
+      }
+
+      /* sync 里必须**不含** Key：显式删掉三个敏感字段，再写。
+         同理**不含** customFonts：sync 单键 8KB，一个字体就爆；只保留 fontFamily 这个 id。 */
       const plain: Record<string, unknown> = { ...updated };
       for (const field of SECRET_FIELDS) delete plain[field];
+      delete plain.customFonts;
 
       const okSecrets = await writeSecrets({
         apiKey: updated.apiKey,

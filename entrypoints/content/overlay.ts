@@ -18,7 +18,6 @@
 
 import {
   ICON_SPARKLES,
-  ICON_TRANSLATE,
   ICON_TIME,
   ICON_SETTING,
   ICON_ALIGN,
@@ -40,12 +39,35 @@ import {
   ICON_HOURGLASS,
   ICON_CHECK,
   ICON_ALERT,
-  ICON_AI_HEXASTAR
+  ICON_AI_HEXASTAR,
+  ICON_BRAND
 } from '../../utils/icons';
 import type { SubtitleSentence, ExtensionSettings, KaraokeWindow } from '../../types';
+/* v0.5.2：浮层「翻译场景」只读复用扩展弹窗那一套数据源（同一个 getAllScenes /
+   loadCustomPacks），不另建场景表、不硬编码场景 id 与名称。 */
+import { getAllScenes, loadCustomPacks, type ScenePack } from '../../utils/packs';
 import { estimateCharTimings, type CharTiming } from '../../utils/lyric-track';
 import { stripInvisible } from '../../utils/invisible-text';
+/* v0.5.6 字幕字体：内置字体查表、自定义字体 FontFace 注册（按 id 去重）都收在 utils/fonts.ts */
+import { ensureCustomFontRegistered, resolveSubtitleFont } from '../../utils/fonts';
 import { OVERLAY_STYLES } from './overlay-styles';
+
+/**
+ * 目标语言显示名（v0.5.3）：浮层删掉了「目标语言」下拉，但状态指示行仍要显示
+ * 当前译文语言。settings.targetLang 是 BCP-47 短码，这里映射成中文名。
+ * 只服务于展示，不参与任何翻译逻辑；未命中的短码原样回显（不吞值、不猜）。
+ */
+const TARGET_LANG_LABELS: Record<string, string> = {
+  'zh-CN': '简体中文',
+  'zh-TW': '繁体中文',
+  en: '英语',
+  ja: '日语',
+  ko: '韩语',
+  fr: '法语',
+  de: '德语',
+  es: '西班牙语',
+  ru: '俄语'
+};
 
 /**
  * 卡拉OK渲染的**三态逐字路径**（v0.5.0 渲染层，见 `buildKaraokeSpans`）：
@@ -422,6 +444,15 @@ export class SubtitleOverlay {
   private quickPanelEl: HTMLElement | null = null;
   private qpViewMainEl: HTMLElement | null = null;
   private qpViewStyleEl: HTMLElement | null = null;
+
+  /* ══════════ v0.5.3 场景名解析（只读，仅服务于状态指示行） ══════════
+   * 「目标语言 / 翻译场景」两个折叠块已删掉，浮层不再让用户改这两项；
+   * 但指示行仍要显示**当前**场景的真实名称，所以还得读一次自定义场景包：
+   * customScenes 只是 storage.local[CUSTOM_SCENE_KEY] 的镜像，读失败/为空当空数组，
+   * 由 getAllScenes() 退化出内置 5 个场景（用户选了已上传场景时名字不会错成「通用」）。
+   */
+  private customScenes: ScenePack[] = [];
+  private scenesLoadStarted: boolean = false;
   private aiBtnEl: HTMLElement | null = null;
   private aiClearBtnEl: HTMLElement | null = null;
   private aiProgressWrapEl: HTMLElement | null = null;
@@ -562,6 +593,12 @@ export class SubtitleOverlay {
     this.sentenceAiBadgeEl = this.shadow.querySelector('#sentence-ai-badge');
     this.drawerSyncBtnEl = this.shadow.querySelector('#drawer-sync-btn');
 
+    /* v0.5.3：shadow 是新建的，场景包读取状态必须重置（否则新 shadow 里指示行拿不到
+       自定义场景名）；挂载后先补读一次，让右上角就绪徽章也能显示真实场景名。 */
+    this.scenesLoadStarted = false;
+    this.customScenes = [];
+    this.loadScenePacks();
+
     this.bindEvents();
     this.bindQuickPanelEvents();
     this.attachGlobalListeners();
@@ -573,6 +610,8 @@ export class SubtitleOverlay {
       }
       this.playerResizeObserver = new ResizeObserver(() => {
         this.applyStyles();
+        /* v0.5.5：面板高度不再跟着播放器尺寸算（高度是配置值），尺寸变化只影响 CSS 的
+           max-height，浏览器自己夹。这里不需要重定高度。 */
       });
       this.playerResizeObserver.observe(playerContainer);
     }
@@ -809,8 +848,8 @@ export class SubtitleOverlay {
       // 仅在首次全量就绪且指定 notifyReady 时显示右上角徽章，避免翻译推进时反复弹跳
       if (notifyReady && !this.hasShownReadyBadge) {
         this.hasShownReadyBadge = true;
-        const mode = this.settings.scenario === 'vtuber' ? 'VTuber直播' : '通用';
-        this.showStatusBadge(`${mode}字幕已就绪 (${sentences.length} 句)`, 3000, 'check');
+        /* v0.5.3：与面板指示行同一口径（目标语言 · 场景名 · 句数），两处不漂移 */
+        this.showStatusBadge(`字幕已就绪（${this.getStatusLineText(sentences.length)}）`, 3000, 'check');
       }
     }
     this.syncQuickPanelValues();
@@ -1488,6 +1527,8 @@ export class SubtitleOverlay {
     if (this.quickPanelEl) {
       if (this.isQuickPanelOpen) {
         this.syncQuickPanelValues();
+        // 每次打开重读一次自定义场景包，指示行的场景名随 storage 变化（只读，无卡片）
+        this.loadScenePacks(true);
         this.quickPanelEl.classList.remove('subview-style-open');
         this.quickPanelEl.style.display = 'flex';
         this.quickPanelEl.classList.add('open');
@@ -1495,6 +1536,8 @@ export class SubtitleOverlay {
         this.quickPanelEl.style.visibility = 'visible';
         this.quickPanelEl.style.pointerEvents = 'auto';
         this.syncMicroPreview();
+        /* v0.5.5：开面板前把高度变量按设置落好（高度是配置值，不用等首帧量内容） */
+        this.applyQpHeight();
       } else {
         this.quickPanelEl.classList.remove('open');
         this.quickPanelEl.classList.remove('subview-style-open');
@@ -1781,6 +1824,13 @@ export class SubtitleOverlay {
     this.containerEl.style.padding = `${Math.round(8 * scale)}px ${Math.round(18 * scale)}px`;
     this.containerEl.style.borderRadius = `${Math.round(12 * scale)}px`;
     this.containerEl.style.backgroundColor = hexToRgba(bgColor, bgOpacity);
+    /* 无底色时同步摘掉卡片的柔和外扩阴影：那条 box-shadow 原本是给半透明底色「收边」的，
+       底色一旦透明，它就变成一圈悬空的黑色雾影（用户说的「字幕模糊效果」）。
+       用 box-shadow 而不是 filter —— 后者会把视频拉进合成层，影响 N 卡 VSR。 */
+    this.containerEl.classList.toggle(
+      'bg-transparent',
+      (bgColor || '').toLowerCase() === '#00000000' || bgColor === 'transparent',
+    );
     this.containerEl.style.setProperty('--ai-icon-color', aiIconColor);
 
     if (this.sentenceAiBadgeEl) {
@@ -1879,6 +1929,45 @@ export class SubtitleOverlay {
       this.drawerEl.style.setProperty('--drawer-current-bg', hexToRgba(transColor, 15));
       this.drawerEl.style.setProperty('--drawer-current-glow', hexToRgba(transColor, 25));
     }
+
+    /* v0.5.6：字幕字体放在最后统一落一次（颜色/字号都写完再应用，避免中途覆盖） */
+    this.applySubtitleFont();
+  }
+
+  /**
+   * 字幕字体（v0.5.6）—— **只**作用于 `.original-text` / `.translated-text`。
+   *
+   * 三条口径：
+   *   1. `system` / 未知 id → 清掉内联 `font-family`，回到继承（= YouTube 自带字体）；
+   *   2. 内置字体 → 直接写它那条 CSS 栈（纯系统字体名，不打包文件，命中就生效）；
+   *   3. 自定义字体 → 写 `"YTSF-<id>", <同语言兜底栈>`，并确保 FontFace 已注册。
+   *      注册失败**不抛给界面**：控制台留一条 warning，原地退回系统默认。
+   *
+   * 为什么用 style.setProperty 而不是往 CSS 里加规则：字体是用户级状态，
+   * 写内联属性既不用动 overlay-styles.ts（VSR 红线文件），也不会波及卡片与按钮。
+   */
+  private applySubtitleFont(): void {
+    if (!this.origEl || !this.transEl) return;
+    const resolved = resolveSubtitleFont(this.settings.fontFamily, this.settings.customFonts);
+    this.writeSubtitleFontStack(resolved.stack);
+    if (!resolved.custom) return;
+
+    const pack = resolved.custom;
+    void ensureCustomFontRegistered(pack).then((ok) => {
+      if (ok) return;
+      /* 只在这条设置仍指向那个字体时才回退，避免把用户刚切走的新字体覆盖掉 */
+      const current = resolveSubtitleFont(this.settings.fontFamily, this.settings.customFonts);
+      if (current.custom?.id === pack.id) this.writeSubtitleFontStack('');
+    });
+  }
+
+  /** 把字体栈写到两行字幕上；空串 = 摘掉内联属性（继承 = YouTube 默认字体） */
+  private writeSubtitleFontStack(stack: string): void {
+    for (const el of [this.origEl, this.transEl]) {
+      if (!el) continue;
+      if (stack) el.style.setProperty('font-family', stack);
+      else el.style.removeProperty('font-family');
+    }
   }
 
   /**
@@ -1924,6 +2013,84 @@ export class SubtitleOverlay {
     });
   }
 
+  /* ═════════════ 状态指示行文案（v0.5.3：三项口径，只读一行） ═════════════
+   * 浮层删掉了「目标语言」「翻译场景」两个折叠块，改成一行只读指示：
+   *     已就绪（简体中文 · 音乐视频 · 59 句）
+   * 三项依次是 目标语言显示名 · 场景名 · 句数，分隔符固定 ` · `；
+   * 不可点击、无箭头、无 hover 态（要改这两项请去扩展弹窗）。
+   */
+
+  /** 目标语言显示名：短码 → 中文名；未收录的短码原样回显，不猜也不吞值 */
+  private getTargetLangLabel(): string {
+    const code = this.settings.targetLang || 'zh-CN';
+    return TARGET_LANG_LABELS[code] || code;
+  }
+
+  /** 当前场景的真实名称（取不到回退「通用」，不再按 vtuber/通用 二元判断） */
+  private getSceneName(): string {
+    const activeId = this.settings.scenario;
+    const hit = getAllScenes({ glossaries: [], scenes: this.customScenes }).find((s) => s.id === activeId);
+    return hit?.name || '通用';
+  }
+
+  /** 三项文案的唯一出口：面板状态行与右上角就绪徽章共用，防止两处口径漂移 */
+  private getStatusLineText(sentenceCount: number): string {
+    return `${this.getTargetLangLabel()} · ${this.getSceneName()} · ${sentenceCount} 句`;
+  }
+
+  /**
+   * 补读自定义场景包（storage.local[CUSTOM_SCENE_KEY]，键名由 packs.ts 的
+   * loadCustomPacks 内部持有，浮层不写死字符串）。
+   * 与 v0.5.2 不同：这里只服务指示行的场景名，不渲染卡片、不解锁选中态；
+   * force=true 用于每次打开面板时重读（弹窗刚上传的场景不必重开页面）。
+   */
+  private loadScenePacks(force: boolean = false): void {
+    if (this.scenesLoadStarted && !force) return;
+    this.scenesLoadStarted = true;
+    loadCustomPacks()
+      .then((custom) => {
+        this.customScenes = Array.isArray(custom?.scenes) ? custom.scenes : [];
+        if (this.isQuickPanelOpen) this.syncQuickPanelValues();
+      })
+      .catch(() => {
+        /* storage 不可用 / 读取失败：退化为内置场景名，指示行照常显示 */
+        this.customScenes = [];
+      });
+  }
+
+  /* ═════════════ 面板高度（v0.5.5）：配置值优先，CSS 负责夹上限 ═════════════
+   * 为什么不再「每次量内容高再回写」：
+   *   视图是 height:100% 的滚动容器，容器比内容矮时 scrollHeight 会退化成 clientHeight，
+   *   量少 1px 就回写 1px 矮的高度 ⇒ 底部按钮被切一条缝、并多出一根 5px 滚动条，
+   *   而且它永远不会自我纠正（视图越矮，量出来的越矮）。1700×1080 下旧实现量出 417
+   *   恰好够用，换个窗口就露馅：宿主播放器 526px 高时上限只有 398，折叠态直接少 19px。
+   *
+   * 现在只有两档，全部由 CSS 落地，JS 只写一个变量：
+   *   quickPanelHeight = 0 → --qp-height: auto，高度跟内容走；
+   *   quickPanelHeight > 0 → --qp-height: <n>px，高度固定，超过 --qp-max-h 由 CSS 卡住。
+   * 高度固定 ⇒ 展开手风琴时面板高度不变 ⇒ 底边不动、顶边也不动，
+   * 因此 v0.5.4 那套「钉顶边 + rAF 逐帧咬合内容高」可以整套删掉（已删）。
+   * 内容超出固定高度时只允许**面板内**滚动，绝不自动 scrollTop / scrollIntoView ——
+   * 一自动滚，展开项上方的内容就整体上移，就是用户反馈过的「选项往上跳」。
+   *
+   * 口径：设置里的 quickPanelHeight 是**可视内容高**（= panel.clientHeight），
+   * 而 CSS 的 height 是 border-box（上下各 1px 边框），所以要补 borderY。
+   * 于是「设 429」= 内容 417 + 12px 余量；「设 520」量出来 clientHeight 就是 520。
+   * 手写 CSS 覆盖 --qp-height 时给的是**盒高**（想 clientHeight = n 就写 n + 2）。
+   */
+  private applyQpHeight(): void {
+    const panel = this.quickPanelEl;
+    if (!panel) return;
+    const configured = Math.round(Number(this.settings?.quickPanelHeight) || 0);
+    if (!(configured > 0)) {
+      panel.style.setProperty('--qp-height', 'auto');
+      return;
+    }
+    const cs = getComputedStyle(panel);
+    const borderY = (parseFloat(cs.borderTopWidth) || 0) + (parseFloat(cs.borderBottomWidth) || 0);
+    panel.style.setProperty('--qp-height', `${configured + borderY}px`);
+  }
+
   private syncQuickPanelValues() {
     if (!this.shadow) return;
     this.syncMicroPreview();
@@ -1959,8 +2126,9 @@ export class SubtitleOverlay {
       };
 
       if (this.allSentences.length > 0) {
-        const mode = this.settings.scenario === 'vtuber' ? 'VTuber直播' : '通用模式';
-        renderQpStatus(ICON_CHECK, `已就绪 (${mode} · ${this.allSentences.length} 句)`);
+        /* v0.5.3：三项只读指示行（目标语言 · 场景名 · 句数）。原来这里分「目标语言」
+           折叠块 + 「翻译场景」折叠块两处展示，现已合并成这一行。 */
+        renderQpStatus(ICON_CHECK, `已就绪（${this.getStatusLineText(this.allSentences.length)}）`);
         statusEl.style.color = '#ffffff';
         statusEl.style.cursor = 'default';
         statusEl.title = '';
@@ -1980,19 +2148,8 @@ export class SubtitleOverlay {
       }
     }
 
-    // 0. 同步目标语言（v0.5.0 新增，接替旧版场景选择框那一格）
-    const langSelect = this.shadow.querySelector('#qp-target-lang') as HTMLSelectElement | null;
-    const langBadge = this.shadow.querySelector('#qp-badge-lang') as HTMLElement | null;
-    if (langSelect) {
-      const want = this.settings.targetLang || 'zh-CN';
-      // 只有选项里确实有这一项才赋值，避免把 select 拍成空值
-      if (Array.from(langSelect.options).some((o) => o.value === want)) {
-        langSelect.value = want;
-      }
-      if (langBadge) {
-        langBadge.textContent = langSelect.options[langSelect.selectedIndex]?.text || want;
-      }
-    }
+    // 0. 目标语言 / 翻译场景：v0.5.3 起面板不再有这两处控件（改为上面的只读指示行），
+    //    这里无需再同步 select 与 badge。
 
     // 1. 同步双语排版模式 (Smooth Option Switcher + Badge)
     const { displayMode, layoutOrder, syncOffsetMs = 0 } = this.settings;
@@ -2059,7 +2216,10 @@ export class SubtitleOverlay {
     if (origPicker) origPicker.value = this.settings.origColor || '#e2e8f0';
 
     const bgPicker = this.shadow.querySelector('#qp-bg-color-picker') as HTMLInputElement;
-    if (bgPicker) bgPicker.value = this.settings.bgColor || '#0f172a';
+    // 透明预设（#00000000）存不进 input，用 #000000 占位；实际值由色块直写 settings
+    if (bgPicker) bgPicker.value = this.settings.bgColor === '#00000000'
+      ? '#000000'
+      : (this.settings.bgColor || '#0f172a');
 
     const aiPicker = this.shadow.querySelector('#qp-ai-color-picker') as HTMLInputElement;
     if (aiPicker) aiPicker.value = this.settings.aiIconColor || '#fbbf24';
@@ -2077,6 +2237,10 @@ export class SubtitleOverlay {
       fontRange.value = String(this.settings.fontSize);
       fontVal.textContent = `${this.settings.fontSize}px`;
     }
+
+    /* 4. v0.5.5：高度是配置值，内容变长（17 句 → 59 句）不再需要回写高度；
+       这里重落一次变量，保证设置页刚改的 quickPanelHeight 立即生效。 */
+    this.applyQpHeight();
   }
 
   /**
@@ -2115,32 +2279,21 @@ export class SubtitleOverlay {
       this.showToast(toggle.checked ? '已开启智能字幕' : '已暂停智能字幕');
     });
 
-    // 1. 手风琴折叠展开联动 (向下展开，外框保持稳定)
+    // 1. 手风琴折叠展开联动（v0.5.5：只翻状态，不再动面板高度）
     const accordionHeaders = this.shadow.querySelectorAll('.qp-accordion-header');
     accordionHeaders.forEach((header) => {
       header.addEventListener('click', (e) => {
         e.stopPropagation();
         const item = header.closest('.qp-accordion-item') as HTMLElement | null;
         if (!item) return;
-        const isExpanded = item.classList.contains('expanded');
-        item.classList.toggle('expanded', !isExpanded);
+        const willExpand = !item.classList.contains('expanded');
 
-        if (!isExpanded) {
-          // 向下展开后，如果子内容超出当前可视区底部，则轻微平滑滚动使其完整展现
-          setTimeout(() => {
-            const view = item.closest('.qp-view') as HTMLElement | null;
-            if (view) {
-              const itemBottom = item.offsetTop + item.offsetHeight;
-              const viewBottom = view.scrollTop + view.clientHeight;
-              if (itemBottom > viewBottom) {
-                view.scrollTo({
-                  top: view.scrollTop + (itemBottom - viewBottom) + 8,
-                  behavior: 'smooth'
-                });
-              }
-            }
-          }, 180);
-        }
+        /* v0.5.5：高度固定（quickPanelHeight）⇒ 展开时面板底边/顶边都不动，
+           展开项上方元素自然不动，不再需要「抓基准 → 逐帧跟随 → 收尾校平」那一整套。
+           也**不做**任何自动滚动（不 scrollTop、不 scrollIntoView）：内容超出面板高度时
+           由 .qp-view 自己的 overflow-y:auto 滚动，但绝不替用户滚 —— 一自动滚，
+           展开项上方的元素就整体上移，正是老问题。 */
+        item.classList.toggle('expanded', willExpand);
       });
     });
 
@@ -2307,10 +2460,17 @@ export class SubtitleOverlay {
       e.stopPropagation();
       panelEl?.classList.add('subview-style-open');
       this.syncMicroPreview();
+      /* v0.5.4：切子页**不改面板高度**、也不重量 —— 高度只由主视图决定，
+         这样主视图与子页的 clientHeight 恒等（用户要求「两者展开时对齐」）。
+         子页内容比主视图高就让它内部 overflow-y:auto 滚，面板本身不长不缩。 */
+      const styleView = this.qpViewStyleEl || (panelEl?.querySelector('.qp-view-style') as HTMLElement | null);
+      /* 每次进入子页都回到顶部：第一屏必须完整看到「译文字体颜色 / 原文字体颜色」两张卡 */
+      if (styleView) styleView.scrollTop = 0;
     });
 
     btnBackMain?.addEventListener('click', (e) => {
       e.stopPropagation();
+      /* 返回主视图同样不动高度（主视图内容若有手风琴展开，高度在那边已经算好了） */
       panelEl?.classList.remove('subview-style-open');
     });
 
@@ -2327,19 +2487,8 @@ export class SubtitleOverlay {
       }
     });
 
-    // 目标语言：改完立刻回写 settings。content 侧收到 SETTINGS_UPDATED 后
-    // 走 prevLang !== settings.targetLang 分支自动重译，这里不用手动触发。
-    const langSelect = this.shadow.querySelector('#qp-target-lang') as HTMLSelectElement | null;
-    // 闭包里 TS 不再收窄 this.shadow，先在外部取到 badge 引用
-    const langBadge = this.shadow.querySelector('#qp-badge-lang') as HTMLElement | null;
-    if (langSelect) {
-      langSelect.addEventListener('change', () => {
-        const value = langSelect.value;
-        const label = langSelect.options[langSelect.selectedIndex]?.text || value;
-        if (langBadge) langBadge.textContent = label;
-        this.updateAndNotify({ targetLang: value });
-      });
-    }
+    /* v0.5.3：「目标语言」下拉与「翻译场景」卡片列表已从浮层移除（改为只读指示行），
+       对应的 change / 事件委托 / 展开重读绑定一并不存在了。 */
 
     this.shadow.querySelectorAll('.qp-close').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -2676,7 +2825,9 @@ export class SubtitleOverlay {
           <div class="qp-view qp-view-main">
             <div class="qp-header">
               <div class="qp-title">
-                <span class="qp-logo" style="display:inline-flex;width:17px;height:17px;align-items:center;color:#ffffff;">${ICON_TRANSLATE}</span><span>智能字幕与翻译</span>
+                <!-- 品牌图标：双气泡无限符号（白色版）。20px 画布下墨迹正好 16.0×9.3，
+                     与右侧 13.5px 标题、右侧 20px 收起按钮同高，不撑高 .qp-header -->
+                <span class="qp-logo" style="display:inline-flex;width:24px;height:24px;align-items:center;color:#ffffff;">${ICON_BRAND}</span><span>智能字幕与翻译</span>
               </div>
               <div class="qp-header-right">
                 <label class="qp-switch" title="开启/关闭字幕翻译">
@@ -2718,40 +2869,10 @@ export class SubtitleOverlay {
               </span>
             </div>
 
-            <!-- 折叠模块 0：目标语言（v0.5.0，接替旧版「翻译场景」选择框那一格） -->
-            <div class="qp-accordion-item" data-accordion="lang">
-              <button type="button" class="qp-accordion-header" title="选择译文语言（改动后自动重译）">
-                <div class="qp-accordion-header-left">
-                  <span class="qp-accordion-icon" style="display:inline-flex;width:14px;height:14px;align-items:center;color:#d4d4d8;">
-                    <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-                      <circle cx="8" cy="8" r="6" />
-                      <path d="M2.2 8h11.6" />
-                      <path d="M8 2c1.7 1.9 2.5 3.8 2.5 6S9.7 12.1 8 14c-1.7-1.9-2.5-3.8-2.5-6S6.3 3.9 8 2z" />
-                    </svg>
-                  </span>
-                  <span class="qp-accordion-title">目标语言</span>
-                </div>
-                <div class="qp-accordion-header-right">
-                  <span class="qp-accordion-badge" id="qp-badge-lang">简体中文</span>
-                  <span class="qp-accordion-arrow">▸</span>
-                </div>
-              </button>
-              <div class="qp-accordion-body">
-                <div class="qp-accordion-body-inner">
-                  <select class="qp-select" id="qp-target-lang" aria-label="目标翻译语言">
-                    <option value="zh-CN">简体中文</option>
-                    <option value="zh-TW">繁体中文</option>
-                    <option value="en">英语</option>
-                    <option value="ja">日语</option>
-                    <option value="ko">韩语</option>
-                    <option value="fr">法语</option>
-                    <option value="de">德语</option>
-                    <option value="es">西班牙语</option>
-                    <option value="ru">俄语</option>
-                  </select>
-                </div>
-              </div>
-            </div>
+            <!-- v0.5.3：这里原本是「目标语言」「翻译场景」两个折叠块。
+                 用户要求两项都删掉，只保留上面那一行只读指示（已就绪（目标语言 · 场景 · N 句））。
+                 指示行不是 accordion：不可点击、无箭头、无 hover 态；
+                 要改这两项请去扩展弹窗，改完 SETTINGS_UPDATED 会带着指示行一起刷新。 -->
 
             <!-- 折叠模块 1：双语排版模式 (纯中文无图标 · 4段平滑滑块) -->
             <div class="qp-accordion-item" data-accordion="mode">

@@ -1,7 +1,7 @@
-﻿/**
+/**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - 扩展弹出设置面板 (Popup Main Controller)
- * 当前版本: v0.5.1 (独立高级设置页)
+ * 当前版本: v0.6.0 (独立高级设置页)
  *
  * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
  * 1. 翻译服务引擎参数折叠规范：当选择大模型服务（DeepSeek、OpenAI、Gemini）时，
@@ -36,7 +36,8 @@ import {
   ICON_REFRESH,
   ICON_HOURGLASS,
   ICON_CHECK,
-  ICON_ALERT
+  ICON_ALERT,
+  mountBrandIcons
 } from '../../utils/icons';
 /**
  * 厂牌与模型清单：**只读引用**，清单只有 utils/models.ts 这一份（任务四）。
@@ -53,6 +54,10 @@ import {
   type Provider
 } from '../../utils/models';
 import { providerIconHtml } from '../../utils/provider-icons';
+
+/* 头部品牌图标：index.html 里是空壳占位（静态 HTML 取不到 TS 常量），
+   在模块首帧就补上，不等后面的异步初始化 */
+mountBrandIcons();
 
 function hexToRgba(hex: string, opacity: number): string {
   if (!hex || hex === 'transparent' || hex === '#00000000') return 'transparent';
@@ -175,6 +180,9 @@ const fontSizeRange = document.getElementById('font-size') as HTMLInputElement;
 const fontSizeVal = document.getElementById('font-size-val') as HTMLElement;
 const bgOpacityRange = document.getElementById('bg-opacity') as HTMLInputElement;
 const bgOpacityVal = document.getElementById('bg-opacity-val') as HTMLElement;
+/* v0.5.5：播放器内快捷面板高度（0 = 自适应） */
+const quickPanelHeightRange = document.getElementById('quick-panel-height') as HTMLInputElement | null;
+const quickPanelHeightVal = document.getElementById('quick-panel-height-val') as HTMLElement | null;
 
 // 预览元素
 const previewBox = document.getElementById('preview-box') as HTMLElement;
@@ -620,7 +628,11 @@ function populateForm() {
 
   transColorInput.value = currentSettings.transColor || '#38bdf8';
   origColorInput.value = currentSettings.origColor || '#e2e8f0';
-  bgColorInput.value = currentSettings.bgColor || '#0f172a';
+  /* 透明预设（#00000000）input 存不下，回填时用 #000000 占位；真正的值留在 currentSettings 里，
+     由 persistSettings 的特判写回（见该函数 bgColor 一行）。 */
+  bgColorInput.value = currentSettings.bgColor === '#00000000'
+    ? '#000000'
+    : (currentSettings.bgColor || '#0f172a');
   if (aiColorInput) aiColorInput.value = currentSettings.aiIconColor || '#fbbf24';
 
   fontSizeRange.value = String(currentSettings.fontSize);
@@ -628,6 +640,12 @@ function populateForm() {
 
   bgOpacityRange.value = String(currentSettings.bgOpacity);
   bgOpacityVal.textContent = `${currentSettings.bgOpacity}%`;
+
+  if (quickPanelHeightRange && quickPanelHeightVal) {
+    const h = currentSettings.quickPanelHeight ?? 0;
+    quickPanelHeightRange.value = String(h);
+    quickPanelHeightVal.textContent = formatQuickPanelHeight(h);
+  }
 
   toggleAiSectionVisibility();
   syncSmoothSwitchers();
@@ -858,10 +876,19 @@ function persistSettings(immediate = false) {
     layoutOrder: layoutOrderSelect.value as any,
     transColor: transColorInput.value,
     origColor: origColorInput.value,
-    bgColor: bgColorInput.value,
+    /* 唯一真相源就是 currentSettings.bgColor：点色块与拖取色器都先写回它，这里原样下发。
+       不再从 bgColorInput.value 反推 —— <input type="color"> 存不下 8 位 hex，#00000000
+       只能显示成占位色，从 input 推导会把「透明」覆盖回旧颜色（这正是「别处改不了透明」的根因：
+       旧特判要求 input 恰好是 #000000，而点棋盘格时 input 保留的是上一个颜色，条件永不成立）。 */
+    bgColor: currentSettings.bgColor,
     aiIconColor: aiColorInput ? aiColorInput.value : currentSettings.aiIconColor || '#fbbf24',
     fontSize: parseInt(fontSizeRange.value, 10),
     bgOpacity: parseInt(bgOpacityRange.value, 10),
+    /* v0.5.5：0 = 自适应。必须一起写进 payload，否则这份 currentSettings 里没有它，
+       预览/回填会掉回默认值（存储层虽会合并，但内存里这份会短暂失真）。 */
+    quickPanelHeight: quickPanelHeightRange
+      ? parseInt(quickPanelHeightRange.value, 10) || 0
+      : currentSettings.quickPanelHeight ?? 0,
     offsetY: currentSettings.offsetY,
     syncOffsetMs: currentSettings.syncOffsetMs || 0
   };
@@ -886,6 +913,11 @@ document.addEventListener('visibilitychange', () => {
     flushPendingSettingsSave();
   }
 });
+
+/** v0.5.5：快捷面板高度徽标文案。0 是「自适应」，不显示成「0 px」 */
+function formatQuickPanelHeight(px: number): string {
+  return px > 0 ? `${px} px` : '自适应';
+}
 
 /**
  * 绑定所有控件事件
@@ -1022,7 +1054,14 @@ function bindEvents() {
 
   transColorInput.addEventListener('input', () => persistSettings());
   origColorInput.addEventListener('input', () => persistSettings());
-  bgColorInput.addEventListener('input', () => persistSettings());
+  /* 拖取色器 = 明确要一个具体颜色：先把真相源改成它，再走 persistSettings（该函数直接读
+     currentSettings.bgColor）。这样「透明 → 拖一下变具体色 → 再点透明」来回切换都不丢。
+     拖完要刷新色块选中态 —— 否则棋盘格还亮着，界面显示「透明已选」而实际存的是具体色。 */
+  bgColorInput.addEventListener('input', () => {
+    currentSettings.bgColor = bgColorInput.value;
+    persistSettings();
+    updateColorDotActiveStates();
+  });
   aiColorInput?.addEventListener('input', () => persistSettings());
 
   // 快捷色块点击
@@ -1040,6 +1079,9 @@ function bindEvents() {
         origColorInput.value = color;
         persistSettings(true);
       } else if (targetType === 'bgColor') {
+        /* 透明预设（#00000000）写不进 <input type="color">，所以透明时**故意不动 input**：
+           它在界面上仍显示上一个具体色作为占位，真相源由下面的 currentSettings.bgColor 承担。
+           非透明时 input 跟着走，保证「色块选中态 + 取色器显示值」两处一致。 */
         if (color !== '#00000000') bgColorInput.value = color;
         currentSettings.bgColor = color;
         persistSettings(true);
@@ -1059,6 +1101,13 @@ function bindEvents() {
 
   bgOpacityRange.addEventListener('input', () => {
     bgOpacityVal.textContent = `${bgOpacityRange.value}%`;
+    persistSettings();
+  });
+
+  quickPanelHeightRange?.addEventListener('input', () => {
+    if (quickPanelHeightVal) {
+      quickPanelHeightVal.textContent = formatQuickPanelHeight(parseInt(quickPanelHeightRange.value, 10) || 0);
+    }
     persistSettings();
   });
 
@@ -1266,6 +1315,10 @@ function updatePreview() {
   } = currentSettings;
 
   previewBox.style.backgroundColor = hexToRgba(bgColor, bgOpacity);
+  /* 「透明」= 无底色 + 无毛玻璃。预览块自身带 backdrop-filter: blur(12px)（模拟磨砂观感），
+     透明时必须一并去掉，否则预览仍是糊的、与真实字幕观感不一致，用户会觉得「透明没生效」。
+     用类名切换而不是内联改，样式仍归 style.css 管。 */
+  previewBox.classList.toggle('is-bg-transparent', bgColor === '#00000000');
   if (previewAi) {
     previewAi.style.color = aiIconColor;
   }

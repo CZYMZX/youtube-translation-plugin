@@ -11,7 +11,10 @@
     <!-- 头部区域 (Glass Header) -->
     <header class="popup-header">
       <div class="header-title">
-        <img src="/icon-48.png" class="header-logo-icon" width="28" height="28" alt="logo">
+        <!-- 品牌图标（双气泡无限符号）：静态 HTML 取不到 TS 常量，由 main.ts 的
+             mountBrandIcons() 在首帧把 ICON_BRAND 填进来；颜色走 --text-main，
+             不硬编码 #fff —— 将来若给弹窗加浅色主题，图标自动跟随变黑 -->
+        <span class="header-logo-icon" aria-hidden="true" data-icon="brand"></span>
         <div class="title-text">
           <h1>YouTube 智能字幕</h1>
           <p>ASR 断句拆分 · 语义标点 · 双语翻译</p>
@@ -522,6 +525,20 @@
         </div>
         <input type="range" id="bg-opacity" min="0" max="100" step="5" value="75" class="slider-range">
       </div>
+
+      <!-- 播放器内快捷面板高度（v0.5.5）：0 = 按内容自适应 -->
+      <div class="form-group">
+        <div class="label-with-value">
+          <label for="quick-panel-height">播放器快捷面板高度</label>
+          <span id="quick-panel-height-val" class="badge">429 px</span>
+        </div>
+        <input type="range" id="quick-panel-height" min="0" max="900" step="1" value="429" class="slider-range">
+        <div class="range-marks">
+          <span>0 = 自适应</span>
+          <span>429 px = 默认</span>
+          <span>900 px</span>
+        </div>
+      </div>
     </div>
 
     <!-- 底部预览区域 (毛玻璃卡片) -->
@@ -547,7 +564,7 @@
         </svg>
         高级设置
       </button>
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.5.1</span>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.6.0</span>
     </footer>
   </div>
 
