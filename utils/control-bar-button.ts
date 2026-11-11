@@ -4,21 +4,16 @@
  * 采用 ByteDance IconPark 官方矢量标准与黑白极简毛玻璃（Monochrome Glassmorphism）质感。
  */
 
+import { BRAND_PATH_D } from './icons';
 export interface ControlButtonCallbacks {
   onClick: () => void;
 }
 
-// ByteDance IconPark 风格单色黑白矢量对译图标
+// 品牌标识（双气泡无限符号）—— 纯透明背景，只保留 logo 本身（不放磨砂卡片）
 export const MONOCHROME_ICONPARK_BTN_SVG = `
-<svg viewBox="0 0 48 48" style="width: 24px !important; height: 24px !important; min-width: 24px !important; min-height: 24px !important; display: block !important; flex-shrink: 0 !important; pointer-events: none !important;" fill="none" xmlns="http://www.w3.org/2000/svg">
-  <!-- 外围极简微磨砂卡片 -->
-  <rect x="3" y="3" width="42" height="42" rx="10" fill="rgba(255, 255, 255, 0.08)" stroke="rgba(255, 255, 255, 0.22)" stroke-width="2.5"/>
-  <!-- ByteDance IconPark 经典中英翻译对译路径 (白色细线) -->
-  <path d="M28.3 35H38.7M41 40L38.7 35L41 40ZM26 40L28.3 35L26 40ZM28.3 35L33.5 23L38.7 35H28.3Z" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M16 8L17 11" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M7 13H27" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M11 17C11 17 12.6 22.6 16.6 25.7C20.6 28.8 27 31.2 27 31.2" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
-  <path d="M23 13C23 13 21.4 20.3 17.4 24.4C13.4 28.5 7 31.8 7 31.8" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+<svg viewBox="43 128 426 256" style="width: 34px !important; height: 34px !important; min-width: 34px !important; min-height: 34px !important; display: block !important; flex-shrink: 0 !important; pointer-events: none !important;" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- 白色双气泡无限符号（视窗已收紧到墨迹包围盒，无卡片底、无描边） -->
+  <path fill="#FFFFFF" fill-rule="evenodd" d="${BRAND_PATH_D}"/>
 </svg>
 `;
 
@@ -50,13 +45,9 @@ export class ControlBarButtonManager {
 
     const inner = target.querySelector('.yt-sub-btn-inner') as HTMLElement;
     if (inner) {
-      if (this.isEnabled) {
-        inner.style.opacity = '1';
-        inner.style.boxShadow = '0 0 6px rgba(255, 255, 255, 0.45)';
-      } else {
-        inner.style.opacity = '0.38';
-        inner.style.boxShadow = 'none';
-      }
+      // 无卡片底：启用/停用只切透明度，不画发光描边
+      inner.style.opacity = this.isEnabled ? '1' : '0.38';
+      inner.style.boxShadow = 'none';
     }
   }
 
@@ -164,20 +155,18 @@ export class ControlBarButtonManager {
       flex-shrink: 0 !important;
     `;
 
-    const stateStyle = this.isEnabled
-      ? 'opacity: 1; box-shadow: 0 0 6px rgba(255, 255, 255, 0.45);'
-      : 'opacity: 0.38;';
+    // 去除磨砂卡片后，启用态不再有发光描边，只用透明度区分开/关
+    const stateStyle = this.isEnabled ? 'opacity: 1;' : 'opacity: 0.38;';
 
     btn.innerHTML = `
       <div class="yt-sub-btn-inner" style="
-        width: 28px !important; height: 28px !important; min-width: 28px !important; min-height: 28px !important; max-width: 28px !important; max-height: 28px !important;
+        width: 36px !important; height: 36px !important; min-width: 36px !important; min-height: 36px !important; max-width: 36px !important; max-height: 36px !important;
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
         box-sizing: border-box !important;
         flex-shrink: 0 !important;
-        border-radius: 8px !important;
-        overflow: hidden !important;
+        overflow: visible !important;
         ${stateStyle}
         transition: transform 0.25s cubic-bezier(0.34, 0.96, 0.6, 0.99), filter 0.2s ease, opacity 0.2s ease;
       ">
