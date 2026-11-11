@@ -42,12 +42,36 @@ import {
 } from '../../utils/packs';
 import { buildPromptLayers, PROMPT_LAYER_ORDER, type PromptLayer } from '../../utils/prompt-layers';
 import { GLOSSARY_CATEGORY_LABELS, type GlossaryCategory, type GlossaryEntry } from '../../utils/glossary';
+import { mountBrandIcons } from '../../utils/icons';
 import { clearSentenceCache } from '../../utils/db-cache';
 import {
   clearAllAiTracks,
   getAiTrackStats,
   pruneAiTracks
 } from '../../utils/ai-track-cache';
+/* v0.5.6 字幕字体：内置字体表 / 自定义字体清洗与体积上限 / FontFace 注册都只在这一份 */
+import {
+  DEFAULT_FONT_FAMILY,
+  FONT_LANGS,
+  MAX_CUSTOM_FONTS,
+  MAX_CUSTOM_FONT_BYTES,
+  MAX_CUSTOM_FONTS_TOTAL_BYTES,
+  builtinFontsOf,
+  createCustomFontId,
+  customFontsOf,
+  customFontStack,
+  ensureCustomFontRegistered,
+  findBuiltinFont,
+  findCustomFont,
+  fontFormatOfMime,
+  fontStackOf,
+  formatFontBytes,
+  formatOfFileName,
+  guessFontLanguage,
+  totalCustomFontBytes,
+  type CustomFontPack,
+  type FontLang
+} from '../../utils/fonts';
 
 const $ = <T extends HTMLElement = HTMLElement>(sel: string): T | null => document.querySelector<T>(sel);
 const $$ = <T extends HTMLElement = HTMLElement>(sel: string): T[] => Array.from(document.querySelectorAll<T>(sel));
@@ -76,6 +100,10 @@ const SCENE_PROMPT_MAX = 4000;
 
 /* ══════════════════════════ 启动 ══════════════════════════ */
 
+/* 顶栏品牌图标：index.html 里是空壳占位，这里在 boot() 之前同步补齐，
+   不必等 getStoredSettings() 那一跳（否则顶栏会先空一帧） */
+mountBrandIcons();
+
 async function boot(): Promise<void> {
   settings = await getStoredSettings();
   customPacks = await loadCustomPacks();
@@ -88,12 +116,19 @@ async function boot(): Promise<void> {
 
   bindNav();
   bindControls();
+  /* 字幕背景「透明」开关：不带 data-setting，走自己的绑定（状态由 bgColor 反推） */
+  bindBgTransparent();
   bindWordColorEvents();
+  bindFontEvents();
+  /* 字体页签默认停在「当前选中字体所属语言」，否则用户看不到自己正在用的那个 */
+  fontLang = initialFontLang();
   renderScenarios();
   reflectSettings();
   /* 颜色区的展开 / 收起跟着「自动字幕逐词显现」走（勾选态已由 reflectSettings 同步） */
   syncWordColorBlock();
   applyPreview();
+  /* 字体卡片要读 settings 里的 fontFamily / customFonts，必须排在 reflect 之后 */
+  renderFontGrid();
   /* 默认只展开「正在使用」的那个厂牌（其余折叠，点整行展开） */
   expandedProviderId = settings.providerId || '';
   renderProviderList();
@@ -133,6 +168,7 @@ async function boot(): Promise<void> {
         /* 颜色区的展开 / 收起跟着「自动字幕逐词显现」走（勾选态已由 reflectSettings 同步） */
         syncWordColorBlock();
         applyPreview();
+        renderFontGrid();
         renderScenarios();
         renderProviderList();
         /* 另一处改了厂牌 Key / 降级顺序：这块列表必须跟着重画（拖拽中会自己跳过） */
@@ -244,6 +280,12 @@ function bindControls(): void {
 }
 
 function reflectSettings(): void {
+  /* 先记下「上一个具体色」：bgColor 的显示归一器与「关掉透明」都读它，
+     必须排在下面的遍历之前，否则本轮会拿到上一轮的值。 */
+  if (settings.bgColor && String(settings.bgColor).toLowerCase() !== '#00000000') {
+    lastOpaqueBgColor = settings.bgColor;
+  }
+
   $$('[data-setting]').forEach((el) => {
     const key = el.dataset.setting as keyof ExtensionSettings;
     const value = settings[key];
@@ -286,6 +328,8 @@ function reflectSettings(): void {
   syncFallbackDepend();
   /* 逐词高亮颜色：「跟随」勾选态 / 取色器可用性 / 显示值都跟着 settings 走 */
   syncWordColorRows();
+  /* 透明开关同理：勾选态与取色器置灰都由 bgColor 反推，不另存布尔字段 */
+  syncBgTransparent();
 }
 
 const RANGE_FORMAT: Record<string, (v: number) => string> = {
@@ -378,9 +422,19 @@ function displayWordColor(item: WordColorItem, raw?: unknown): string {
 /** 少数取值域特殊的设置项：显示前先归一（key → 归一函数）。
  *  逐词高亮颜色跟随时存的是空串，而 <input type="color"> 不接受空串 ——
  *  直接写进去会被浏览器当成 #000000，界面上就会出现「存的是跟随、显示的是黑」。 */
+/* 「透明」开关关掉时用来恢复的颜色：用户上一个具体值。
+   只活在内存里 —— 不落盘、不新增设置字段（数据只有一份，透明与否只看 bgColor === '#00000000'）。
+   重新打开页面时若原本是透明，这个记忆值回到默认色，此时关开关就落地到 #0f172a。 */
+let lastOpaqueBgColor = '#0f172a';
+
 const DISPLAY_NORMALIZERS: Partial<Record<string, (raw: unknown) => string>> = {
   wordHighlightColor: (raw) => displayWordColor(WORD_COLOR_ITEMS[0], raw),
-  wordHighlightTransColor: (raw) => displayWordColor(WORD_COLOR_ITEMS[1], raw)
+  wordHighlightTransColor: (raw) => displayWordColor(WORD_COLOR_ITEMS[1], raw),
+  /* bgColor = #00000000 时 <input type="color"> 存不下 8 位 hex，回填会自行退成 #000000。
+     这里换成上一个具体色：置灰的取色器仍显示有意义的值，关掉开关就能直接恢复。 */
+  bgColor: (raw) => (String(raw ?? '').toLowerCase() === '#00000000'
+    ? lastOpaqueBgColor
+    : String(raw ?? ''))
 };
 
 /**
@@ -400,6 +454,34 @@ function syncWordColorRows(): void {
       if (input.value !== shown) input.value = shown;
     }
   }
+}
+
+/**
+ * 字幕背景「透明」开关的控件状态：勾选态与取色器置灰，全部由 `settings.bgColor` 反推。
+ * 刻意不存独立的布尔字段 —— 否则「开关说透明、颜色却还是深蓝」这类两处状态打架迟早出现。
+ */
+function syncBgTransparent(): void {
+  const toggle = $<HTMLInputElement>('#bg-transparent-toggle');
+  const input = document.querySelector<HTMLInputElement>('input[data-setting="bgColor"]');
+  const transparent = String(settings.bgColor).toLowerCase() === '#00000000';
+
+  if (toggle) toggle.checked = transparent;
+  /* 透明时选颜色没有意义，置灰；框里仍是上一个具体色（见 DISPLAY_NORMALIZERS.bgColor），
+     关掉开关即可原样恢复，用户不必重新调一遍。 */
+  if (input) input.disabled = transparent;
+}
+
+/**
+ * 透明开关的点击：开 → 写透明预设 #00000000；关 → 恢复上一个具体色。
+ * 关的时候若没有记忆值（例如进页面时本就是透明），落到默认 #0f172a。
+ */
+function bindBgTransparent(): void {
+  const toggle = $<HTMLInputElement>('#bg-transparent-toggle');
+  if (!toggle) return;
+
+  toggle.addEventListener('change', () => {
+    void update({ bgColor: toggle.checked ? '#00000000' : lastOpaqueBgColor });
+  });
 }
 
 /**
@@ -481,8 +563,17 @@ async function update(rawPatch: Partial<ExtensionSettings>, options: { silent?: 
     (patch as unknown as Record<string, unknown>)[item.key] = next;
   }
   settings = { ...settings, ...patch };
+  /* 拖取色器选了具体色 → 记成「上一个具体色」，供关掉透明开关时恢复。
+     判据只看值本身（透明预设不参与记忆），所以点开关、拖取色器、存储回声三条路都对。 */
+  if (patch.bgColor !== undefined && String(patch.bgColor).toLowerCase() !== '#00000000') {
+    lastOpaqueBgColor = patch.bgColor;
+  }
   /* 「字幕样式」里的原文色 / 译文色改了 → 跟随时取色器显示的颜色要立刻跟着变 */
   if (patch.origColor !== undefined || patch.transColor !== undefined) syncWordColorRows();
+  /* 透明开关：勾选态与取色器置灰跟着 bgColor 走（点开关 / 拖取色器都汇到这里） */
+  if (patch.bgColor !== undefined) syncBgTransparent();
+  /* 字体：选中态 / 自定义字体增删都要立刻重画（tab 不跟着跳，用户可能正在别的语言页） */
+  if (patch.fontFamily !== undefined || patch.customFonts !== undefined) renderFontGrid();
   /* 「自动字幕逐词显现」开关变了 → 颜色区跟着展开 / 收起（依据设置里的实际值） */
   if (patch.asrWordReveal !== undefined) syncWordColorBlock();
   pendingPatch = { ...pendingPatch, ...patch };
@@ -1090,6 +1181,10 @@ async function saveScenePrompt(): Promise<void> {
 /* ══════════════════════════ 字幕预览 ══════════════════════════ */
 
 function hexToRgba(hex: string, alpha: number): string {
+  /* `#00000000` 是「完全透明无底色」预设（bgColor 专用）。它是 8 位 hex，写不进下面
+     只认 6 位的正则；不在这里特判就会掉进兜底分支，预览块显示成默认深蓝半透明 ——
+     看着就像「透明没生效」。与 popup/main.ts 的 hexToRgba 保持同一口径。 */
+  if (String(hex).toLowerCase() === '#00000000') return 'transparent';
   const m = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
   if (!m) return `rgba(15, 23, 42, ${alpha})`;
   const r = parseInt(m[1], 16);
@@ -1118,6 +1213,395 @@ function applyPreview(): void {
   orig.style.color = settings.origColor;
   trans.style.fontSize = `${settings.fontSize}px`;
   trans.style.color = settings.transColor;
+
+  /* v0.5.6：预览与真实字幕同一套字体口径（空串 = 不写 font-family，回到继承）。
+     自定义字体在这里也注册一次，预览里的字形才和视频页一致。 */
+  const stack = fontStackOf(settings.fontFamily, settings.customFonts);
+  for (const el of [orig, trans]) {
+    if (stack) el.style.fontFamily = stack;
+    else el.style.removeProperty('font-family');
+  }
+  const custom = findCustomFont(settings.customFonts, settings.fontFamily);
+  if (custom) void ensureCustomFontRegistered(custom);
+}
+
+/* ══════════════════════════ 字幕字体（v0.5.6） ══════════════════════════
+ * 需求：内置若干常用字体 + 允许用户上传字体，并按语言分类管理 ——
+ * 「不同语言的字体包相互独立、分开存储与展示」。
+ *
+ * 落点三条：
+ *   1. 内置字体只存 id（utils/fonts.ts#BUILTIN_FONTS 里是纯 CSS 系统栈，不打包文件）；
+ *   2. 自定义字体存 id + 整包 base64（只进 chrome.storage.local，见 utils/storage.ts）；
+ *   3. 选中即 `update({ fontFamily })`，与其它设置同一条防抖写盘链，不另造保存通道。
+ *
+ * 展示口径：页签 = 语言，切到哪个语言**只**渲染该语言的字体（内置 + 该语言的上传字体），
+ * 不把五个语言的字体堆成一条长列表。上传时语言由用户选（默认值按文件名猜，可改）。
+ */
+
+/** 当前查看的字体语言页签（纯 UI 状态，不落盘） */
+let fontLang: FontLang = 'zh';
+
+/** 上传弹层里待确认的文件（还没进 settings） */
+interface PendingFont {
+  file: File;
+  dataUrl: string;
+  name: string;
+  language: FontLang;
+  format: string;
+  size: number;
+}
+
+let pendingFonts: PendingFont[] = [];
+
+/** 当前选中字体所属语言（找不到归属就停在中文） */
+function initialFontLang(): FontLang {
+  const custom = findCustomFont(settings.customFonts, settings.fontFamily);
+  if (custom) return custom.language;
+  const builtin = findBuiltinFont(settings.fontFamily);
+  return builtin ? builtin.language : 'zh';
+}
+
+function syncFontTabs(): void {
+  const seg = $('#font-lang-seg');
+  if (!seg) return;
+  const buttons = Array.from(seg.querySelectorAll<HTMLButtonElement>('button[data-font-lang]'));
+  seg.style.setProperty('--seg-count', String(buttons.length));
+  buttons.forEach((btn) => {
+    const on = btn.dataset.fontLang === fontLang;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-selected', String(on));
+    if (on) seg.style.setProperty('--seg-index', String(buttons.indexOf(btn)));
+  });
+}
+
+/** 体积指示：已用 / 上限；超出时同时给出明确文案（不静默） */
+function syncFontQuota(): void {
+  const quota = $('#font-quota');
+  const total = totalCustomFontBytes(settings.customFonts);
+  if (!quota) return;
+  quota.textContent = `已用 ${formatFontBytes(total)} / ${formatFontBytes(MAX_CUSTOM_FONTS_TOTAL_BYTES)}`;
+  quota.classList.toggle('is-over', total > MAX_CUSTOM_FONTS_TOTAL_BYTES);
+}
+
+function buildFontCard(name: string, note: string, active: boolean): HTMLButtonElement {
+  const card = document.createElement('button');
+  card.type = 'button';
+  card.className = 'font-card' + (active ? ' is-active' : '');
+  card.setAttribute('aria-pressed', String(active));
+
+  const nameEl = document.createElement('span');
+  nameEl.className = 'font-card-name';
+  nameEl.textContent = name;
+  /* 名字用字体自己渲染：看不到字形就等于没选 */
+  const noteEl = document.createElement('span');
+  noteEl.className = 'font-card-note';
+  noteEl.textContent = note;
+
+  card.append(nameEl, noteEl);
+  return card;
+}
+
+function renderFontGrid(): void {
+  const grid = $('#font-grid');
+  if (!grid) return;
+
+  const activeId = String(settings.fontFamily || DEFAULT_FONT_FAMILY);
+  const builtins = builtinFontsOf(fontLang);
+  const customs = customFontsOf(settings.customFonts, fontLang);
+
+  grid.innerHTML = '';
+
+  for (const font of builtins) {
+    const wrap = document.createElement('div');
+    wrap.className = 'font-card-wrap';
+    const card = buildFontCard(font.name, font.note || '', activeId === font.id);
+    const nameEl = card.querySelector<HTMLElement>('.font-card-name');
+    /* 系统默认（stack 为空）不写 font-family：它展示的就是界面默认字形 */
+    if (nameEl && font.stack) nameEl.style.fontFamily = font.stack;
+    card.addEventListener('click', () => void update({ fontFamily: font.id }));
+    wrap.appendChild(card);
+    grid.appendChild(wrap);
+  }
+
+  for (const pack of customs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'font-card-wrap';
+    const note = `${formatFontBytes(pack.size)} · 本地上传`;
+    const card = buildFontCard(pack.name, note, activeId === pack.id);
+    const nameEl = card.querySelector<HTMLElement>('.font-card-name');
+    if (nameEl) nameEl.style.fontFamily = customFontStack(pack);
+    /* 卡片上的字形也要真实：注册一次（按 id 去重，重复调用没有额外开销） */
+    void ensureCustomFontRegistered(pack);
+    card.addEventListener('click', () => void update({ fontFamily: pack.id }));
+
+    const del = document.createElement('button');
+    del.type = 'button';
+    del.className = 'font-card-del';
+    del.textContent = '×';
+    del.title = `删除字体「${pack.name}」`;
+    del.setAttribute('aria-label', `删除字体 ${pack.name}`);
+    bindFontDelete(del, () => void removeCustomFont(pack.id));
+
+    wrap.append(card, del);
+    grid.appendChild(wrap);
+  }
+
+  const empty = $('#font-empty');
+  if (empty) empty.hidden = builtins.length + customs.length > 0;
+
+  syncFontTabs();
+  syncFontQuota();
+}
+
+/**
+ * 删除键的二次确认：第一次点击变成「删除？」，3 秒内再点才真删。
+ * 不用 window.confirm —— 项目里没有这个惯例，原生弹窗还会阻塞存储回声的重绘。
+ * 所有点击都在**同一个**监听器里分流（挂两个监听器会让第一次点击就走到删除分支）。
+ */
+function bindFontDelete(btn: HTMLButtonElement, onConfirm: () => void): void {
+  let timer: number | undefined;
+  const reset = () => {
+    btn.dataset.confirm = '';
+    btn.classList.remove('is-confirm');
+    btn.textContent = '×';
+    window.clearTimeout(timer);
+  };
+
+  btn.addEventListener('click', (event) => {
+    event.stopPropagation();
+    if (btn.dataset.confirm === '1') {
+      window.clearTimeout(timer);
+      onConfirm();
+      return;
+    }
+    btn.dataset.confirm = '1';
+    btn.classList.add('is-confirm');
+    btn.textContent = '删除？';
+    timer = window.setTimeout(reset, 3000) as unknown as number;
+  });
+}
+
+/**
+ * 删除一个自定义字体。
+ * 若它正被选中 → 同时把 fontFamily 退回 `system`（否则字幕会指向一个不存在的字体，
+ * 渲染层虽然会兜底回退，但界面上的选中态会变成「一个都没选」）。
+ */
+async function removeCustomFont(id: string): Promise<void> {
+  const next = (settings.customFonts || []).filter((font) => font.id !== id);
+  const patch: Partial<ExtensionSettings> = { customFonts: next };
+  const wasActive = String(settings.fontFamily || '') === id;
+  if (wasActive) patch.fontFamily = DEFAULT_FONT_FAMILY;
+  await update(patch);
+  toast(wasActive ? '字体已删除，字幕回退为系统默认' : '字体已删除');
+}
+
+function resetUploadDialog(): void {
+  pendingFonts = [];
+  const list = $('#fu-list');
+  if (list) list.innerHTML = '';
+  const error = $('#fu-error');
+  if (error) {
+    error.textContent = '';
+    error.classList.add('hidden');
+  }
+  const input = $<HTMLInputElement>('#font-file-input');
+  if (input) input.value = '';
+}
+
+function showUploadError(message: string): void {
+  const error = $('#fu-error');
+  if (!error) return;
+  error.textContent = message;
+  error.classList.toggle('hidden', !message);
+}
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '');
+    reader.onerror = () => resolve('');
+    reader.readAsDataURL(file);
+  });
+}
+
+function renderPendingFonts(): void {
+  const list = $('#fu-list');
+  if (!list) return;
+  list.innerHTML = '';
+
+  pendingFonts.forEach((item, index) => {
+    const row = document.createElement('div');
+    row.className = 'font-upload-item';
+
+    const head = document.createElement('div');
+    head.className = 'font-upload-item-head';
+    const file = document.createElement('b');
+    file.textContent = item.file.name;
+    const meta = document.createElement('span');
+    meta.textContent = `${formatFontBytes(item.size)} · ${item.format}`;
+    head.append(file, meta);
+
+    const controls = document.createElement('div');
+    controls.className = 'font-upload-row';
+
+    const nameInput = document.createElement('input');
+    nameInput.type = 'text';
+    nameInput.className = 'ctl ctl-text';
+    nameInput.maxLength = 40;
+    nameInput.value = item.name;
+    nameInput.placeholder = '字体名称';
+    nameInput.autocomplete = 'off';
+    nameInput.addEventListener('input', () => {
+      pendingFonts[index].name = nameInput.value.trim() || item.name;
+    });
+
+    const select = document.createElement('select');
+    select.className = 'ctl ctl-select';
+    select.setAttribute('aria-label', `「${item.file.name}」的语言归属`);
+    for (const lang of FONT_LANGS) {
+      const option = document.createElement('option');
+      option.value = lang.id;
+      option.textContent = lang.label;
+      option.selected = lang.id === item.language;
+      select.appendChild(option);
+    }
+    select.addEventListener('change', () => {
+      pendingFonts[index].language = select.value as FontLang;
+    });
+
+    controls.append(nameInput, select);
+    row.append(head, controls);
+    list.appendChild(row);
+  });
+}
+
+/**
+ * 收文件：先过格式 / 单文件 5MB / 累计 20MB / 条数四道闸，任何一条不过都**明确报出来**，
+ * 不静默丢弃。通过的进 pendingFonts，等用户确认语言与名称后再写盘。
+ */
+async function handleFontFiles(files: File[]): Promise<void> {
+  const errors: string[] = [];
+  const accepted: PendingFont[] = [];
+  const existing = settings.customFonts || [];
+  let projected = totalCustomFontBytes(existing);
+
+  for (const file of files) {
+    const format = formatOfFileName(file.name) || fontFormatOfMime(file.type);
+    if (!format) {
+      errors.push(`${file.name}：格式不支持，只接受 .ttf / .otf / .woff / .woff2`);
+      continue;
+    }
+    if (file.size > MAX_CUSTOM_FONT_BYTES) {
+      errors.push(`${file.name}：${formatFontBytes(file.size)}，超过单文件上限 ${formatFontBytes(MAX_CUSTOM_FONT_BYTES)}`);
+      continue;
+    }
+    if (existing.length + accepted.length >= MAX_CUSTOM_FONTS) {
+      errors.push(`自定义字体最多 ${MAX_CUSTOM_FONTS} 个，请先删除部分字体`);
+      break;
+    }
+    if (projected + file.size > MAX_CUSTOM_FONTS_TOTAL_BYTES) {
+      errors.push(`已超出上限（累计 ${formatFontBytes(MAX_CUSTOM_FONTS_TOTAL_BYTES)}），请先删除部分字体再加 ${file.name}`);
+      continue;
+    }
+
+    const dataUrl = await readFileAsDataUrl(file);
+    if (!dataUrl) {
+      errors.push(`${file.name}：读取失败，请重试`);
+      continue;
+    }
+    projected += file.size;
+    accepted.push({
+      file,
+      dataUrl,
+      name: file.name.replace(/\.[a-z0-9]+$/i, '').slice(0, 40) || '未命名字体',
+      language: guessFontLanguage(file.name),
+      format,
+      size: file.size
+    });
+  }
+
+  pendingFonts = [...pendingFonts, ...accepted];
+  renderPendingFonts();
+  showUploadError(errors.join('；'));
+
+  if (accepted.length === 0 && errors.length > 0) {
+    /* 弹层没打开的话错误提示看不见，这里同步一条 toast，保证「不静默失败」 */
+    toast(errors[0]);
+    return;
+  }
+  const dialog = $<HTMLDialogElement>('#font-upload-dialog');
+  if (dialog && accepted.length > 0 && !dialog.open) dialog.showModal();
+}
+
+/** 确认上传：把待定文件变成 CustomFontPack（id 现生成），整份写回设置 */
+async function commitPendingFonts(): Promise<void> {
+  if (pendingFonts.length === 0) {
+    showUploadError('还没有可加入的字体，请先选择文件');
+    return;
+  }
+  const existing = settings.customFonts || [];
+  const packs: CustomFontPack[] = pendingFonts.map((item) => ({
+    id: createCustomFontId(existing),
+    name: item.name.trim().slice(0, 40) || '未命名字体',
+    language: item.language,
+    format: item.format,
+    size: item.size,
+    dataUrl: item.dataUrl,
+    createdAt: Date.now()
+  }));
+
+  const total = totalCustomFontBytes(existing) + packs.reduce((sum, pack) => sum + pack.size, 0);
+  if (total > MAX_CUSTOM_FONTS_TOTAL_BYTES) {
+    showUploadError(`已超出上限（累计 ${formatFontBytes(MAX_CUSTOM_FONTS_TOTAL_BYTES)}），请先删除部分字体`);
+    return;
+  }
+
+  const dialog = $<HTMLDialogElement>('#font-upload-dialog');
+  await update({ customFonts: [...existing, ...packs] });
+  /* 上传到哪个语言就切到哪个语言页：用户能立刻看到刚加的卡片 */
+  if (packs[0]) fontLang = packs[0].language;
+  resetUploadDialog();
+  renderFontGrid();
+  if (dialog?.open) closeDialogAnimated(dialog);
+  toast(`已加入 ${packs.length} 个字体`);
+}
+
+function bindFontEvents(): void {
+  const seg = $('#font-lang-seg');
+  seg?.addEventListener('click', (event) => {
+    const btn = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>('button[data-font-lang]');
+    if (!btn) return;
+    const next = btn.dataset.fontLang as FontLang | undefined;
+    if (!next || next === fontLang) return;
+    fontLang = next;
+    renderFontGrid();
+  });
+
+  $('#btn-upload-font')?.addEventListener('click', () => {
+    const existing = settings.customFonts || [];
+    if (existing.length >= MAX_CUSTOM_FONTS) {
+      toast(`自定义字体最多 ${MAX_CUSTOM_FONTS} 个，请先删除部分字体`);
+      return;
+    }
+    /* 先清空上一轮的待定文件，再打开系统文件选择器；选完才弹语言确认层 */
+    resetUploadDialog();
+    $<HTMLInputElement>('#font-file-input')?.click();
+  });
+
+  const input = $<HTMLInputElement>('#font-file-input');
+  input?.addEventListener('change', () => {
+    const files = Array.from(input.files || []);
+    if (files.length === 0) return;
+    void handleFontFiles(files);
+  });
+
+  $('#fu-cancel')?.addEventListener('click', () => {
+    const dialog = $<HTMLDialogElement>('#font-upload-dialog');
+    if (dialog?.open) closeDialogAnimated(dialog);
+    resetUploadDialog();
+  });
+
+  $('#fu-save')?.addEventListener('click', () => void commitPendingFonts());
 }
 
 /* ══════════════════════════ 术语库 ══════════════════════════ */
@@ -3965,7 +4449,7 @@ function closeDialogAnimated(dialog: HTMLDialogElement | null): void {
 
 /** Esc 关闭也走同一套反向动画（原生 cancel 之后就是关闭，来不及做过渡） */
 function bindDialogMotion(): void {
-  for (const id of ['#custom-model-dialog', '#new-pack-dialog', '#new-scene-dialog', '#template-dialog']) {
+  for (const id of ['#custom-model-dialog', '#new-pack-dialog', '#new-scene-dialog', '#template-dialog', '#font-upload-dialog']) {
     const dialog = $(id) as HTMLDialogElement | null;
     dialog?.addEventListener('cancel', (event) => {
       event.preventDefault();

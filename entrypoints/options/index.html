@@ -10,15 +10,12 @@
   <body>
     <header class="topbar">
       <div class="brand">
-        <span class="brand-mark" aria-hidden="true">
-          <svg viewBox="0 0 48 48" fill="none" stroke="currentColor" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="7" y="12" width="34" height="24" rx="5" />
-            <path d="M14 22h9M14 28h16M28 22h6" />
-          </svg>
-        </span>
+        <!-- 品牌图标（双气泡无限符号）：静态 HTML 取不到 TS 常量，由 main.ts 的
+             mountBrandIcons() 首帧注入 ICON_BRAND；颜色沿用 .brand-mark 的 --text-main -->
+        <span class="brand-mark" aria-hidden="true" data-icon="brand"></span>
         <span class="brand-text">
           <strong>字幕断句翻译器</strong>
-          <span class="brand-sub">高级设置<i id="app-version">v0.5.1</i></span>
+          <span class="brand-sub">高级设置<i id="app-version">v0.6.0</i></span>
         </span>
       </div>
       <div class="topbar-actions">
@@ -602,6 +599,40 @@
               </div>
             </div>
 
+            <!-- v0.5.6 字幕字体：内置系统字体栈 + 用户上传字体，按语言分组、互不混排 -->
+            <div class="row row-stack" id="row-font">
+              <div class="row-text">
+                <span class="row-title">字幕字体</span>
+                <span class="row-desc">只作用于原文与译文两行字幕，不影响播放器其它界面。内置字体用系统自带字形，不额外下载；上传的字体按语言分开存放，切到哪个语言只看得到哪个语言的字体。</span>
+              </div>
+              <div class="row-control row-control-wide">
+                <div class="seg seg-5" id="font-lang-seg" role="tablist" aria-label="字体语言">
+                  <div class="seg-glider" aria-hidden="true"></div>
+                  <button type="button" role="tab" data-font-lang="zh" aria-selected="true">中文</button>
+                  <button type="button" role="tab" data-font-lang="ja" aria-selected="false">日文</button>
+                  <button type="button" role="tab" data-font-lang="en" aria-selected="false">英文</button>
+                  <button type="button" role="tab" data-font-lang="ko" aria-selected="false">韩文</button>
+                  <button type="button" role="tab" data-font-lang="other" aria-selected="false">其它</button>
+                </div>
+
+                <div class="font-grid" id="font-grid" aria-live="polite"></div>
+                <p class="row-note font-empty" id="font-empty" hidden>这个语言下还没有字体。点下面的「＋ 上传字体」加一个，只会出现在当前语言里。</p>
+
+                <div class="font-actions">
+                  <button type="button" class="btn btn-quiet font-upload" id="btn-upload-font">＋ 上传字体</button>
+                  <span class="font-quota" id="font-quota">已用 0 KB / 20 MB</span>
+                  <input
+                    type="file"
+                    id="font-file-input"
+                    accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"
+                    multiple
+                    hidden
+                  />
+                </div>
+                <p class="row-note" id="font-hint">单文件上限 5 MB，累计上限 20 MB；字体只存在本机，不随账号同步。</p>
+              </div>
+            </div>
+
             <div class="row">
               <div class="row-text">
                 <span class="row-title">字号</span>
@@ -650,6 +681,22 @@
                 <label class="color-field"><span>背景</span><input type="color" data-setting="bgColor" /></label>
                 <label class="color-field"><span>原文</span><input type="color" data-setting="origColor" /></label>
                 <label class="color-field"><span>译文</span><input type="color" data-setting="transColor" /></label>
+              </div>
+            </div>
+
+            <!-- 字幕背景「透明」：语义是无底色 + 无毛玻璃。
+                 刻意**不带 data-setting** —— 它的状态一律由 bgColor === '#00000000' 反推，
+                 不新增布尔字段，避免「开关说透明、颜色说深蓝」这种两份状态打架。 -->
+            <div class="row">
+              <div class="row-text">
+                <span class="row-title">字幕背景透明</span>
+                <span class="row-desc">开启后字幕背景完全透明：既没有底色，也没有毛玻璃模糊。关闭则恢复上一次的具体颜色。</span>
+              </div>
+              <div class="row-control">
+                <label class="switch" aria-label="字幕背景透明">
+                  <input type="checkbox" id="bg-transparent-toggle" />
+                  <span class="track"><span class="knob"></span></span>
+                </label>
               </div>
             </div>
 
@@ -959,6 +1006,26 @@
         <footer class="modal-foot">
           <button type="button" class="btn btn-quiet" id="tpl-close">关闭</button>
           <button type="button" class="btn btn-primary" id="tpl-copy">复制</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <!-- ─────────── 上传字体弹层（v0.5.6） ─────────── -->
+    <!-- 语言归属必须由用户确认：默认值按文件名猜一个，但绝不把没猜出来的直接丢进「其它」 -->
+    <dialog class="modal" id="font-upload-dialog" aria-labelledby="fu-title">
+      <div class="modal-body">
+        <header class="modal-head">
+          <h2 id="fu-title">上传字体</h2>
+          <p>字体只保存在本机。每个文件都要选一个语言归属 —— 之后只会出现在那个语言的字体页里，不会混进别的语言。</p>
+        </header>
+
+        <div class="font-upload-list" id="fu-list"></div>
+
+        <p class="field-error hidden" id="fu-error" role="alert"></p>
+
+        <footer class="modal-foot">
+          <button type="button" class="btn btn-quiet" id="fu-cancel">取消</button>
+          <button type="button" class="btn btn-primary" id="fu-save">加入字体库</button>
         </footer>
       </div>
     </dialog>

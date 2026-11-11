@@ -135,17 +135,21 @@ body {
 .brand-mark {
   display: grid;
   place-items: center;
-  width: 30px;
-  height: 30px;
+  width: 39px;
+  height: 39px;
   border-radius: 9px;
   border: 1px solid var(--border-glass-bright);
   background: rgba(255, 255, 255, 0.06);
   color: var(--text-main);
 }
 
+/* 品牌图标：20px 画布 → 墨迹 16.0×9.3（512 画布内墨迹占 80.08%×46.60%）。
+   原字幕框符号在 17px 画布下可见 13.25×9.70；新图形更宽扁，等宽需 16.5px 画布，
+   取 20px 让「墨迹宽 16px」与弹窗头部一致，方框仍是 30px 不动。 */
 .brand-mark svg {
-  width: 17px;
-  height: 17px;
+  width: 34px;
+  height: 34px;
+  display: block;
 }
 
 .brand-text {
@@ -484,6 +488,198 @@ body {
 .row-control-wide {
   width: 100%;
 }
+
+/* ───────────────────────── 字幕字体（v0.5.6） ─────────────────────────
+ * 只有这一块会出现「字体本身渲染自己名字」的卡片：.font-card-name 的
+ * font-family 由 main.ts 按字体栈写内联，看不到效果就不算选字体。
+ * 视觉沿用行内的黑白毛玻璃，不引入新色板。 */
+.font-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+
+.font-card-wrap {
+  position: relative;
+  min-width: 0;
+}
+
+.font-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+  min-height: 62px;
+  padding: 11px 14px 10px;
+  text-align: left;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-glass);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-main);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo),
+    transform var(--dur-instant) var(--ease-out-circ);
+}
+
+.font-card:hover {
+  border-color: var(--border-glass-bright);
+  background: rgba(255, 255, 255, 0.075);
+}
+
+.font-card:active {
+  transform: scale(0.985);
+}
+
+.font-card:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.55);
+  outline-offset: 2px;
+}
+
+/* 选中：亮边框 + 右下角勾，不靠颜色区分（配色里没有「强调色」这一档） */
+.font-card.is-active {
+  border-color: rgba(255, 255, 255, 0.58);
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.22);
+}
+
+.font-card.is-active::after {
+  content: '✓';
+  position: absolute;
+  right: 11px;
+  bottom: 8px;
+  font-size: 12px;
+  color: var(--text-main);
+}
+
+.font-card-name {
+  display: block;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.35;
+  padding-right: 22px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.font-card-note {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  font-family: inherit;
+  font-size: var(--font-note);
+  color: var(--text-dim);
+  line-height: 1.5;
+  overflow: hidden;
+}
+
+/* 自定义字体的删除键：右上角小 ×；第一次点变「删除？」，再点才真删 */
+.font-card-del {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border: none;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out-expo),
+    background-color var(--dur-fast) var(--ease-out-expo);
+}
+
+.font-card-del:hover {
+  color: var(--text-main);
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.font-card-del.is-confirm {
+  color: #ffb4b4;
+  background: rgba(255, 107, 107, 0.16);
+  font-size: 11px;
+}
+
+.font-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.font-quota {
+  font-size: var(--font-note);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+.font-quota.is-over {
+  color: #ffb4b4;
+}
+
+.font-empty {
+  margin: 0;
+}
+
+/* 上传弹层：每个文件一行（名称可改 + 语言必选） */
+.font-upload-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 44vh;
+  overflow-y: auto;
+}
+
+.font-upload-item {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.font-upload-item-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--font-note);
+  color: var(--text-dim);
+}
+
+.font-upload-item-head b {
+  color: var(--text-body);
+  font-weight: 600;
+}
+
+.font-upload-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.font-upload-row .ctl-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.font-upload-row .ctl-select {
+  flex: 0 0 118px;
+  min-width: 118px;
+}
+
 
 /* ───────────────────────── 控件 ───────────────────────── */
 .ctl {
@@ -1470,6 +1666,20 @@ select.gloss-input option {
 .color-field input::-webkit-color-swatch {
   border: 1px solid rgba(255, 255, 255, 0.28);
   border-radius: 50%;
+}
+
+/* 字幕背景设为「透明」时，背景取色器被 disable（见 main.ts 的 syncBgTransparent）：
+   透明状态下选颜色没有意义，所以整枚胶囊压暗、色点去色，让「已置灰」看得见。
+   原生 disabled 只改默认控件的外观，这里 swatch 是自定义的，不加这条看不出区别。
+   只匹配含 disabled 子控件的 .color-field —— 原文 / 译文两个颜色框不受影响。 */
+.color-field:has(input:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.color-field input:disabled {
+  cursor: not-allowed;
+  filter: grayscale(1);
 }
 
 /* ── 「跟随」复选框 ──
