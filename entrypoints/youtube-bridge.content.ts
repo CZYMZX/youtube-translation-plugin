@@ -6,7 +6,7 @@ export default defineContentScript({
   runAt: 'document_start',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.6.0]%c MAIN-world bridge loaded (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.6.1]%c MAIN-world bridge loaded (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -119,25 +119,27 @@ export default defineContentScript({
       }
     }
 
+    function postToContent(payload: Record<string, unknown>) {
+      const origin = window.location.origin && window.location.origin !== 'null' ? window.location.origin : '*';
+      window.postMessage(payload, origin);
+    }
+
     function broadcastTracks(reason: string) {
       const tracks = getCaptionTracks();
       const player = getPlayer();
       const videoData = player?.getVideoData?.() || null;
       const clientInfo = getHostClientInfo();
 
-      window.postMessage(
-        {
-          source: 'YT_SUB_TRANSLATOR_MAIN',
-          type: 'CAPTION_TRACKS_FOUND',
-          tracks: tracks || [],
-          videoData: videoData,
-          clientInfo: clientInfo,
-          sourceLang: getSourceLang(),
-          isAd: isAdPlaying(),
-          reason: reason || 'poll'
-        },
-        '*'
-      );
+      postToContent({
+        source: 'YT_SUB_TRANSLATOR_MAIN',
+        type: 'CAPTION_TRACKS_FOUND',
+        tracks: tracks || [],
+        videoData: videoData,
+        clientInfo: clientInfo,
+        sourceLang: getSourceLang(),
+        isAd: isAdPlaying(),
+        reason: reason || 'poll'
+      });
     }
 
     /* ── 模拟点击节流（0.5.1 A3）──────────────────────────────────────────────
@@ -247,32 +249,30 @@ export default defineContentScript({
           const urlStr = (this as any)._timedtextUrl || '';
           if (urlStr.includes('/api/timedtext') && !urlStr.includes('from_sub_translator=1')) {
             // 先广播 URL (用于备用)
-            window.postMessage(
-              {
-                source: 'YT_SUB_TRANSLATOR_MAIN',
-                type: 'CAPTURED_TIMEDTEXT_URL',
-                url: urlStr
-              },
-              '*'
-            );
+            postToContent({
+              source: 'YT_SUB_TRANSLATOR_MAIN',
+              type: 'CAPTURED_TIMEDTEXT_URL',
+              url: urlStr
+            });
 
-            // 核心突破（借鉴沉浸式翻译）: 监听响应完成，直接截获已下载完毕的 responseText
-            this.addEventListener('load', function () {
-              try {
-                if (this.status === 200 && this.responseText && this.responseText.length > 20) {
-                  console.log('[YT-Sub-Translator] 借鉴沉浸式翻译: 零拷贝截获 YouTube 播放器原生完成的 timedtext responseText!');
-                  window.postMessage(
-                    {
+            // 核心突破（借鉴沉浸式翻译）: 监听响应完成，直接截获已下载完毕的 responseText（once 防止 XHR 复用累积监听）
+            this.addEventListener(
+              'load',
+              function () {
+                try {
+                  if (this.status === 200 && this.responseText && this.responseText.length > 20) {
+                    console.log('[YT-Sub-Translator] 借鉴沉浸式翻译: 零拷贝截获 YouTube 播放器原生完成的 timedtext responseText!');
+                    postToContent({
                       source: 'YT_SUB_TRANSLATOR_MAIN',
                       type: 'CAPTURED_TIMEDTEXT_RESPONSE',
                       url: urlStr,
                       responseText: this.responseText
-                    },
-                    '*'
-                  );
-                }
-              } catch (err) {}
-            });
+                    });
+                  }
+                } catch (err) {}
+              },
+              { once: true }
+            );
           }
         } catch (e) {}
         return (origSend as any).apply(this, args);
@@ -288,14 +288,11 @@ export default defineContentScript({
           else if (input && typeof (input as any).url === 'string') urlStr = (input as any).url;
 
           if (urlStr.includes('/api/timedtext') && !urlStr.includes('from_sub_translator=1')) {
-            window.postMessage(
-              {
-                source: 'YT_SUB_TRANSLATOR_MAIN',
-                type: 'CAPTURED_TIMEDTEXT_URL',
-                url: urlStr
-              },
-              '*'
-            );
+            postToContent({
+              source: 'YT_SUB_TRANSLATOR_MAIN',
+              type: 'CAPTURED_TIMEDTEXT_URL',
+              url: urlStr
+            });
           }
         } catch (e) {}
 
@@ -308,15 +305,12 @@ export default defineContentScript({
                 const text = await response.clone().text();
                 if (text && text.length > 20) {
                   console.log('[YT-Sub-Translator] 借鉴沉浸式翻译: Fetch 零拷贝截获 timedtext responseText!');
-                  window.postMessage(
-                    {
-                      source: 'YT_SUB_TRANSLATOR_MAIN',
-                      type: 'CAPTURED_TIMEDTEXT_RESPONSE',
-                      url: urlStr,
-                      responseText: text
-                    },
-                    '*'
-                  );
+                  postToContent({
+                    source: 'YT_SUB_TRANSLATOR_MAIN',
+                    type: 'CAPTURED_TIMEDTEXT_RESPONSE',
+                    url: urlStr,
+                    responseText: text
+                  });
                 }
               }
             } catch (err) {}
@@ -335,6 +329,7 @@ export default defineContentScript({
 
     // 监听 Content Script 的控制指令
     window.addEventListener('message', (event) => {
+      if (event.source !== window) return;
       if (event.data && event.data.source === 'YT_SUB_TRANSLATOR_CONTENT') {
         if (event.data.action === 'REQUEST_TRACKS') {
           broadcastTracks('request');
@@ -349,13 +344,15 @@ export default defineContentScript({
       }
     });
 
-    // 挂载播放器内部原生事件监听
+    // 挂载播放器内部原生事件监听（按 player 实例去重，避免 SPA 复用 #movie_player 导致重复注册风暴）
+    const attachedPlayers = new WeakSet<object>();
     const attachPlayerEventListeners = () => {
       const player = getPlayer();
-      if (!player) return;
+      if (!player || typeof player !== 'object' || attachedPlayers.has(player)) return;
 
       try {
         if (typeof player.addEventListener === 'function') {
+          attachedPlayers.add(player);
           player.addEventListener('onCaptionsTrackListChanged', () => {
             console.log('[YT-Sub-Translator] onCaptionsTrackListChanged triggered');
             broadcastTracks('player_captions_list_changed');
@@ -368,16 +365,21 @@ export default defineContentScript({
       } catch (e) {}
     };
 
-    // 监听 YouTube SPA 路由与播放器变动事件
+    // 监听 YouTube SPA 路由与播放器变动事件（连续切页清理上一次延迟探测 timer）
+    let navTimers: Array<ReturnType<typeof setTimeout>> = [];
     window.addEventListener('yt-navigate-finish', () => {
+      for (const t of navTimers) clearTimeout(t);
+      navTimers = [];
       attachPlayerEventListeners();
       broadcastTracks('yt-navigate-finish-immediate');
-      setTimeout(() => broadcastTracks('yt-navigate-finish-500'), 500);
-      setTimeout(() => {
-        broadcastTracks('yt-navigate-finish-1000');
-        triggerSubtitle(false);
-      }, 1000);
-      setTimeout(() => broadcastTracks('yt-navigate-finish-2500'), 2500);
+      navTimers.push(setTimeout(() => broadcastTracks('yt-navigate-finish-500'), 500));
+      navTimers.push(
+        setTimeout(() => {
+          broadcastTracks('yt-navigate-finish-1000');
+          triggerSubtitle(false);
+        }, 1000)
+      );
+      navTimers.push(setTimeout(() => broadcastTracks('yt-navigate-finish-2500'), 2500));
     });
 
     // 周期性轮询检测播放器就绪 (最多持续 15 秒轮询，确保慢速网络和异步字幕就绪)

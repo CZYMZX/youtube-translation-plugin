@@ -1,8 +1,18 @@
 import { defineBackground } from 'wxt/utils/define-background';
 import type { ExtensionMessage } from '../types';
-import { translateSentenceBatch, fetchAvailableModels } from '../utils/translator';
-import { getStoredSettings, saveStoredSettings } from '../utils/storage';
+import { translateSentenceBatchDetailed, fetchAvailableModels } from '../utils/translator';
+import { getStoredSettings, saveStoredSettings, stripCustomFonts } from '../utils/storage';
 import { normalizeCaptionResponse } from '../utils/caption-parser';
+import { clearSentenceCache } from '../utils/db-cache';
+import {
+  clearAiTrack,
+  clearAllAiTracks,
+  getAiTrackStats,
+  loadAiTrack,
+  pruneAiTracks,
+  saveAiTrack,
+  type AiTrackRecord
+} from '../utils/ai-track-cache';
 
 const YOUTUBE_HOST_RE = /(^|\.)youtube\.com$/i;
 const VIDEO_ID_RE = /^[A-Za-z0-9_-]{11}$/;
@@ -37,6 +47,16 @@ function sanitizeCaptionUrl(raw: unknown): string | null {
   }
 }
 
+function stripFmtParam(rawUrl: string): string {
+  try {
+    const u = new URL(rawUrl);
+    u.searchParams.delete('fmt');
+    return u.toString();
+  } catch {
+    return rawUrl.replace(/([?&])fmt=json3(&?)/, (_, p1, p2) => (p1 === '?' && p2 ? '?' : p2 ? p1 : ''));
+  }
+}
+
 async function fetchWithTimeout(
   url: string,
   init: RequestInit = {},
@@ -53,7 +73,7 @@ async function fetchWithTimeout(
 
 export default defineBackground(() => {
   console.log(
-    '%c[YT-Sub-Translator v0.6.0]%c Background service worker active (Immersive Translate Mode)',
+    '%c[YT-Sub-Translator v0.6.1]%c Background service worker active (Immersive Translate Mode)',
     'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
     'color:#16a34a;font-weight:bold;margin-left:4px'
   );
@@ -93,7 +113,7 @@ export default defineBackground(() => {
             let data = await doFetch(safeUrl);
             // 若带有 fmt=json3 但拉下来没有解析到有效 events，尝试回退去除 fmt 参数拉取原生 XML 格式
             if ((!data.events || data.events.length === 0) && safeUrl.includes('fmt=json3')) {
-              const fallbackUrl = safeUrl.replace(/[?&]fmt=json3/, '');
+              const fallbackUrl = stripFmtParam(safeUrl);
               console.log('[YT-Sub-Translator] Json3 returned empty events, trying raw XML fallback');
               try {
                 const xmlData = await doFetch(fallbackUrl);
@@ -110,7 +130,7 @@ export default defineBackground(() => {
             // 如果初次请求因 fmt=json3 报错，尝试回退原 URL
             if (safeUrl.includes('fmt=json3')) {
               try {
-                const fallbackUrl = safeUrl.replace(/[?&]fmt=json3/, '');
+                const fallbackUrl = stripFmtParam(safeUrl);
                 const xmlData = await doFetch(fallbackUrl);
                 sendResponse({ success: true, data: xmlData });
                 return;
@@ -254,10 +274,20 @@ export default defineBackground(() => {
       case 'TRANSLATE_BATCH': {
         // contextBefore（需求 7）：续翻时紧邻上文的原文+已有译文，原样透传给翻译层，
         // 后台不做任何加工 —— 它只影响 user 消息，不进缓存键。
-        const { texts, targetLang, settings, noFallback, bypassCache, contextBefore } = message.payload;
-        translateSentenceBatch(texts, targetLang, settings, { noFallback, bypassCache, contextBefore })
-          .then((translations) => {
-            sendResponse({ success: true, translations, service: settings?.service });
+        const payload = message.payload;
+        if (!payload || !Array.isArray(payload.texts)) {
+          sendResponse({ success: false, error: 'Invalid translation payload' });
+          return false;
+        }
+        const { texts, targetLang, settings, noFallback, bypassCache, contextBefore } = payload;
+        translateSentenceBatchDetailed(texts, targetLang, settings, { noFallback, bypassCache, contextBefore })
+          .then((detail) => {
+            sendResponse({
+              success: true,
+              translations: detail.translations,
+              failed: detail.failed,
+              service: settings?.service
+            });
           })
           .catch((err) => {
             console.error('[YT-Sub-Translator] Translation batch error:', err);
@@ -267,6 +297,10 @@ export default defineBackground(() => {
       }
 
       case 'FETCH_MODELS': {
+        if (!message.payload?.settings) {
+          sendResponse({ success: false, error: 'Invalid settings payload' });
+          return false;
+        }
         const { settings } = message.payload;
         fetchAvailableModels(settings)
           .then((models) => {
@@ -302,7 +336,7 @@ export default defineBackground(() => {
       case 'GET_SETTINGS': {
         getStoredSettings()
           .then((settings) => {
-            sendResponse({ success: true, settings });
+            sendResponse({ success: true, settings: stripCustomFonts(settings) });
           })
           .catch((err) => {
             sendResponse({ success: false, error: err.message });
@@ -313,13 +347,14 @@ export default defineBackground(() => {
       case 'SAVE_SETTINGS': {
         saveStoredSettings(message.payload)
           .then((updated) => {
+            const lightSettings = stripCustomFonts(updated);
             chrome.tabs.query({ url: '*://*.youtube.com/*' }, (tabs) => {
               for (const tab of tabs) {
                 if (tab.id) {
                   try {
                     const result = chrome.tabs.sendMessage(tab.id, {
                       type: 'SETTINGS_UPDATED',
-                      settings: updated
+                      settings: lightSettings
                     }) as any;
                     if (result && typeof result.catch === 'function') {
                       result.catch(() => {});
@@ -330,11 +365,68 @@ export default defineBackground(() => {
                 }
               }
             });
-            sendResponse({ success: true, settings: updated });
+            sendResponse({ success: true, settings: lightSettings });
           })
           .catch((err) => {
             sendResponse({ success: false, error: err.message });
           });
+        return true;
+      }
+
+      case 'CLEAR_SENTENCE_CACHE': {
+        clearSentenceCache()
+          .then((ok) => sendResponse({ success: true, data: ok }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Clear failed' }));
+        return true;
+      }
+
+      case 'AI_TRACK_LOAD': {
+        const { videoId, targetLang, scenario } = message.payload || {};
+        loadAiTrack({ videoId, targetLang, scenario })
+          .then((record) => sendResponse({ success: true, data: record }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Load failed' }));
+        return true;
+      }
+
+      case 'AI_TRACK_SAVE': {
+        const record = message.payload?.record as AiTrackRecord | undefined;
+        if (!record || !record.key) {
+          sendResponse({ success: false, error: 'Invalid record' });
+          return false;
+        }
+        saveAiTrack(record)
+          .then((ok) => sendResponse({ success: true, data: ok }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Save failed' }));
+        return true;
+      }
+
+      case 'AI_TRACK_CLEAR': {
+        const videoId = String(message.payload?.videoId || '');
+        clearAiTrack(videoId)
+          .then((removed) => sendResponse({ success: true, data: removed }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Clear failed' }));
+        return true;
+      }
+
+      case 'AI_TRACK_CLEAR_ALL': {
+        clearAllAiTracks()
+          .then((removed) => sendResponse({ success: true, data: removed }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Clear all failed' }));
+        return true;
+      }
+
+      case 'AI_TRACK_STATS': {
+        getAiTrackStats()
+          .then((stats) => sendResponse({ success: true, data: stats }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Stats failed' }));
+        return true;
+      }
+
+      case 'AI_TRACK_PRUNE': {
+        const ttlHours = Number(message.payload?.ttlHours ?? 0);
+        pruneAiTracks(ttlHours)
+          .then((removed) => sendResponse({ success: true, data: removed }))
+          .catch((err) => sendResponse({ success: false, error: err?.message || 'Prune failed' }));
         return true;
       }
 

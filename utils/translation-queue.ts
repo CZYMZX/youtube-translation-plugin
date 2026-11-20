@@ -1,5 +1,6 @@
 import type { SubtitleSentence, ExtensionSettings } from '../types';
 import { safeSendMessage } from './runtime-safe';
+import { stripCustomFonts } from './storage';
 
 export interface TranslationQueueOptions {
   batchSize?: number;
@@ -35,6 +36,8 @@ export class TranslationQueue {
   private generation = 0;
   /** 每句的超时次数，避免无限重试 */
   private attempts = new Map<number, number>();
+  /** 在途请求超时定时器，切视频时立即清理 */
+  private pendingTimers = new Set<ReturnType<typeof setTimeout>>();
 
   constructor(settings: ExtensionSettings, options: TranslationQueueOptions = {}) {
     this.settings = settings;
@@ -52,6 +55,10 @@ export class TranslationQueue {
     this.sentences = sentences;
     this.generation++;
     this.attempts.clear();
+    // 切视频 / 重建句子时立即释放旧代际并发槽与超时定时器，防止新视频被旧在途请求卡死 20s
+    this.activeRequests = 0;
+    for (const timer of this.pendingTimers) clearTimeout(timer);
+    this.pendingTimers.clear();
   }
 
   /**
@@ -142,13 +149,19 @@ export class TranslationQueue {
     const finish = () => {
       if (settled) return false;
       settled = true;
-      this.activeRequests = Math.max(0, this.activeRequests - 1);
       clearTimeout(timer);
+      this.pendingTimers.delete(timer);
+      // 仅在当前代际仍一致时递减并发槽；若已切视频（generation 递增），activeRequests 已归零
+      if (gen === this.generation) {
+        this.activeRequests = Math.max(0, this.activeRequests - 1);
+      }
       return true;
     };
 
     const timer = setTimeout(() => {
       if (!finish()) return;
+      // 已切换视频/重建句子，绝不把旧批次的 id 写入新视频的 attempts
+      if (gen !== this.generation) return;
       console.warn('[TranslationQueue] 翻译请求超时，释放并发并安排重试');
       for (const t of targets) {
         const count = (this.attempts.get(t.id) || 0) + 1;
@@ -160,18 +173,19 @@ export class TranslationQueue {
           t.status = 'idle';
         }
       }
-      if (gen === this.generation && this.onSentenceUpdated) {
+      if (this.onSentenceUpdated) {
         this.onSentenceUpdated();
       }
     }, this.requestTimeoutMs);
+    this.pendingTimers.add(timer);
 
-    safeSendMessage<{ success?: boolean; translations?: string[]; error?: string }>(
+    safeSendMessage<{ success?: boolean; translations?: string[]; failed?: boolean[]; error?: string }>(
       {
         type: 'TRANSLATE_BATCH',
         payload: {
           texts,
           targetLang: this.settings.targetLang,
-          settings: this.settings
+          settings: stripCustomFonts(this.settings)
         }
       },
       (r) => {
@@ -185,10 +199,21 @@ export class TranslationQueue {
 
         const res = r.ok ? r.response : null;
         if (res && res.success && Array.isArray(res.translations)) {
+          const failedMask = Array.isArray(res.failed) ? res.failed : null;
           for (let i = 0; i < targets.length; i++) {
-            targets[i].translation = res.translations[i] || targets[i].text;
-            targets[i].status = 'done';
-            this.attempts.delete(targets[i].id);
+            const rawTrans = res.translations[i];
+            const isFailed =
+              (failedMask && failedMask[i] === true) ||
+              !rawTrans ||
+              /^\[(翻译失败|降级失败|[A-Z]+ 失败):/.test(rawTrans);
+            if (isFailed) {
+              targets[i].status = 'error';
+              targets[i].translation = rawTrans || '[翻译失败: 未返回译文]';
+            } else {
+              targets[i].translation = rawTrans;
+              targets[i].status = 'done';
+              this.attempts.delete(targets[i].id);
+            }
           }
         } else {
           console.warn('[TranslationQueue] Batch failed:', res?.error);

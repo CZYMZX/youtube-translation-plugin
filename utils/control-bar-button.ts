@@ -21,9 +21,15 @@ export class ControlBarButtonManager {
   private buttonEl: HTMLElement | null = null;
   private isEnabled: boolean = true;
   private callbacks: ControlButtonCallbacks;
-  private checkTimer: any = null;
+  private checkTimer: ReturnType<typeof setInterval> | null = null;
   private observer: MutationObserver | null = null;
   private observedControlsEl: HTMLElement | null = null;
+  private burstTimers = new Set<ReturnType<typeof setTimeout>>();
+  private resizeDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private boundBurstHandler: (() => void) | null = null;
+  private boundVisibilityHandler: (() => void) | null = null;
+  private boundResizeHandler: (() => void) | null = null;
+  private destroyed = false;
 
   constructor(callbacks: ControlButtonCallbacks, initialEnabled = true) {
     this.callbacks = callbacks;
@@ -168,7 +174,7 @@ export class ControlBarButtonManager {
         flex-shrink: 0 !important;
         overflow: visible !important;
         ${stateStyle}
-        transition: transform 0.25s cubic-bezier(0.34, 0.96, 0.6, 0.99), filter 0.2s ease, opacity 0.2s ease;
+        transition: transform 0.25s cubic-bezier(0.34, 0.96, 0.6, 0.99), opacity 0.2s ease;
       ">
         ${MONOCHROME_ICONPARK_BTN_SVG}
       </div>
@@ -206,7 +212,7 @@ export class ControlBarButtonManager {
     if (refEl) {
       refEl.insertAdjacentElement('beforebegin', btn);
     } else if (rightControls.firstChild) {
-      (rightControls.firstChild as HTMLElement).insertAdjacentElement('beforebegin', btn);
+      rightControls.insertBefore(btn, rightControls.firstChild);
     } else {
       rightControls.appendChild(btn);
     }
@@ -214,22 +220,51 @@ export class ControlBarButtonManager {
     this.buttonEl = btn;
   }
 
+  private clearBurstTimers() {
+    for (const t of this.burstTimers) clearTimeout(t);
+    this.burstTimers.clear();
+  }
+
   private startWatchdog() {
+    this.destroyed = false;
     this.checkAndMount();
 
     this.checkTimer = setInterval(() => {
+      if (this.destroyed) return;
       this.checkAndMount();
     }, 350);
 
     const triggerBurstCheck = () => {
+      if (this.destroyed) return;
+      this.clearBurstTimers();
       this.checkAndMount();
-      setTimeout(() => this.checkAndMount(), 80);
-      setTimeout(() => this.checkAndMount(), 200);
-      setTimeout(() => this.checkAndMount(), 500);
-      setTimeout(() => this.checkAndMount(), 1000);
-      setTimeout(() => this.checkAndMount(), 2000);
-      setTimeout(() => this.checkAndMount(), 3500);
+      for (const delay of [80, 200, 500, 1000, 2000, 3500]) {
+        const t = setTimeout(() => {
+          this.burstTimers.delete(t);
+          if (!this.destroyed) this.checkAndMount();
+        }, delay);
+        this.burstTimers.add(t);
+      }
     };
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        triggerBurstCheck();
+      }
+    };
+
+    const onResize = () => {
+      if (this.destroyed) return;
+      if (this.resizeDebounceTimer) clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = setTimeout(() => {
+        this.resizeDebounceTimer = null;
+        if (!this.destroyed) this.checkAndMount();
+      }, 150);
+    };
+
+    this.boundBurstHandler = triggerBurstCheck;
+    this.boundVisibilityHandler = onVisibility;
+    this.boundResizeHandler = onResize;
 
     window.addEventListener('yt-navigate-start', triggerBurstCheck);
     window.addEventListener('yt-navigate-finish', triggerBurstCheck);
@@ -239,17 +274,45 @@ export class ControlBarButtonManager {
     window.addEventListener('popstate', triggerBurstCheck);
     document.addEventListener('fullscreenchange', triggerBurstCheck);
     document.addEventListener('webkitfullscreenchange', triggerBurstCheck);
-    document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible') {
-        triggerBurstCheck();
-      }
-    });
-    window.addEventListener('resize', triggerBurstCheck);
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('resize', onResize);
   }
 
   public destroy() {
-    if (this.checkTimer) clearInterval(this.checkTimer);
-    if (this.observer) this.observer.disconnect();
+    this.destroyed = true;
+    if (this.checkTimer) {
+      clearInterval(this.checkTimer);
+      this.checkTimer = null;
+    }
+    if (this.resizeDebounceTimer) {
+      clearTimeout(this.resizeDebounceTimer);
+      this.resizeDebounceTimer = null;
+    }
+    this.clearBurstTimers();
+    if (this.boundBurstHandler) {
+      window.removeEventListener('yt-navigate-start', this.boundBurstHandler);
+      window.removeEventListener('yt-navigate-finish', this.boundBurstHandler);
+      window.removeEventListener('yt-page-data-updated', this.boundBurstHandler);
+      window.removeEventListener('yt-player-updated' as any, this.boundBurstHandler);
+      window.removeEventListener('spfdone', this.boundBurstHandler);
+      window.removeEventListener('popstate', this.boundBurstHandler);
+      document.removeEventListener('fullscreenchange', this.boundBurstHandler);
+      document.removeEventListener('webkitfullscreenchange', this.boundBurstHandler);
+      this.boundBurstHandler = null;
+    }
+    if (this.boundVisibilityHandler) {
+      document.removeEventListener('visibilitychange', this.boundVisibilityHandler);
+      this.boundVisibilityHandler = null;
+    }
+    if (this.boundResizeHandler) {
+      window.removeEventListener('resize', this.boundResizeHandler);
+      this.boundResizeHandler = null;
+    }
+    if (this.observer) {
+      this.observer.disconnect();
+      this.observer = null;
+    }
+    this.observedControlsEl = null;
     if (this.buttonEl) {
       try {
         this.buttonEl.remove();

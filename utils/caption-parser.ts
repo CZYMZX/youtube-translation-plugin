@@ -1,32 +1,41 @@
 import type { Json3CaptionData, Json3Event, CaptionToken } from '../types';
 
 /**
- * 完整解码常见 HTML 实体（如 &amp;, &quot;, &#39;, &apos;, 以及十进制/十六进制实体）
+ * 完整解码常见 HTML 实体（单趟替换，避免 &amp;lt; 被二重解码篡改原文）
  */
+const NAMED_HTML_ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' '
+};
+
 export function decodeHtmlEntities(str: string): string {
   if (!str) return '';
-  return str
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&apos;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&#(\d+);/g, (_, dec) => {
+  return str.replace(/&(?:(amp|lt|gt|quot|apos|nbsp)|#(\d+)|#x([0-9a-fA-F]+));/gi, (match, named, dec, hex) => {
+    if (named) {
+      return NAMED_HTML_ENTITIES[named.toLowerCase()] ?? match;
+    }
+    if (dec) {
       try {
-        return String.fromCodePoint(Number(dec));
+        const cp = Number(dec);
+        return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
       } catch {
-        return _;
+        return match;
       }
-    })
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => {
+    }
+    if (hex) {
       try {
-        return String.fromCodePoint(parseInt(hex, 16));
+        const cp = parseInt(hex, 16);
+        return Number.isInteger(cp) && cp >= 0 && cp <= 0x10ffff ? String.fromCodePoint(cp) : match;
       } catch {
-        return _;
+        return match;
       }
-    });
+    }
+    return match;
+  });
 }
 
 /**
@@ -53,11 +62,12 @@ function parseVttTimestamp(timeStr: string): number {
 export function parseVttToCaptionData(vttText: string): Json3CaptionData {
   const events: Json3Event[] = [];
   const lines = vttText.split(/\r?\n/);
-  const timeRegex = /((?:\d{2}:)?\d{2}:\d{2}[\.,]\d{3})\s*-->\s*((?:\d{2}:)?\d{2}:\d{2}[\.,]\d{3})/;
+  const timeRegex = /((?:\d+:)?\d{2}:\d{2}[\.,]\d{3})\s*-->\s*((?:\d+:)?\d{2}:\d{2}[\.,]\d{3})/;
 
   let currentStart = -1;
   let currentEnd = -1;
   let currentTextLines: string[] = [];
+  let inSkippedBlock = false;
 
   const flush = () => {
     if (currentStart >= 0 && currentEnd >= currentStart && currentTextLines.length > 0) {
@@ -77,19 +87,31 @@ export function parseVttToCaptionData(vttText: string): Json3CaptionData {
 
   for (const line of lines) {
     const trimmed = line.trim();
-    if (!trimmed || trimmed === 'WEBVTT' || trimmed.startsWith('NOTE') || trimmed.startsWith('STYLE')) {
-      if (!trimmed) flush();
+    if (!trimmed) {
+      flush();
+      inSkippedBlock = false;
+      continue;
+    }
+    if (inSkippedBlock) continue;
+    if (trimmed === 'WEBVTT') continue;
+    if (trimmed.startsWith('NOTE') || trimmed.startsWith('STYLE') || trimmed.startsWith('REGION')) {
+      flush();
+      inSkippedBlock = true;
       continue;
     }
 
     const match = trimmed.match(timeRegex);
     if (match) {
       flush();
-      currentStart = parseVttTimestamp(match[1].replace(',', '.'));
-      currentEnd = parseVttTimestamp(match[2].replace(',', '.'));
+      const s = parseVttTimestamp(match[1].replace(',', '.'));
+      const e = parseVttTimestamp(match[2].replace(',', '.'));
+      currentStart = Number.isFinite(s) && s >= 0 ? s : -1;
+      currentEnd = Number.isFinite(e) && e >= 0 ? e : -1;
     } else if (currentStart >= 0) {
-      // 过滤掉如 <c> </c> 等 vtt 标签
-      const cleanLine = trimmed.replace(/<\/?[^>]+(>|$)/g, '');
+      // 仅去除合法 VTT 标签与内联时间戳标签，避免把正文里的 `x < 5` 截断到行尾
+      const cleanLine = trimmed
+        .replace(/<\/?(?:c|i|b|u|v|lang|ruby|rt)\b[^>]*>/gi, '')
+        .replace(/<\d{1,2}:\d{2}(?::\d{2})?[\.,]\d{3}>/g, '');
       if (cleanLine) {
         currentTextLines.push(cleanLine);
       }
@@ -108,27 +130,30 @@ export function parseVttToCaptionData(vttText: string): Json3CaptionData {
 export function parseXmlToCaptionData(xmlText: string): Json3CaptionData {
   const events: Json3Event[] = [];
 
-  // 1. 尝试匹配经典 <text start="1.2" dur="3.4">Hello</text>
+  // 1. 尝试匹配经典 <text start="1.2" dur="3.4">Hello</text>（排除自闭合 <text .../>）
+  const sanitizedXml = xmlText.replace(/<(?:text|p)\b[^>]*\/>/gi, '');
   const textRegex = /<text\s+([^>]*?)>([\s\S]*?)<\/text>/gi;
   let textMatch: RegExpExecArray | null;
   let foundClassic = false;
 
-  while ((textMatch = textRegex.exec(xmlText)) !== null) {
+  while ((textMatch = textRegex.exec(sanitizedXml)) !== null) {
     foundClassic = true;
     const attrs = textMatch[1];
     const rawContent = textMatch[2];
 
-    const startMatch = attrs.match(/start="([0-9.]+)"/i);
-    const durMatch = attrs.match(/dur="([0-9.]+)"/i);
+    const startMatch = attrs.match(/\bstart=["']([0-9.]+)["']/i);
+    const durMatch = attrs.match(/\bdur=["']([0-9.]+)["']/i);
 
-    const startSec = startMatch ? parseFloat(startMatch[1]) : 0;
-    const durSec = durMatch ? parseFloat(durMatch[1]) : 1.5;
+    const parsedStart = startMatch ? parseFloat(startMatch[1]) : 0;
+    const parsedDur = durMatch ? parseFloat(durMatch[1]) : 1.5;
+    const startSec = Number.isFinite(parsedStart) && parsedStart >= 0 ? parsedStart : 0;
+    const durSec = Number.isFinite(parsedDur) && parsedDur >= 0 ? parsedDur : 1.5;
 
     const cleanText = decodeHtmlEntities(rawContent.replace(/<[^>]+>/g, '')).trim();
     if (cleanText) {
       events.push({
         tStartMs: Math.round(startSec * 1000),
-        dDurationMs: Math.round(durSec * 1000),
+        dDurationMs: Math.max(100, Math.round(durSec * 1000)),
         segs: [{ utf8: cleanText }]
       });
     }
@@ -138,29 +163,34 @@ export function parseXmlToCaptionData(xmlText: string): Json3CaptionData {
     return { wireMagic: 'pb3', events };
   }
 
-  // 2. 尝试匹配 <p t="1000" d="2000"><s>...</s></p> 格式
+  // 2. 尝试匹配 <p t="1000" d="2000"><s>...</s></p> 格式（已剔除自闭合清屏标签 <p .../>，杜绝吞句）
   const pRegex = /<p\s+([^>]*?)>([\s\S]*?)<\/p>/gi;
   let pMatch: RegExpExecArray | null;
 
-  while ((pMatch = pRegex.exec(xmlText)) !== null) {
+  while ((pMatch = pRegex.exec(sanitizedXml)) !== null) {
     const attrs = pMatch[1];
     const rawContent = pMatch[2];
 
-    const tMatch = attrs.match(/t="([0-9]+)"/i);
-    const dMatch = attrs.match(/d="([0-9]+)"/i);
+    const tMatch = attrs.match(/\bt=["']([0-9]+)["']/i);
+    const dMatch = attrs.match(/\bd=["']([0-9]+)["']/i);
 
-    const tMs = tMatch ? parseInt(tMatch[1], 10) : 0;
-    const dMs = dMatch ? parseInt(dMatch[1], 10) : 1500;
+    const parsedT = tMatch ? parseInt(tMatch[1], 10) : 0;
+    const parsedD = dMatch ? parseInt(dMatch[1], 10) : 1500;
+    const tMs = Number.isFinite(parsedT) && parsedT >= 0 ? parsedT : 0;
+    const dMs = Number.isFinite(parsedD) && parsedD >= 0 ? parsedD : 1500;
 
-    // 提取子标签 <s> 中的片段
-    const sRegex = /<s(?:\s+t="([0-9]+)")?[^>]*>([\s\S]*?)<\/s>/gi;
+    // 提取子标签 <s> 中的片段：任意属性顺序提取 t="..."，且保留词间前导空格防英文词粘连
+    const sRegex = /<s(\s+[^>]*)?>([\s\S]*?)<\/s>/gi;
     let sMatch: RegExpExecArray | null;
     const segs: Array<{ utf8: string; tOffsetMs?: number }> = [];
 
     while ((sMatch = sRegex.exec(rawContent)) !== null) {
-      const sOffset = sMatch[1] ? parseInt(sMatch[1], 10) : undefined;
-      const sText = decodeHtmlEntities(sMatch[2].replace(/<[^>]+>/g, '')).trim();
-      if (sText) {
+      const sAttrs = sMatch[1] || '';
+      const sOffsetMatch = sAttrs.match(/\bt=["']([0-9]+)["']/i);
+      const parsedOffset = sOffsetMatch ? parseInt(sOffsetMatch[1], 10) : undefined;
+      const sOffset = parsedOffset !== undefined && Number.isFinite(parsedOffset) ? parsedOffset : undefined;
+      const sText = decodeHtmlEntities(sMatch[2].replace(/<[^>]+>/g, ''));
+      if (sText.trim()) {
         segs.push({ utf8: sText, tOffsetMs: sOffset });
       }
     }
@@ -198,9 +228,9 @@ export function normalizeCaptionResponse(rawInput: any): Json3CaptionData {
   // 若已经是解析好的 JSON 对象且含有 events
   if (typeof rawInput === 'object') {
     if (Array.isArray(rawInput.events)) {
-      // 深度清洗 segs 中的 HTML 转义字符与空格
+      // 深度清洗 segs 中的 HTML 转义字符（带空值守卫，避免畸形 null event 抛 TypeError）
       for (const ev of rawInput.events) {
-        if (Array.isArray(ev.segs)) {
+        if (ev && Array.isArray(ev.segs)) {
           for (const seg of ev.segs) {
             if (seg && typeof seg.utf8 === 'string') {
               seg.utf8 = decodeHtmlEntities(seg.utf8);
@@ -224,7 +254,7 @@ export function normalizeCaptionResponse(rawInput: any): Json3CaptionData {
         const parsed = JSON.parse(trimmed);
         if (parsed && Array.isArray(parsed.events)) {
           for (const ev of parsed.events) {
-            if (Array.isArray(ev.segs)) {
+            if (ev && Array.isArray(ev.segs)) {
               for (const seg of ev.segs) {
                 if (seg && typeof seg.utf8 === 'string') {
                   seg.utf8 = decodeHtmlEntities(seg.utf8);
@@ -244,13 +274,18 @@ export function normalizeCaptionResponse(rawInput: any): Json3CaptionData {
       }
     }
 
-    // 2. WebVTT 格式检测
-    if (trimmed.startsWith('WEBVTT') || /-->\s*\d{2}:\d{2}/.test(trimmed)) {
+    // 2. 明确 XML 前缀优先于宽泛 `-->` VTT 检测（防止 XML 正文出现 `--> 10:00` 被误判）
+    if (trimmed.startsWith('<?xml') || trimmed.startsWith('<transcript') || trimmed.startsWith('<timedtext')) {
+      return parseXmlToCaptionData(trimmed);
+    }
+
+    // 3. WebVTT 格式检测
+    if (trimmed.startsWith('WEBVTT') || /-->\s*\d{1,2}:\d{2}/.test(trimmed)) {
       return parseVttToCaptionData(trimmed);
     }
 
-    // 3. XML 格式检测
-    if (trimmed.startsWith('<?xml') || trimmed.includes('<transcript') || trimmed.includes('<timedtext') || trimmed.includes('<text ') || trimmed.includes('<p ')) {
+    // 4. XML 兜底检测
+    if (trimmed.includes('<transcript') || trimmed.includes('<timedtext') || trimmed.includes('<text ') || trimmed.includes('<p ')) {
       return parseXmlToCaptionData(trimmed);
     }
   }

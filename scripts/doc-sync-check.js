@@ -15,8 +15,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = path.join(ROOT, 'docs', 'LIBRARY-BASELINE.json');
 const PKG = path.join(ROOT, 'package.json');
 const CHANGELOG = path.join(ROOT, 'CHANGELOG.md');
@@ -98,11 +99,13 @@ if (full) {
   }
   const counts = [...out.matchAll(/(?:结果|汇总):\s*(\d+)\s*通过/g)].map((x) => Number(x[1]));
   const printed = counts.reduce((a, b) => a + b, 0);
-  if (printed && baseline.printed && printed !== baseline.printed) {
+  if (printed === 0) {
+    problems.push('未能从 npm test 输出中解析到任何断言汇总（printed=0），请检查测试输出格式');
+  } else if (baseline.printed && printed !== baseline.printed) {
     problems.push(
       `实测打印项 ${printed} ≠ 锚点声明的 ${baseline.printed}：断言数变了，六篇里凡引用断言数的段落都要改`
     );
-  } else if (printed) {
+  } else {
     notes.push(`断言数一致：${printed} 打印项。`);
   }
 }

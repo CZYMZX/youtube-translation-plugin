@@ -1,6 +1,6 @@
 {
   "name": "yt-sub-translator",
-  "version": "0.6.0",
+  "version": "0.6.1",
   "description": "YouTube 自动字幕智能断句与翻译 Edge / Chrome 插件",
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
     "zip:chrome": "wxt zip",
     "zip:firefox": "wxt zip -b firefox",
     "compile": "tsc --noEmit",
-    "test": "tsx test/test-packs.js && tsx test/test-glossary.js && tsx test/test-segmenter.js && tsx test/test-segmenter-lang.js && tsx test/test-parser.js && tsx test/test-settings.js && tsx test/test-vsr-styles.js && tsx test/test-scenario.js && tsx test/test-prompt-layers.js && tsx test/test-retry.js && tsx test/test-popup-ui.js && tsx test/test-options-ui.js && tsx test/test-ai-track.js && tsx test/test-lyric-track.js && tsx test/test-asr-timing.js",
+    "test": "tsx test/test-packs.js && tsx test/test-glossary.js && tsx test/test-segmenter.js && tsx test/test-segmenter-lang.js && tsx test/test-parser.js && tsx test/test-settings.js && tsx test/test-vsr-styles.js && tsx test/test-scenario.js && tsx test/test-prompt-layers.js && tsx test/test-retry.js && tsx test/test-popup-ui.js && tsx test/test-options-ui.js && tsx test/test-ai-track.js && tsx test/test-lyric-track.js && tsx test/test-asr-timing.js && tsx test/test-v061-fixes.js",
     "icon:apply": "node scripts/apply-icon.js",
     "doc:check": "node scripts/doc-sync-check.js",
     "doc:brief": "node scripts/doc-brief.js",

@@ -1506,7 +1506,7 @@ export const OVERLAY_STYLES = String.raw`
           color: #cbd5e1;
         }
 
-        .item-translated {
+        .item-translation {
           color: #ffffff;
           font-weight: 500;
         }

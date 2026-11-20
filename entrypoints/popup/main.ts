@@ -1,7 +1,7 @@
 /**
  * ============================================================================
  * YouTube 智能字幕断句翻译器 - 扩展弹出设置面板 (Popup Main Controller)
- * 当前版本: v0.6.0 (独立高级设置页)
+ * 当前版本: v0.6.1 (独立高级设置页)
  *
  * 【v0.1.0 架构与设计规范统一守则（跨会话协作必读）】：
  * 1. 翻译服务引擎参数折叠规范：当选择大模型服务（DeepSeek、OpenAI、Gemini）时，
@@ -271,8 +271,13 @@ function setupTabs() {
       targetContent.classList.add('active');
     }
     if (moveFocus) btn.focus();
-    // 切换标签页时平滑重置滚动位置到顶部
-    window.scrollTo({ top: 0, behavior: 'instant' });
+  // 切换标签页时重置真实滚动容器位置到顶部（html/body 是 overflow:hidden，滚动发生在 .popup-container）
+    const scroller = document.querySelector('.popup-container') as HTMLElement | null;
+    if (scroller) {
+      scroller.scrollTo({ top: 0, behavior: 'instant' });
+    } else {
+      window.scrollTo({ top: 0, behavior: 'instant' });
+    }
   };
 
   tabBtns.forEach((btn, index) => {
@@ -840,6 +845,7 @@ function persistSettings(immediate = false) {
   if (!isFree && typedModel) providerModelSelections[active.id] = typedModel;
 
   currentSettings = {
+    ...currentSettings,
     enabled: enabledToggle.checked,
     targetLang: targetLangSelect.value,
     service: active.service,
@@ -859,7 +865,7 @@ function persistSettings(immediate = false) {
     autoHideNativeSubtitles: autoHideNativeCheck.checked,
     autoFallbackToGoogle: autoFallbackToggle ? autoFallbackToggle.checked : true,
     glossaryEnabled: glossaryEnabledCheck ? glossaryEnabledCheck.checked : true,
-    glossaryPacks: currentSettings.glossaryPacks && currentSettings.glossaryPacks.length > 0
+    glossaryPacks: Array.isArray(currentSettings.glossaryPacks)
       ? currentSettings.glossaryPacks
       : ['vtuber-hololive'],
     pauseThreshold: parseInt(pauseThresholdRange.value, 10),
@@ -876,16 +882,10 @@ function persistSettings(immediate = false) {
     layoutOrder: layoutOrderSelect.value as any,
     transColor: transColorInput.value,
     origColor: origColorInput.value,
-    /* 唯一真相源就是 currentSettings.bgColor：点色块与拖取色器都先写回它，这里原样下发。
-       不再从 bgColorInput.value 反推 —— <input type="color"> 存不下 8 位 hex，#00000000
-       只能显示成占位色，从 input 推导会把「透明」覆盖回旧颜色（这正是「别处改不了透明」的根因：
-       旧特判要求 input 恰好是 #000000，而点棋盘格时 input 保留的是上一个颜色，条件永不成立）。 */
     bgColor: currentSettings.bgColor,
     aiIconColor: aiColorInput ? aiColorInput.value : currentSettings.aiIconColor || '#fbbf24',
     fontSize: parseInt(fontSizeRange.value, 10),
     bgOpacity: parseInt(bgOpacityRange.value, 10),
-    /* v0.5.5：0 = 自适应。必须一起写进 payload，否则这份 currentSettings 里没有它，
-       预览/回填会掉回默认值（存储层虽会合并，但内存里这份会短暂失真）。 */
     quickPanelHeight: quickPanelHeightRange
       ? parseInt(quickPanelHeightRange.value, 10) || 0
       : currentSettings.quickPanelHeight ?? 0,
@@ -1166,12 +1166,24 @@ async function fetchModelsFromApi() {
       payload: { settings: querySettings }
     },
     (res) => {
+      const runtimeErr = chrome.runtime.lastError;
       if (btnFetchModels) {
         btnFetchModels.disabled = false;
         btnFetchModels.innerHTML = `<span style="display:inline-flex;width:12px;height:12px;align-items:center;margin-right:3px;">${ICON_REFRESH}</span>从 API 获取模型`;
       }
+      if (runtimeErr) {
+        if (fetchModelsStatus) {
+          renderStatus(fetchModelsStatus, 'sub-status-msg error', ICON_ALERT, `通信异常: ${runtimeErr.message || '后台无响应'}`);
+        }
+        return;
+      }
 
       if (res && res.success && Array.isArray(res.models) && res.models.length > 0) {
+        // 缓存键按**厂牌**（cached_models_<providerId>），与设置页同一条
+        chrome.storage.local.set({ [cachedModelsKey(provider.id)]: res.models });
+        // 请求期间若用户切去了别的厂牌，只落缓存、不污染当前下拉框和模型配置
+        if (activeProvider().id !== provider.id) return;
+
         if (fetchModelsStatus) {
           fetchModelsStatus.className = 'sub-status-msg success';
           renderStatus(
@@ -1181,9 +1193,6 @@ async function fetchModelsFromApi() {
             `成功获取到 ${res.models.length} 个可用模型！`
           );
         }
-
-        // 缓存键按**厂牌**（cached_models_<providerId>），与设置页同一条
-        chrome.storage.local.set({ [cachedModelsKey(provider.id)]: res.models });
 
         // 重新渲染下拉列表：只放这次拉到的真实列表（+ 当前设置那一行），不拿预置清单补位
         renderModelOptions(res.models, modelNameInput.value.trim());
@@ -1196,6 +1205,7 @@ async function fetchModelsFromApi() {
           persistSettings(true);
         }
       } else {
+        if (activeProvider().id !== provider.id) return;
         if (fetchModelsStatus) {
           fetchModelsStatus.className = 'sub-status-msg error';
           renderStatus(
@@ -1225,6 +1235,9 @@ async function handleTestApi() {
   btnTestApi.textContent = '测试中...';
 
   persistSettings(true);
+  const provider = activeProvider();
+  const activeModelName = currentSettings.modelName?.trim() || '';
+  const { customFonts: _omitFonts, ...lightSettings } = currentSettings;
 
   const testSample = currentSettings.scenario === 'vtuber'
     ? ["Wait, chat, did you see that?! That was totally yabai www!"]
@@ -1238,12 +1251,13 @@ async function handleTestApi() {
       payload: {
         texts: testSample,
         targetLang: currentSettings.targetLang,
-        settings: currentSettings,
+        settings: lightSettings,
         noFallback: true,   // 关键：测试连接严禁自动回退到谷歌翻译！必须真实验证当前端点
         bypassCache: true   // 关键：测试连接必须跳过缓存，进行真实的网络端点探测！
       }
     },
     (res) => {
+      const runtimeErr = chrome.runtime.lastError;
       const latencyMs = Math.round(performance.now() - startTime);
       btnTestApi.disabled = false;
       btnTestApi.textContent = '测试连接与延迟';
@@ -1263,12 +1277,8 @@ async function handleTestApi() {
         }
       }
 
-      if (res && res.success && res.translations && res.translations.length > 0) {
+      if (!runtimeErr && res && res.success && res.translations && res.translations.length > 0) {
         testStatus.className = 'status-msg success';
-        /* 显示名按**厂牌名** + 用户实际配置的 modelName；取不到型号就只显示厂牌名。
-           Google 免费通道固定写「Google 翻译」。不拿任何预设型号兜底。 */
-        const provider = activeProvider();
-        const activeModelName = currentSettings.modelName?.trim() || '';
         let serviceLabel = 'Google 翻译';
         if (provider.service !== 'google') {
           serviceLabel = activeModelName ? `${provider.name} [${activeModelName}]` : provider.name;
@@ -1290,7 +1300,7 @@ async function handleTestApi() {
           testStatus,
           'status-msg error',
           ICON_ALERT,
-          `连接失败 (耗时 ${latencyMs}ms)：${res?.error || '请求未响应'}`
+          `连接失败 (耗时 ${latencyMs}ms)：${runtimeErr?.message || res?.error || '请求未响应'}`
         );
       }
     }
@@ -1635,6 +1645,7 @@ function renderGlossaryPackList(): void {
     actions.className = 'pack-actions';
     const toggle = document.createElement('label');
     toggle.className = 'pack-toggle';
+    toggle.addEventListener('click', (e) => e.stopPropagation());
     const checkbox = document.createElement('input');
     checkbox.type = 'checkbox';
     checkbox.checked = enabled.includes(pack.id);
@@ -1745,10 +1756,16 @@ async function handleDeletePack(pack: GlossaryPack): Promise<void> {
   showPackStatus(`已删除「${pack.name}」`, 'ok');
 }
 
+const MAX_PACK_FILE_BYTES = 1024 * 1024;
+
 async function handleGlossaryUpload(input: HTMLInputElement): Promise<void> {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
+  if (file.size > MAX_PACK_FILE_BYTES) {
+    showPackStatus('上传失败：文件超过 1 MB 上限', 'error');
+    return;
+  }
   try {
     const json = JSON.parse(await file.text());
     const result = validateGlossaryPack(json);
@@ -1760,6 +1777,7 @@ async function handleGlossaryUpload(input: HTMLInputElement): Promise<void> {
     if (BUILTIN_GLOSSARY_PACKS.some((p) => p.name === newPack.name)) {
       newPack.name = `${newPack.name}（自定义）`;
     }
+    const replacedIds = new Set(customPacks.glossaries.filter((p) => p.name === newPack.name).map((p) => p.id));
     const packs = [...customPacks.glossaries.filter((p) => p.name !== newPack.name), newPack];
     const ok = await saveGlossaryPacks(packs);
     if (!ok) {
@@ -1767,7 +1785,8 @@ async function handleGlossaryUpload(input: HTMLInputElement): Promise<void> {
       return;
     }
     customPacks = { ...customPacks, glossaries: packs };
-    currentSettings.glossaryPacks = Array.from(new Set([...getEnabledPackIds(), newPack.id]));
+    const cleanedEnabled = getEnabledPackIds().filter((id) => !replacedIds.has(id));
+    currentSettings.glossaryPacks = Array.from(new Set([...cleanedEnabled, newPack.id]));
     persistSettings(true);
     renderGlossaryPackList();
     previewPack(newPack);
@@ -1781,6 +1800,10 @@ async function handleSceneUpload(input: HTMLInputElement): Promise<void> {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
+  if (file.size > MAX_PACK_FILE_BYTES) {
+    showPackStatus('上传失败：文件超过 1 MB 上限', 'error');
+    return;
+  }
   try {
     const json = JSON.parse(await file.text());
     const result = validateScenePack(json);
@@ -1792,6 +1815,7 @@ async function handleSceneUpload(input: HTMLInputElement): Promise<void> {
     if (BUILTIN_SCENES.some((p) => p.name === newPack.name)) {
       newPack.name = `${newPack.name}（自定义）`;
     }
+    const replacedIds = new Set(customPacks.scenes.filter((p) => p.name === newPack.name).map((p) => p.id));
     const packs = [...customPacks.scenes.filter((p) => p.name !== newPack.name), newPack];
     const ok = await saveScenePacks(packs);
     if (!ok) {
@@ -1799,6 +1823,10 @@ async function handleSceneUpload(input: HTMLInputElement): Promise<void> {
       return;
     }
     customPacks = { ...customPacks, scenes: packs };
+    if (replacedIds.has(currentSettings.scenario)) {
+      currentSettings.scenario = newPack.id;
+      persistSettings(true);
+    }
     renderSceneList();
     showPackStatus(`已导入场景「${newPack.name}」，在列表中点击「使用」即可切换`, 'ok');
   } catch (err: any) {

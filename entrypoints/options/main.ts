@@ -68,7 +68,9 @@ import {
   formatFontBytes,
   formatOfFileName,
   guessFontLanguage,
+  hasValidFontMagic,
   totalCustomFontBytes,
+  unregisterCustomFont,
   type CustomFontPack,
   type FontLang
 } from '../../utils/fonts';
@@ -154,28 +156,52 @@ async function boot(): Promise<void> {
   /* 静态 <details>（文件格式规范）也走同一套高度过渡；厂牌面板里的 details 创建时自己绑 */
   bindDetailsMotion();
 
-  // 弹窗侧改动 → 本页实时反映
+  // 弹窗侧 / 其他标签页改动 → 本页实时反映
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== 'sync' && area !== 'local') return;
-    /* 任一厂牌的在线模型缓存变了（另一标签页拉到 / 被清掉）→ 重读一遍：
-       「参考模型按实际列表隐藏」这件事依赖缓存，缓存变了列表必须跟着变。 */
-    const modelsChanged = Object.keys(changes).some((key) => key.startsWith('cached_models_'));
-    if (modelsChanged) void refreshOnlineModels();
-    if (Object.prototype.hasOwnProperty.call(changes, 'yt_sub_translator_settings')) {
+    const has = (k: string): boolean => Object.prototype.hasOwnProperty.call(changes, k);
+    /* 任一厂牌的在线模型缓存变了（另一标签页拉到 / 被清掉）→ 重读一遍 */
+    if (Object.keys(changes).some((key) => key.startsWith('cached_models_'))) void refreshOnlineModels();
+
+    const settingsChanged =
+      has('yt_sub_translator_settings') || has('yt_sub_translator_secrets') || has('yt_sub_translator_fonts');
+    if (settingsChanged && Object.keys(pendingPatch).length === 0) {
       void getStoredSettings().then((next) => {
+        if (Object.keys(pendingPatch).length > 0) return;
         settings = next;
         reflectSettings();
-        /* 颜色区的展开 / 收起跟着「自动字幕逐词显现」走（勾选态已由 reflectSettings 同步） */
         syncWordColorBlock();
         applyPreview();
         renderFontGrid();
         renderScenarios();
         renderProviderList();
-        /* 另一处改了厂牌 Key / 降级顺序：这块列表必须跟着重画（拖拽中会自己跳过） */
         renderFallbackOrder();
         renderScenePane();
       });
     }
+
+    if (area === 'local' && (has('yt_sub_custom_glossary_packs') || has('yt_sub_custom_scene_packs'))) {
+      void loadCustomPacks().then((loaded) => {
+        customPacks = loaded;
+        renderPackList();
+        renderTable();
+        renderScenarios();
+        renderScenePane();
+      });
+    }
+  });
+
+  // 页面卸载或切到后台前立即 flush 未落盘防抖改动，避免 320ms 窗口内关页丢配置
+  const flushPendingSettings = (): void => {
+    if (Object.keys(pendingPatch).length === 0) return;
+    window.clearTimeout(saveTimer);
+    const toSave = pendingPatch;
+    pendingPatch = {};
+    void saveStoredSettings(toSave);
+  };
+  window.addEventListener('pagehide', flushPendingSettings);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') flushPendingSettings();
   });
 }
 
@@ -387,14 +413,12 @@ const LEGACY_WORD_COLOR_DEFAULT = '#ffffff';
 
 /**
  * 逐词高亮颜色的取值归一：空串（= 跟随）或合法 hex 原样保留，其它一律回落空串。
- * 为什么要归一：渲染层把这一项拼进 CSS 变量值，任意字符串都不能塞进去；
- * 这里再兜一次，老数据 / 手改过的 storage 也不会漏网。
+ * v0.6.1：不再在实时校验中拦截 #ffffff，允许用户显式选择纯白作为逐词高亮色。
  */
 function sanitizeWordColor(raw: unknown): string {
   if (typeof raw !== 'string') return '';
   const value = raw.trim();
   if (!value) return '';
-  if (value.toLowerCase() === LEGACY_WORD_COLOR_DEFAULT) return '';
   return HEX_COLOR_RE.test(value) ? value : '';
 }
 
@@ -1387,12 +1411,29 @@ function bindFontDelete(btn: HTMLButtonElement, onConfirm: () => void): void {
  * 渲染层虽然会兜底回退，但界面上的选中态会变成「一个都没选」）。
  */
 async function removeCustomFont(id: string): Promise<void> {
+  const prevSettings = settings;
   const next = (settings.customFonts || []).filter((font) => font.id !== id);
   const patch: Partial<ExtensionSettings> = { customFonts: next };
   const wasActive = String(settings.fontFamily || '') === id;
   if (wasActive) patch.fontFamily = DEFAULT_FONT_FAMILY;
-  await update(patch);
-  toast(wasActive ? '字体已删除，字幕回退为系统默认' : '字体已删除');
+
+  // 字体增删立即落盘并等待结果，避免 320ms 防抖未落盘前关页丢失或失败后状态不一致
+  window.clearTimeout(saveTimer);
+  const mergedPatch = { ...pendingPatch, ...patch };
+  pendingPatch = {};
+  setSaveState('saving');
+  try {
+    settings = await saveStoredSettings(mergedPatch);
+    unregisterCustomFont(id);
+    setSaveState('saved');
+    renderFontGrid();
+    applyPreview();
+    toast(wasActive ? '字体已删除，字幕回退为系统默认' : '字体已删除');
+  } catch {
+    settings = prevSettings;
+    setSaveState('error');
+    toast('删除字体失败：浏览器存储不可用');
+  }
 }
 
 function resetUploadDialog(): void {
@@ -1491,16 +1532,33 @@ async function handleFontFiles(files: File[]): Promise<void> {
       errors.push(`${file.name}：格式不支持，只接受 .ttf / .otf / .woff / .woff2`);
       continue;
     }
+    if (file.size <= 0) {
+      errors.push(`${file.name}：文件为空（0 字节），无法作为字体使用`);
+      continue;
+    }
     if (file.size > MAX_CUSTOM_FONT_BYTES) {
       errors.push(`${file.name}：${formatFontBytes(file.size)}，超过单文件上限 ${formatFontBytes(MAX_CUSTOM_FONT_BYTES)}`);
       continue;
     }
-    if (existing.length + accepted.length >= MAX_CUSTOM_FONTS) {
+    if (existing.length + pendingFonts.length + accepted.length >= MAX_CUSTOM_FONTS) {
       errors.push(`自定义字体最多 ${MAX_CUSTOM_FONTS} 个，请先删除部分字体`);
       break;
     }
     if (projected + file.size > MAX_CUSTOM_FONTS_TOTAL_BYTES) {
       errors.push(`已超出上限（累计 ${formatFontBytes(MAX_CUSTOM_FONTS_TOTAL_BYTES)}），请先删除部分字体再加 ${file.name}`);
+      continue;
+    }
+
+    // 二进制魔数预校验：阻止伪装扩展名的非字体文件写入 local 占用配额
+    let magicValid = false;
+    try {
+      const headBuf = await file.slice(0, 4).arrayBuffer();
+      magicValid = hasValidFontMagic(headBuf);
+    } catch {
+      magicValid = false;
+    }
+    if (!magicValid) {
+      errors.push(`${file.name}：文件头不是有效的 TTF / OTF / WOFF / WOFF2 字体`);
       continue;
     }
 
@@ -1533,22 +1591,30 @@ async function handleFontFiles(files: File[]): Promise<void> {
   if (dialog && accepted.length > 0 && !dialog.open) dialog.showModal();
 }
 
-/** 确认上传：把待定文件变成 CustomFontPack（id 现生成），整份写回设置 */
+/** 确认上传：把待定文件变成 CustomFontPack（批内去重生成 id），立即写盘成功后再关闭弹层 */
 async function commitPendingFonts(): Promise<void> {
   if (pendingFonts.length === 0) {
     showUploadError('还没有可加入的字体，请先选择文件');
     return;
   }
   const existing = settings.customFonts || [];
-  const packs: CustomFontPack[] = pendingFonts.map((item) => ({
-    id: createCustomFontId(existing),
-    name: item.name.trim().slice(0, 40) || '未命名字体',
-    language: item.language,
-    format: item.format,
-    size: item.size,
-    dataUrl: item.dataUrl,
-    createdAt: Date.now()
-  }));
+  if (existing.length + pendingFonts.length > MAX_CUSTOM_FONTS) {
+    showUploadError(`自定义字体最多 ${MAX_CUSTOM_FONTS} 个，请先删除部分字体`);
+    return;
+  }
+  const packs: CustomFontPack[] = [];
+  for (const item of pendingFonts) {
+    const id = createCustomFontId([...existing, ...packs]);
+    packs.push({
+      id,
+      name: item.name.trim().slice(0, 40) || '未命名字体',
+      language: item.language,
+      format: item.format,
+      size: item.size,
+      dataUrl: item.dataUrl,
+      createdAt: Date.now()
+    });
+  }
 
   const total = totalCustomFontBytes(existing) + packs.reduce((sum, pack) => sum + pack.size, 0);
   if (total > MAX_CUSTOM_FONTS_TOTAL_BYTES) {
@@ -1557,13 +1623,24 @@ async function commitPendingFonts(): Promise<void> {
   }
 
   const dialog = $<HTMLDialogElement>('#font-upload-dialog');
-  await update({ customFonts: [...existing, ...packs] });
-  /* 上传到哪个语言就切到哪个语言页：用户能立刻看到刚加的卡片 */
-  if (packs[0]) fontLang = packs[0].language;
-  resetUploadDialog();
-  renderFontGrid();
-  if (dialog?.open) closeDialogAnimated(dialog);
-  toast(`已加入 ${packs.length} 个字体`);
+  window.clearTimeout(saveTimer);
+  const mergedPatch = { ...pendingPatch, customFonts: [...existing, ...packs] };
+  pendingPatch = {};
+  setSaveState('saving');
+  try {
+    settings = await saveStoredSettings(mergedPatch);
+    setSaveState('saved');
+    /* 上传到哪个语言就切到哪个语言页：用户能立刻看到刚加的卡片 */
+    if (packs[0]) fontLang = packs[0].language;
+    resetUploadDialog();
+    renderFontGrid();
+    applyPreview();
+    if (dialog?.open) closeDialogAnimated(dialog);
+    toast(`已加入 ${packs.length} 个字体`);
+  } catch {
+    setSaveState('error');
+    showUploadError('保存失败：本地存储空间不足或扩展权限受限，请重试');
+  }
 }
 
 function bindFontEvents(): void {
@@ -1814,9 +1891,11 @@ function editablePack(): GlossaryPack | undefined {
   return customPacks.glossaries.find((p) => p.id === pack.id);
 }
 
+let editingIsNew = false;
+
 function saveEditing(): void {
   const pack = editablePack();
-  if (!pack) return;
+  if (!pack || editingIndex < 0 || editingIndex >= pack.entries.length) return;
   const inputs = $$<HTMLInputElement | HTMLSelectElement>('#gloss-tbody .gloss-input');
   const get = (field: string) => inputs.find((i) => i.dataset.field === field);
 
@@ -1836,11 +1915,19 @@ function saveEditing(): void {
   };
 
   editingIndex = -1;
+  editingIsNew = false;
   void persistGlossary('已保存条目');
 }
 
 function cancelEditing(): void {
+  if (editingIsNew && editingIndex >= 0) {
+    const pack = editablePack();
+    if (pack && editingIndex < pack.entries.length && !pack.entries[editingIndex].ja && !pack.entries[editingIndex].zh) {
+      pack.entries.splice(editingIndex, 1);
+    }
+  }
   editingIndex = -1;
+  editingIsNew = false;
   renderTable();
 }
 
@@ -1886,10 +1973,13 @@ function bindGlossaryEvents(): void {
     }
     pack.entries.unshift({ id: `custom-${Date.now()}`, ja: '', zh: '', category: 'term', source: '手动添加', sourceType: 'community' });
     editingIndex = 0;
+    editingIsNew = true;
     searchTerm = '';
     categoryFilter = 'all';
     const searchEl = $('#gloss-search') as HTMLInputElement | null;
     if (searchEl) searchEl.value = '';
+    const catEl = $('#gloss-category') as HTMLSelectElement | null;
+    if (catEl) catEl.value = 'all';
     renderTable();
   });
 
@@ -1945,10 +2035,16 @@ function bindGlossaryEvents(): void {
   }
 }
 
+const MAX_PACK_FILE_BYTES = 1024 * 1024;
+
 async function importPack(input: HTMLInputElement): Promise<void> {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
+  if (file.size > MAX_PACK_FILE_BYTES) {
+    toast('导入失败：文件超过 1 MB 上限');
+    return;
+  }
 
   try {
     const raw = JSON.parse(await file.text());
@@ -1961,9 +2057,18 @@ async function importPack(input: HTMLInputElement): Promise<void> {
     if (BUILTIN_GLOSSARY_PACKS.some((p) => p.name === pack.name)) {
       pack.name = `${pack.name}（自定义）`;
     }
-    customPacks.glossaries = [...customPacks.glossaries.filter((p) => p.name !== pack.name), pack];
-    activePackId = pack.id;
-    await persistGlossary(`已导入「${pack.name}」${pack.entries.length} 条`);
+    const nextGlossaries = [...customPacks.glossaries.filter((p) => p.name !== pack.name), pack];
+    const ok = await saveGlossaryPacks(nextGlossaries);
+    if (!ok) {
+      toast('导入失败：浏览器存储不可用');
+      return;
+    }
+    customPacks.glossaries = nextGlossaries;
+    const importedId = pack.id;
+    activePackId = importedId;
+    renderPackList();
+    renderTable();
+    toast(`已导入「${pack.name}」${pack.entries.length} 条`);
   } catch {
     toast('导入失败：文件不是合法 JSON');
   }
@@ -2202,6 +2307,10 @@ async function importScenePack(input: HTMLInputElement): Promise<void> {
   input.value = '';
   if (!file) return;
   clearSceneImportReport();
+  if (file.size > MAX_PACK_FILE_BYTES) {
+    showSceneImportReport('导入失败：文件超过 1 MB 上限（未写入任何内容）', ['单文件大小不得超过 1 MB']);
+    return;
+  }
 
   let raw: unknown;
   try {
@@ -2224,12 +2333,13 @@ async function importScenePack(input: HTMLInputElement): Promise<void> {
   if (scenes().some((s) => s.name === pack.name)) pack.name = `${pack.name}（自定义）`;
   pack.id = uniqueSceneId(pack.id);
 
-  customPacks.scenes = [...customPacks.scenes.filter((p) => p.name !== pack.name), pack];
-  const ok = await saveScenePacks(customPacks.scenes);
+  const nextScenes = [...customPacks.scenes.filter((p) => p.name !== pack.name), pack];
+  const ok = await saveScenePacks(nextScenes);
   if (!ok) {
     showSceneImportReport('导入失败：浏览器存储不可用（未写入）', ['chrome.storage.local 不可用，请检查扩展权限']);
     return;
   }
+  customPacks.scenes = nextScenes;
 
   clearSceneImportReport();
   viewingSceneId = pack.id;
@@ -2980,7 +3090,7 @@ function captureProviderFocus(): FocusSnapshot | null {
 function restoreProviderFocus(snap: FocusSnapshot | null, explicitKey = ''): void {
   const fk = explicitKey || snap?.fk;
   if (!fk) return;
-  const next = document.querySelector<HTMLElement>(`#provider-list [data-fk="${fk}"]`);
+  const next = document.querySelector<HTMLElement>(`#provider-list [data-fk="${attrValue(fk)}"]`);
   if (!next) return;
   next.focus();
   if (snap && snap.start !== null) {
@@ -3395,8 +3505,8 @@ function onFallbackGripUp(event: PointerEvent): void {
   $('#fallback-order-list')?.classList.remove('is-sorting');
   drag.line?.classList.remove('is-on');
 
-  if (!drag.moved || drag.to === drag.from) {
-    /* 只按了一下没拖：焦点给回这一行，别让它停在已松手的手柄上 */
+  if (event.type === 'pointercancel' || !drag.moved || drag.to === drag.from) {
+    /* 取消手势或只按了一下没拖：绝不提交排序，焦点给回这一行 */
     drag.item.focus();
     return;
   }
@@ -4002,8 +4112,12 @@ async function testProviderLatency(providerId: string): Promise<void> {
 
   const modelIds = modelRowsFor(provider).map((row) => row.id);
 
-  /* 任何一次新的测试都让旧循环失效（重开 / 切到别家测） */
+  /* 任何一次新的测试都让旧循环失效，并先复位上一家厂牌按钮防止永久卡死「测试中」 */
+  const prevRunning = latencyRunningProvider;
   const token = ++latencyRunToken;
+  if (prevRunning && prevRunning !== provider.id) {
+    syncTestButton(prevRunning, 0, 0, false);
+  }
   latencyRunningProvider = provider.id;
 
   if (modelIds.length === 0) {
@@ -4330,12 +4444,33 @@ function bindMiscEvents(): void {
   });
 
   $('#btn-clear-cache')?.addEventListener('click', async () => {
-    const ok = await clearSentenceCache();
+    const bg = await sendBgCacheMessage<boolean>({ type: 'CLEAR_SENTENCE_CACHE' });
+    const ok = bg.proxied ? bg.data : await clearSentenceCache();
     toast(ok ? '翻译缓存已清空' : '清空失败：数据库被占用，请刷新视频页后重试');
   });
 
   $('#btn-reset-settings')?.addEventListener('click', () => void resetSettings());
   $('#btn-reset-all')?.addEventListener('click', () => void resetSettings());
+}
+
+/** 通过 Background 代理执行缓存操作（同时清理后台内存缓存与扩展源 IDB），无后台时回退直调 */
+function sendBgCacheMessage<T>(msg: unknown): Promise<{ proxied: true; data: T } | { proxied: false }> {
+  if (typeof chrome === 'undefined' || !chrome.runtime?.sendMessage) {
+    return Promise.resolve({ proxied: false });
+  }
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendMessage(msg, (res: any) => {
+        if (chrome.runtime.lastError || !res || res.success !== true) {
+          resolve({ proxied: false });
+          return;
+        }
+        resolve({ proxied: true, data: res.data as T });
+      });
+    } catch {
+      resolve({ proxied: false });
+    }
+  });
 }
 
 /* ══════════════════════ AI 精翻字幕缓存（需求 7） ══════════════════════ */
@@ -4346,6 +4481,11 @@ function bindMiscEvents(): void {
  */
 /** 记录上一次生效的 TTL，用来判断这次点击是「变短」还是「变长」 */
 let aiCacheTtlApplied: number = DEFAULT_SETTINGS.aiCacheTtlHours ?? 720;
+
+async function runPruneAiTracks(hours: number): Promise<number> {
+  const bg = await sendBgCacheMessage<number>({ type: 'AI_TRACK_PRUNE', payload: { ttlHours: hours } });
+  return bg.proxied ? bg.data : pruneAiTracks(hours);
+}
 
 function bindAiCacheEvents(): void {
   aiCacheTtlApplied = settings.aiCacheTtlHours ?? DEFAULT_SETTINGS.aiCacheTtlHours ?? 720;
@@ -4358,10 +4498,12 @@ function bindAiCacheEvents(): void {
       aiCacheTtlApplied = next;
       // 永久（0）不需要清理；只有「变短」才立刻清理一次
       if (next > 0 && (prev === 0 || next < prev)) {
-        void pruneAiTracks(next).then(async (removed) => {
-          await refreshAiCacheStat();
-          if (removed > 0) toast(`已按新的保留时长清理 ${removed} 条 AI 精翻缓存`);
-        });
+        void sendBgCacheMessage<number>({ type: 'AI_TRACK_PRUNE', payload: { ttlHours: next } })
+          .then((bg) => (bg.proxied ? bg.data : pruneAiTracks(next)))
+          .then(async (removed) => {
+            await refreshAiCacheStat();
+            if (removed > 0) toast(`已按新的保留时长清理 ${removed} 条 AI 精翻缓存`);
+          });
         return;
       }
       void refreshAiCacheStat();
@@ -4372,13 +4514,14 @@ function bindAiCacheEvents(): void {
     if (!window.confirm('清空全部视频的 AI 精翻字幕缓存？清空后重新打开视频需要重新精翻，普通机翻译文不受影响。')) {
       return;
     }
-    const removed = await clearAllAiTracks();
+    const bg = await sendBgCacheMessage<number>({ type: 'AI_TRACK_CLEAR_ALL' });
+    const removed = bg.proxied ? bg.data : await clearAllAiTracks();
     await refreshAiCacheStat();
     toast(removed > 0 ? `已清空 ${removed} 个视频的 AI 精翻缓存` : 'AI 精翻缓存已经是空的');
   });
 
   // 打开设置页先按当前 TTL 清一次过期记录，再显示统计（不需要用户改任何设置）
-  void pruneAiTracks(aiCacheTtlApplied)
+  void runPruneAiTracks(aiCacheTtlApplied)
     .then(() => refreshAiCacheStat())
     .catch(() => refreshAiCacheStat());
 }
@@ -4388,7 +4531,8 @@ async function refreshAiCacheStat(): Promise<void> {
   const el = $('#ai-cache-stat');
   if (!el) return;
   try {
-    const stats = await getAiTrackStats();
+    const bg = await sendBgCacheMessage<{ count: number; bytes: number }>({ type: 'AI_TRACK_STATS' });
+    const stats = bg.proxied ? bg.data : await getAiTrackStats();
     if (stats.count <= 0) {
       el.textContent = '本地暂无 AI 精翻字幕缓存。';
       return;
@@ -4403,14 +4547,31 @@ async function refreshAiCacheStat(): Promise<void> {
 
 
 async function resetSettings(): Promise<void> {
-  if (!window.confirm('恢复默认设置？术语库与自定义场景包会保留。')) return;
-  // 只认 types 里的 DEFAULT_SETTINGS：早期这里手写了一份残缺的默认值副本，
-  // 漏掉 segmentationLanguage / 三种配色 / API 配置，导致「恢复默认」名不副实。
-  settings = await saveStoredSettings({ ...DEFAULT_SETTINGS });
-  reflectSettings();
-  applyPreview();
-  renderScenarios();
-  toast('已恢复默认设置');
+  if (!window.confirm('恢复默认设置？术语库、自定义场景包与本地上传的字体会保留。')) return;
+  // 先清空防抖队列，防止 320ms 前的未落盘改动在重置完成后回写覆盖默认值
+  window.clearTimeout(saveTimer);
+  pendingPatch = {};
+  // 不传入 customFonts 字段（存储层只在显式传入时重写 local 字体库），保留用户上传的字体
+  const { customFonts: _keepLocalFonts, ...resetPayload } = DEFAULT_SETTINGS;
+  try {
+    settings = await saveStoredSettings(resetPayload);
+    aiCacheTtlApplied = settings.aiCacheTtlHours ?? DEFAULT_SETTINGS.aiCacheTtlHours ?? 720;
+    for (const k of Object.keys(latencyResults)) delete latencyResults[k];
+    reflectSettings();
+    syncWordColorBlock();
+    syncBgTransparent();
+    applyPreview();
+    renderFontGrid();
+    renderScenarios();
+    renderScenePane();
+    renderProviderList();
+    renderFallbackOrder();
+    setSaveState('saved');
+    toast('已恢复默认设置');
+  } catch {
+    setSaveState('error');
+    toast('恢复默认失败：浏览器存储不可用');
+  }
 }
 
 /* ══════════════════════════ 弹层动效 ══════════════════════════
@@ -4453,6 +4614,7 @@ function bindDialogMotion(): void {
     const dialog = $(id) as HTMLDialogElement | null;
     dialog?.addEventListener('cancel', (event) => {
       event.preventDefault();
+      if (id === '#font-upload-dialog') resetUploadDialog();
       closeDialogAnimated(dialog);
     });
   }

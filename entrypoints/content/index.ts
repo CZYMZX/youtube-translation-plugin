@@ -8,7 +8,7 @@ import {
   type KaraokeWindow,
   type CaptionToken
 } from '../../types';
-import { getStoredSettings } from '../../utils/storage';
+import { getStoredSettings, loadCustomFonts, stripCustomFonts } from '../../utils/storage';
 import { extractCaptionTokens, segmentCaptionTokens } from '../../utils/segmenter';
 import { normalizeCaptionResponse } from '../../utils/caption-parser';
 import { ControlBarButtonManager } from '../../utils/control-bar-button';
@@ -47,7 +47,7 @@ export default defineContentScript({
   runAt: 'document_idle',
   main() {
     console.log(
-      '%c[YT-Sub-Translator v0.6.0]%c Content-script active (Immersive Translate Mode)',
+      '%c[YT-Sub-Translator v0.6.1]%c Content-script active (Immersive Translate Mode)',
       'background:#2563eb;color:#fff;font-weight:bold;padding:2px 6px;border-radius:3px',
       'color:#16a34a;font-weight:bold;margin-left:4px'
     );
@@ -60,6 +60,9 @@ export default defineContentScript({
     let translationQueue: TranslationQueue | null = null;
     let videoElement: HTMLVideoElement | null = null;
     let currentVideoId: string = '';
+    /** 每次切换视频 / 离开 watch 页自增，彻底拦截所有过期异步回调（防快切视频串字幕） */
+    let videoSessionId = 0;
+    const videoBurstTimers = new Set<ReturnType<typeof setTimeout>>();
     let currentSentences: SubtitleSentence[] = [];
     let isFullAiRunning = false;
     let nativeSubtitleStyleEl: HTMLStyleElement | null = null;
@@ -263,7 +266,14 @@ export default defineContentScript({
         const prevMergeFragments = settings?.mergeShortFragments;
         const prevAutoPunct = settings?.autoPunctuation;
         const prevLyricKaraoke = settings?.lyricKaraoke;
-        settings = message.settings;
+        const prevCustomFonts = settings?.customFonts;
+        // Background 广播 SETTINGS_UPDATED 时会剥离大体积 customFonts；保留本页已载入字体，变更由 storage.onChanged 刷新
+        settings = {
+          ...message.settings,
+          customFonts: Array.isArray(message.settings?.customFonts)
+            ? message.settings.customFonts
+            : prevCustomFonts
+        };
 
         updateNativeSubtitleVisibility();
         if (buttonManager) {
@@ -298,6 +308,20 @@ export default defineContentScript({
         }
       }
     });
+
+    // 3b. 监听本地自定义字体变更（大文件只进 local、不随 SETTINGS_UPDATED 跨进程广播）
+    if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+      chrome.storage.onChanged.addListener((changes, areaName) => {
+        if (contextInvalidated || areaName !== 'local' || !changes.yt_sub_translator_fonts) return;
+        loadCustomFonts()
+          .then((fonts) => {
+            if (contextInvalidated) return;
+            settings = { ...settings, customFonts: fonts };
+            if (overlay) overlay.updateSettings(settings);
+          })
+          .catch(() => {});
+      });
+    }
 
     /**
      * 借鉴沉浸式翻译：优雅控制原生字幕显隐
@@ -556,7 +580,15 @@ export default defineContentScript({
 
     function getVideoIdFromUrl(): string {
       const urlParams = new URLSearchParams(window.location.search);
-      return urlParams.get('v') || '';
+      const v = urlParams.get('v');
+      if (v) return v;
+      const pathMatch = window.location.pathname.match(/^\/(?:live|embed)\/([A-Za-z0-9_-]{11})(?:\/|$)/);
+      return pathMatch ? pathMatch[1] : '';
+    }
+
+    function clearVideoBurstTimers() {
+      for (const t of videoBurstTimers) clearTimeout(t);
+      videoBurstTimers.clear();
     }
 
     /**
@@ -575,16 +607,56 @@ export default defineContentScript({
         if (vid && vid !== currentVideoId) {
           console.log(`[YT-Sub-Translator] Watchdog detected video change: ${currentVideoId} -> ${vid}`);
           handleVideoChange(vid);
+        } else if (!vid && currentVideoId && !document.querySelector('ytd-miniplayer[active]')) {
+          // 离开视频页返回首页/频道/搜索且无迷你播放器：清理旧视频看门狗与 AI 精翻
+          handleLeaveVideoPage();
         }
       }, 300);
     }
 
+    function handleLeaveVideoPage() {
+      if (!currentVideoId) return;
+      EphemeralSubtitleStore.release(currentVideoId);
+      currentVideoId = '';
+      videoSessionId++;
+      clearVideoBurstTimers();
+      stopCaptionsWatchdog();
+      if (liveTranslateTimer) {
+        clearTimeout(liveTranslateTimer);
+        liveTranslateTimer = null;
+      }
+      lastDomCaptionText = '';
+      currentSentences = [];
+      lastCaptionData = null;
+      currentLoadingTrackUrl = '';
+      lastCaptionTokenCount = 0;
+      trackCascadeActive = false;
+      aiRunToken++;
+      isFullAiRunning = false;
+      manualResumePromptedKey = '';
+      if (translationQueue) translationQueue.setSentences([]);
+      if (overlay) {
+        overlay.setSentences([]);
+        overlay.resetAiProgress();
+        overlay.setTrackEmpty(false);
+      }
+      updateNativeSubtitleVisibility();
+    }
+
     function handleVideoChange(newVid: string) {
+      if (contextInvalidated) return;
       if (currentVideoId) {
         // 只释放页内内存镜像；**不删盘** —— 旧视频的整轨记录要留给「重看时续翻」
         EphemeralSubtitleStore.release(currentVideoId);
       }
       currentVideoId = newVid;
+      const sessionId = ++videoSessionId;
+      clearVideoBurstTimers();
+      if (liveTranslateTimer) {
+        clearTimeout(liveTranslateTimer);
+        liveTranslateTimer = null;
+      }
+      lastDomCaptionText = '';
       EphemeralSubtitleStore.init(newVid);
       aiTrackHitLoggedFor = '';
       currentSentences = [];
@@ -604,7 +676,9 @@ export default defineContentScript({
       // 让正在执行的 AI 全篇精翻立即失效，避免把上一部视频的译文写到新视频缓存里
       aiRunToken++;
       isFullAiRunning = false;
+      manualResumePromptedKey = '';
       watchdogRearms = 0;
+      if (translationQueue) translationQueue.setSentences([]);
       // 注意：负缓存**不在这里清**。它按 vid 建键，天然按视频隔离；清掉反而会让
       // 「MAIN world 的 video_id 与 URL 短暂打架」这类抖动退化成每 250ms 一轮的热循环
       // （实测过一次 390 次 youtubei 的回归）。过期交给时间戳，用户重新进同一视频时
@@ -619,6 +693,9 @@ export default defineContentScript({
         overlay.resetAiProgress();
         overlay.setTrackEmpty(false);
       }
+      if (document.pictureInPictureElement && document.pictureInPictureElement === videoElement) {
+        refreshPipCues();
+      }
 
       setupPlayerAndOverlay();
       if (buttonManager) {
@@ -629,13 +706,16 @@ export default defineContentScript({
       stopCaptionsWatchdog();
       startCaptionsWatchdog();
 
-      // 启动突发高频字幕探测
+      // 启动突发高频字幕探测（托管 timer，连续切视频立即取消旧批次）
       detectCurrentVideoAndLoad();
-      setTimeout(() => detectCurrentVideoAndLoad(), 250);
-      setTimeout(() => detectCurrentVideoAndLoad(), 700);
-      setTimeout(() => detectCurrentVideoAndLoad(), 1500);
-      setTimeout(() => detectCurrentVideoAndLoad(), 3000);
-      setTimeout(() => detectCurrentVideoAndLoad(), 5500);
+      for (const delay of [250, 700, 1500, 3000, 5500]) {
+        const t = setTimeout(() => {
+          videoBurstTimers.delete(t);
+          if (sessionId !== videoSessionId || contextInvalidated) return;
+          detectCurrentVideoAndLoad();
+        }, delay);
+        videoBurstTimers.add(t);
+      }
     }
 
     /**
@@ -711,11 +791,18 @@ export default defineContentScript({
       );
 
       // 1. 停掉所有周期性 ticker 与待执行的节流回调
+      clearVideoBurstTimers();
       if (urlWatchdogTimer) {
         clearInterval(urlWatchdogTimer);
         urlWatchdogTimer = null;
       }
       stopCaptionsWatchdog();
+      if (buttonManager) {
+        buttonManager.destroy();
+      }
+      if (videoElement) {
+        videoElement.removeEventListener('timeupdate', handleTimeUpdate);
+      }
       if (playerSyncTimer) {
         clearTimeout(playerSyncTimer);
         playerSyncTimer = null;
@@ -868,6 +955,7 @@ export default defineContentScript({
       if (trackFetchInFlight === vid) return;
       trackFetchInFlight = vid;
 
+      const requestSessionId = videoSessionId;
       safeSendMessage<{
         success?: boolean;
         skipped?: boolean;
@@ -891,6 +979,8 @@ export default defineContentScript({
             if (r.reason === 'invalidated') handleContextInvalidated();
             return;
           }
+          // 切视频后丢弃过期回包，防止旧视频音轨串写到新视频
+          if (requestSessionId !== videoSessionId || vid !== currentVideoId) return;
           const res = r.response;
           if (res && res.success && res.tracks && res.tracks.length > 0 && currentSentences.length === 0) {
             console.log('[YT-Sub-Translator] Fetched tracks via YouTubei fallback:', res.tracks.length);
@@ -1060,18 +1150,33 @@ export default defineContentScript({
           console.warn('[YT-Sub-Translator] 解析截获的原生字幕数据失败:', e);
         }
       } else if (event.data.type === 'CAPTURED_TIMEDTEXT_URL') {
-        // 兜底机制：若未拦截到响应体，尝试通过 Background 代理拉取
+        if (contextInvalidated) return;
+        // 兜底机制：若未拦截到响应体，校验为 YouTube 官方 timedtext 域名且属于当前视频后再通过 Background 代理拉取
         const { url } = event.data;
+        let isTrustedUrl = false;
+        let urlVid = '';
+        if (typeof url === 'string' && url.length > 0 && url.length <= 4096) {
+          try {
+            const parsed = new URL(url);
+            isTrustedUrl =
+              parsed.protocol === 'https:' &&
+              /(^|\.)youtube\.com$/i.test(parsed.hostname) &&
+              parsed.pathname === '/api/timedtext';
+            urlVid = parsed.searchParams.get('v') || '';
+          } catch {}
+        }
+        if (urlVid && currentVideoId && urlVid !== currentVideoId) {
+          return;
+        }
         if (
-          typeof url === 'string' &&
-          url.startsWith('https://') &&
-          url.includes('/api/timedtext') &&
-          url.length <= 4096 &&
+          isTrustedUrl &&
           (currentSentences.length === 0 || captionDataIncomplete) &&
           url !== currentLoadingTrackUrl
         ) {
           console.log('[YT-Sub-Translator] Direct timedtext URL intercepted from YouTube player');
           currentLoadingTrackUrl = url;
+          const requestSessionId = videoSessionId;
+          const requestVid = currentVideoId;
           safeSendMessage<{ success?: boolean; data?: Json3CaptionData; error?: string }>(
             { type: 'FETCH_CAPTIONS', payload: { url } },
             (r) => {
@@ -1079,6 +1184,7 @@ export default defineContentScript({
                 if (r.reason === 'invalidated') handleContextInvalidated();
                 return;
               }
+              if (requestSessionId !== videoSessionId || requestVid !== currentVideoId) return;
               const response = r.response;
               if (
                 response &&
@@ -1106,10 +1212,11 @@ export default defineContentScript({
 
     // 突发事件全量监听：处理 SPA 路由切换与状态刷新
     const triggerNavigationSync = () => {
+      if (contextInvalidated) return;
       const vid = getVideoIdFromUrl();
       if (vid && vid !== currentVideoId) {
         handleVideoChange(vid);
-      } else {
+      } else if (vid) {
         setupPlayerAndOverlay();
         if (buttonManager) buttonManager.checkAndMount();
         detectCurrentVideoAndLoad();
@@ -1243,9 +1350,11 @@ export default defineContentScript({
        * **youtubei 兜底**记进冷却（不碰模拟点击 —— 有轨视频正是靠点击才拿到数据）。
        */
       const cascadeVid = currentVideoId;
+      const cascadeSessionId = videoSessionId;
       const armNoTrackVerdict = () => {
         setTimeout(() => {
           if (
+            cascadeSessionId === videoSessionId &&
             cascadeVid &&
             cascadeVid === currentVideoId &&
             currentSentences.length === 0 &&
@@ -1257,6 +1366,10 @@ export default defineContentScript({
       };
 
       const tryFetchCandidate = () => {
+        if (contextInvalidated || cascadeSessionId !== videoSessionId || cascadeVid !== currentVideoId) {
+          finishCascade();
+          return;
+        }
         // 已经有句子（且不是分段恢复）就不必再试下一条候选
         if (currentSentences.length > 0 && !captionDataIncomplete) {
           finishCascade();
@@ -1282,7 +1395,7 @@ export default defineContentScript({
 
         let fetchUrl = track.baseUrl;
         if (!fetchUrl.includes('fmt=')) {
-          fetchUrl += '&fmt=json3';
+          fetchUrl += (fetchUrl.includes('?') ? '&' : '?') + 'fmt=json3';
         }
 
         /**
@@ -1304,6 +1417,10 @@ export default defineContentScript({
             // 上下文已失效：不能再往下一跳，否则会一直递归发消息（异常被吞但请求空转）
             if (!r.ok && r.reason === 'invalidated') {
               handleContextInvalidated();
+              return;
+            }
+            // 视频已切换，立即放弃旧瀑布避免串写新视频状态
+            if (cascadeSessionId !== videoSessionId || cascadeVid !== currentVideoId) {
               return;
             }
             const response = r.ok ? r.response : null;
@@ -1506,17 +1623,9 @@ export default defineContentScript({
       sentences.sort((a, b) => a.start - b.start || a.id - b.id);
       sentences.forEach((s, i) => (s.id = i));
 
-      /* 翻译单元对比：这是「1166 → 62」的证据，不允许只写在文档里。
-         基线用**真正会发给翻译队列的句数**（segmentCaptionTokens 的结果），
-         不是 token 数 —— 0.4.3 该样本实测 14012 token → 1166 句。 */
-      const baselineTokens = extractCaptionTokens(data);
-      const baselineUnits = segmentCaptionTokens(baselineTokens, settings).length;
-      const savedPct =
-        baselineUnits > 0 ? (100 - (stats.lines / baselineUnits) * 100).toFixed(1) : '0.0';
       console.log(
         `[LyricKaraoke] ✓ #${++karaokeBuildCount} 识别歌词轨 confidence=${verdict.confidence.toFixed(2)}｜` +
           `${stats.inputEvents} event → 去重 ${stats.lines} 行 / ${stats.displays} 段显示｜` +
-          `翻译单元 ${stats.lines} 句（0.4.3 按 event 断句是 ${baselineUnits} 句/${baselineTokens.length} token，减少 ${savedPct}%）｜` +
           `重叠裁剪 ${trimmed} 处（前段提前 ${KARAOKE_TAIL_GAP_MS}ms）｜` +
           `笔色 ${colorStats.chars} 字（${colorStats.rainbow} 行彩虹）｜真实字级时间 ${colorStats.realTime} 行`
       );
@@ -1906,7 +2015,8 @@ export default defineContentScript({
           // 自动续翻：只翻缺的，不动已完成的
           void startAiFullTranslation(restored);
         } else if (overlay) {
-          // 手动续翻：打开视频就告诉用户「还差多少、点哪里」，不擅自发请求
+          // 手动续翻：打开视频已提示过，标记该键，用户随后点一次「AI 深度精翻」即可直接续翻
+          manualResumePromptedKey = `${currentVideoId}::${settings.targetLang}::${settings.scenario}`;
           overlay.showToast(
             `检测到上次精翻完成 ${restored.restored}/${currentSentences.length} 句，点「AI 深度精翻」继续（不会重翻已完成部分）`
           );
@@ -1932,11 +2042,11 @@ export default defineContentScript({
     async function resolveCachedAiRecord(): Promise<AiTrackRecord | null> {
       if (!currentVideoId || currentSentences.length === 0) return null;
       const meta = aiTrackMeta();
-      const mem = EphemeralSubtitleStore.load(currentVideoId);
+      const mem = EphemeralSubtitleStore.load(currentVideoId, meta);
       if (
         mem &&
         mem.length === currentSentences.length &&
-        mem.some((s) => !!s.translation)
+        mem.some((s) => s.isAi === true && !!s.translation)
       ) {
         return buildAiTrackRecord(meta, mem);
       }
@@ -2005,8 +2115,10 @@ export default defineContentScript({
     }
 
     async function hydrateSentencesFromCache() {
-      if (currentSentences.length === 0) return;
-      const texts = currentSentences.map((s) => s.text);
+      const targetSentences = currentSentences;
+      const sessionId = videoSessionId;
+      if (targetSentences.length === 0) return;
+      const texts = targetSentences.map((s) => s.text);
       const cacheKeys = texts.map((t) =>
         buildSentenceCacheKey(
           settings.targetLang,
@@ -2019,19 +2131,21 @@ export default defineContentScript({
       );
       try {
         const cachedMap = await getCachedSentencesBatch(cacheKeys);
+        // 异步读取返回时若已切换视频或重新断句，直接丢弃避免串写
+        if (sessionId !== videoSessionId || targetSentences !== currentSentences) return;
         let hitCount = 0;
-        for (let i = 0; i < currentSentences.length; i++) {
+        for (let i = 0; i < targetSentences.length; i++) {
           const trans = cachedMap.get(cacheKeys[i]);
-          if (trans && !currentSentences[i].translation) {
-            currentSentences[i].translation = trans;
-            currentSentences[i].status = 'done';
+          if (trans && !targetSentences[i].translation) {
+            targetSentences[i].translation = trans;
+            targetSentences[i].status = 'done';
             hitCount++;
           }
         }
         if (hitCount > 0) {
-          console.log(`[YT-Sub-Translator] 从本地持久化缓存命中 ${hitCount}/${currentSentences.length} 句字幕`);
+          console.log(`[YT-Sub-Translator] 从本地持久化缓存命中 ${hitCount}/${targetSentences.length} 句字幕`);
           if (overlay) {
-            overlay.setSentences(currentSentences);
+            overlay.setSentences(targetSentences);
           }
           if (document.pictureInPictureElement && document.pictureInPictureElement === videoElement) {
             refreshPipCues();
@@ -2042,21 +2156,36 @@ export default defineContentScript({
       }
     }
 
-    function reSegmentAndReload(data: Json3CaptionData) {
-      /* 歌词轨：开关开着且识别成立时按「一行一句 + 多显示窗口」重建，其余情况与 0.4.3 一致 */
-      const karaoke = tryBuildKaraokeSentences(data);
-      const sentences = karaoke || segmentCaptionTokens(extractCaptionTokens(data), settings);
+    function reSegmentAndReload(rawData: Json3CaptionData) {
+      aiRunToken++;
+      isFullAiRunning = false;
+      manualResumePromptedKey = '';
+      /* 歌词轨：开关开着且识别成立时按「一行一句 + 多显示窗口」重建；
+         关掉卡拉OK开关时仍需执行 cleanLyricCaptionData 避免退化为碎片，并给 ASR 轨补挂逐词时间。 */
+      const karaoke = tryBuildKaraokeSentences(rawData);
+      let sentences: SubtitleSentence[];
+      if (karaoke) {
+        sentences = karaoke;
+      } else {
+        const cleanedLyric = cleanLyricCaptionData(rawData);
+        const data = cleanedLyric ?? rawData;
+        sentences = segmentCaptionTokens(extractCaptionTokens(data), settings);
+        attachAsrWordTimings(sentences, data);
+      }
       currentSentences = sentences;
       updateNativeSubtitleVisibility();
       if (overlay) {
         overlay.setSentences(currentSentences);
+        overlay.resetAiProgress();
       }
-      hydrateSentencesFromCache().then(() => {
-        startPreTranslationPipeline();
-      });
+      void restoreAiTrackThenStartPipeline();
     }
 
     function reTranslateAll() {
+      aiRunToken++;
+      isFullAiRunning = false;
+      manualResumePromptedKey = '';
+      if (overlay) overlay.resetAiProgress();
       for (const s of currentSentences) {
         s.translation = undefined;
         s.status = 'idle';
@@ -2074,24 +2203,25 @@ export default defineContentScript({
       target.status = 'translating';
       if (overlay) overlay.setSentences(currentSentences);
 
-      safeSendMessage<{ success?: boolean; translations?: string[]; error?: string }>(
+      safeSendMessage<{ success?: boolean; translations?: string[]; failed?: boolean[]; error?: string }>(
         {
           type: 'TRANSLATE_BATCH',
           payload: {
             texts: [target.text],
             targetLang: settings.targetLang,
-            settings
+            settings: stripCustomFonts(settings)
           }
         },
         (r) => {
           if (!r.ok && r.reason === 'invalidated') handleContextInvalidated();
           const res = r.ok ? r.response : null;
-          if (res && res.success && Array.isArray(res.translations) && res.translations.length > 0) {
+          const isFailed = Array.isArray(res?.failed) && res.failed[0] === true;
+          if (res && res.success && Array.isArray(res.translations) && res.translations.length > 0 && !isFailed) {
             target.translation = res.translations[0];
             target.status = 'done';
           } else {
             target.status = 'error';
-            target.translation = `[翻译失败: ${res?.error || '网络不可达'}]`;
+            target.translation = res?.translations?.[0] || `[翻译失败: ${res?.error || '网络不可达'}]`;
           }
           if (overlay) overlay.setSentences(currentSentences);
         }
@@ -2128,8 +2258,11 @@ export default defineContentScript({
      *      只提示「已完成 N/M，点按钮继续」，不发请求；
      *   3. 其余情况（含 auto 续翻）→ 只翻缺译文的句子，并带紧邻上文两句。
      */
+    let isStartingAiRequest = false;
+    let manualResumePromptedKey = '';
+
     async function handleRequestAiSubtitles() {
-      if (isFullAiRunning) {
+      if (isFullAiRunning || isStartingAiRequest) {
         if (overlay) overlay.showToast('AI 深度精翻正在执行中，请稍候...');
         return;
       }
@@ -2139,30 +2272,41 @@ export default defineContentScript({
         return;
       }
 
-      // 先查本地（页内内存 → IndexedDB），已翻部分立刻铺出来
-      const plan = await applyCachedAiTrack();
-      const action = decideAiRunAction(plan, settings.aiResumeMode);
+      isStartingAiRequest = true;
+      const entryToken = aiRunToken;
+      const promptKey = `${currentVideoId}::${settings.targetLang}::${settings.scenario}`;
+      try {
+        // 先查本地（页内内存 → IndexedDB），已翻部分立刻铺出来
+        const plan = await applyCachedAiTrack();
+        if (entryToken !== aiRunToken) return;
+        const action = decideAiRunAction(plan, settings.aiResumeMode);
 
-      if (action === 'restore_only' && plan) {
-        if (overlay) {
-          overlay.setSentences(currentSentences);
-          overlay.setAiComplete(currentSentences.length);
-          overlay.showToast('已从本地缓存载入全篇精翻字幕');
+        if (action === 'restore_only' && plan) {
+          if (overlay) {
+            overlay.setSentences(currentSentences);
+            overlay.setAiComplete(currentSentences.length);
+            overlay.showToast('已从本地缓存载入全篇精翻字幕');
+          }
+          return; // 零请求
         }
-        return; // 零请求
-      }
 
-      if (action === 'prompt_resume' && plan) {
-        if (overlay) {
-          overlay.resetAiProgress();
-          overlay.showToast(
-            `检测到上次精翻完成 ${plan.restored}/${currentSentences.length} 句，点「AI 深度精翻」继续（不会重翻已完成部分）`
-          );
+        // 手动模式下：若打开视频时未提示过，首次点击先恢复并提示；再次点击（或已提示过）直接续翻，避免死循环
+        if (action === 'prompt_resume' && plan && manualResumePromptedKey !== promptKey) {
+          manualResumePromptedKey = promptKey;
+          if (overlay) {
+            overlay.resetAiProgress();
+            overlay.showToast(
+              `检测到上次精翻完成 ${plan.restored}/${currentSentences.length} 句，再点一次「AI 深度精翻」继续（不会重翻已完成部分）`
+            );
+          }
+          return;
         }
-        return; // 手动模式：等用户再点一次
-      }
 
-      await startAiFullTranslation(plan);
+        manualResumePromptedKey = '';
+        await startAiFullTranslation(plan);
+      } finally {
+        isStartingAiRequest = false;
+      }
     }
 
     /**
@@ -2174,9 +2318,10 @@ export default defineContentScript({
       if (runSentences.length === 0) return;
 
       isFullAiRunning = true;
-      // 固化本次运行上下文：切换视频后 token 变化，旧循环立即失效
+      // 固化本次运行上下文与设置快照：切换视频或中途改语言/场景后 token 变化，旧循环立即失效
       const runToken = ++aiRunToken;
       const runVideoId = currentVideoId;
+      const runSettings: ExtensionSettings = { ...settings };
       const runMeta = aiTrackMeta();
       const totalSentences = runSentences.length;
       let doneSentences = resume ? resume.restored : 0;
@@ -2229,8 +2374,8 @@ export default defineContentScript({
                 type: 'TRANSLATE_BATCH',
                 payload: {
                   texts,
-                  targetLang: settings.targetLang,
-                  settings,
+                  targetLang: runMeta.targetLang,
+                  settings: stripCustomFonts(runSettings),
                   noFallback: true, // AI 深度字幕严禁用谷歌机翻冒充
                   bypassCache: true,
                   // 续翻语境：上文原文 + 已有译文，只帮模型判断指代与语气
@@ -2315,6 +2460,9 @@ export default defineContentScript({
      * 清理当前视频的 AI 字幕缓存（内存 + IndexedDB）
      */
     async function handleClearAiSubtitles() {
+      aiRunToken++;
+      isFullAiRunning = false;
+      manualResumePromptedKey = '';
       await EphemeralSubtitleStore.clear(currentVideoId);
       aiTrackHitLoggedFor = '';
       for (const s of currentSentences) {
@@ -2362,20 +2510,28 @@ export default defineContentScript({
 
         if (fullText && fullText !== lastDomCaptionText && fullText.length > 1) {
           lastDomCaptionText = fullText;
+          const liveSessionId = videoSessionId;
+          const liveVid = currentVideoId;
           clearTimeout(liveTranslateTimer);
           liveTranslateTimer = setTimeout(() => {
+            if (contextInvalidated || liveSessionId !== videoSessionId || liveVid !== currentVideoId || currentSentences.length > 0) {
+              return;
+            }
             safeSendMessage<{ success?: boolean; translations?: string[]; error?: string }>(
               {
                 type: 'TRANSLATE_BATCH',
                 payload: {
                   texts: [fullText],
                   targetLang: settings.targetLang,
-                  settings
+                  settings: stripCustomFonts(settings)
                 }
               },
               (r) => {
                 if (!r.ok) {
                   if (r.reason === 'invalidated') handleContextInvalidated();
+                  return;
+                }
+                if (liveSessionId !== videoSessionId || liveVid !== currentVideoId || currentSentences.length > 0) {
                   return;
                 }
                 const res = r.response;

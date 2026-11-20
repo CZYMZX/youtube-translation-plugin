@@ -8,6 +8,38 @@
 
 ---
 
+## [0.6.1] - 2026-11-20 (全面代码审计与高危缺陷修复 · 待手动测试发布)
+
+> 本版为全仓三批质量止血与安全加固版本，版本号同步点已升至 `0.6.1`（等待手动真机测试后再打正式发布 tag）。
+
+### 修复 · 存储、缓存与跨进程通信
+
+- **AI 精翻缓存跨源打通**：`yt_sub_ai_tracks` 读写与清理统一收口到 Background Service Worker 代理（扩展源 IndexedDB），解决内容脚本（`youtube.com`）与高级设置页（`chrome-extension://`）同源隔离导致设置页统计恒为 0、清空与 TTL 清理失效的问题。
+- **句子缓存清空彻底生效**：`clearSentenceCache()` 改走 Background `CLEAR_SENTENCE_CACHE` 消息 + `store.clear()` 并同步清理一级 LRU 内存缓存；移除 `translator.ts` 重复无上限 `translationCache`；为 IDB 连接注册 `onversionchange` / `onclose` 杜绝 `onblocked` 阻塞。
+- **IPC 剥离大体积自定义字体**：`TRANSLATE_BATCH`、`GET_SETTINGS` 与 `SETTINGS_UPDATED` 广播通过 `stripCustomFonts()` 剥离 `customFonts`（最高 ~27MB base64），内容脚本改由 `storage.onChanged` 按需读取本地字体。
+- **存储降级与清洗加固**：`storage.sync` 写失败退回 `local` 时按 `_updatedAt` 取较新一份避免改动静默回滚；`#00000000` 透明预设仅对 `bgColor` 放行；补齐 `wordHighlightColor` / `wordHighlightTransColor` 清洗与 `minWordsPerSentence <= maxWordsPerSentence` 约束。
+
+### 修复 · 翻译引擎、队列与安全
+
+- **端点校验与防跨厂牌 Key 泄漏**：`callOpenAiRaw` / `fetchAvailableModels` 缺 `apiBaseUrl` 时优先查对应厂牌 `defaultBaseUrl`（杜绝将 Claude/Qwen/Kimi/Zhipu Key 误发给 OpenAI），并严格校验端点协议仅允许 `https:` 或本机 `localhost/127.0.0.1`；Gemini 改用 `x-goog-api-key` 请求头传 Key 并校验编码模型名。
+- **批量解析与对齐防错位**：`mapRawItemsToSlots` / `parseRetrySingle` 拒绝 `null`/`""`/`false` 隐式转 `0` 覆写第 0 句；检测续翻 `contextBefore` 顺延越界编号；`parseModelJsonArray` 剥离 `<think>` 块并改用括号配平扫描。
+- **降级缓存隔离与失败态透传**：Google 免费机翻兜底不再写入付费主模型 30 天持久化缓存；`ai-track-cache` 仅将 `isAi && status==='done'` 计为完成；`TRANSLATE_BATCH` 透传 `failed[]`，队列不再将 `[翻译失败: ...]` 标成 `done`；`TranslationQueue` 切视频立即释放并发槽与旧 timer。
+- **术语包 / 场景包安全与精度**：前后端补齐 1MB 文件上限校验，清洗 `ja`/`zh` 换行与控制字符防 System Prompt 注入，纯 ASCII 术语增加词边界检查防 `ARK`/`TNT` 子串误命中。
+
+### 修复 · 内容脚本、浮层、解析与断句
+
+- **手动续翻与逐词高亮修复**：修复 `aiResumeMode === 'manual'` 下点击「AI 深度精翻」陷入 `prompt_resume` 死循环的问题；修复浮层快捷面板改样式覆盖 `.k-char` span 不重置 `karaokeBuiltKey` 及 `updateSettings` 误拆 ASR 逐词高亮的 Bug；修正抽屉译文类名 `.item-translated` → `.item-translation` 及过滤态反复全量重建 DOM。
+- **SPA 切视频与桥接去重**：引入 `videoSessionId` 拦截过期异步字幕/缓存/DOM 回调；`youtube-bridge` 按 player 实例去重原生监听；`ControlBarButtonManager` 补全 `destroy()` 监听解绑并移除残留 `filter` 过渡；`background.ts` 改用 `URL.searchParams.delete('fmt')` 修复首参数回退 URL 破坏。
+- **解析、断句、ASR 与歌词轨**：修复 `asr-timing` 路由 2/3 收口倒序、路由 1 假命中与长视频 O(N²)（新增 `WeakMap` 预索引与 DP 上限）；修复 `segmenter` 语种自动检测过低阈值、日语疑问排除死代码、千分位数字劈碎与去重叠负时长；修复 `caption-parser` 自闭合 `<p/>` 吞句、非首属性 `<s>` 丢偏移、`<s>` 词粘连与实体多重解码；修复 `lyric-track` 去重叠回写 `line.endMs` 与 O(L×E) 扫描。
+
+### 修复 · Popup / Options UI 与测试脚本
+
+- 对齐 Popup 与 Options 滑块范围并保留全部 Options 字段，允许停用/删除最后一个术语库；补齐 Popup `--text-sub` / `.color-preset-dot.active` 与 `.popup-container` 切 Tab 滚动复位。
+- 修复 Options「恢复默认」防抖回写竞态与静默清空本地字体、新增 `pagehide` flush、字体上传 0 字节/魔数预检与立即落盘、允许手选纯白 `#ffffff` 逐词高亮色、修复降级拖拽 `pointercancel`、新增术语取消残空行与属性选择器转义。
+- 修复 `scripts/doc-sync-check.js` / `doc-brief.js` 中文路径解码与命令拼写；新增 `test/test-v061-fixes.js` 回归测试。
+
+---
+
 ## [0.6.0] - 2026-11-11 (字幕字体 · 透明背景 · 浮层重构)
 
 > 本版聚焦「字幕观感可控」与「快速面板落地」。版本号同步点（`package.json` /

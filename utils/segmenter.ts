@@ -201,9 +201,11 @@ function endsWithBareCaseParticle(text: string): boolean {
 }
 
 /**
- * 日文疑问句末尾「か」的排除名单（避免陈述句误判为疑问）
+ * 日文疑问句末尾「か」的排除名单（真正以「か」结尾的常见非疑问词尾/副词）
  */
-const JA_QUESTION_EXCLUSIONS = ['かも', 'から', 'かしら', 'かな', 'だろう', 'でしょう', 'かもね'];
+const JA_QUESTION_EXCLUSIONS = [
+  'とか', 'なんか', 'というか', 'ばかりか', '確か', '静か', '明らか', '豊か', 'わずか', 'まさか', 'はるか', 'いつか', 'どこか', 'だれか', 'なにか'
+];
 
 /**
  * ASR 噪声 token 整体匹配规则：纯括号音效标记与署名行
@@ -341,10 +343,18 @@ export function detectStreamLanguage(tokens: CaptionToken[]): StreamLanguage {
       else if ((code >= 0x41 && code <= 0x5a) || (code >= 0x61 && code <= 0x7a)) latin++;
     }
   }
-  if (kana >= 3) return 'ja';
-  if (hangul >= 3 && hangul > han) return 'ko';
-  if (han >= 4) return 'zh';
+  const total = kana + hangul + han + latin;
+  if (total === 0) return 'generic';
+  const cjk = kana + han;
+  // 占比 + 绝对下限双门槛：防止英文/中文长视频因偶然混入 3 个假名或 4 个汉字被误切语种
+  if (kana >= 3 && cjk >= total * 0.2 && kana / Math.max(1, cjk) >= 0.05) return 'ja';
+  if (hangul >= 3 && hangul > han && hangul >= total * 0.2) return 'ko';
+  if (han >= 4 && han >= latin && han >= total * 0.25) return 'zh';
   if (latin >= 12 && latin > han) return 'en';
+  // 短样本兜底（总字母数极少时回落原逻辑）
+  if (kana >= 3 && cjk >= latin) return 'ja';
+  if (hangul >= 3 && hangul > han) return 'ko';
+  if (han >= 4 && han > latin) return 'zh';
   return 'generic';
 }
 
@@ -465,16 +475,20 @@ function splitRawSegmentByPunctuation(
   const clean = text.replace(/[\r\n]+/g, ' \n ').trim();
   if (!clean) return [];
 
+  // 保护数字千分位逗号（如 $1,000,000），避免被 splitOnCommas 劈碎
+  const COMMA_PLACEHOLDER = '\uE000';
+  const safeClean = splitOnCommas ? clean.replace(/(?<=\d),(?=\d)/g, COMMA_PLACEHOLDER) : clean;
+
   // 标点分割正则（保留分隔符；省略号也参与分割）
   // v0.2.7：splitOnCommas 时「、」也参与拆分——行级 ASR token（整行输出）依赖此路径细分
   const commaClass = splitOnCommas ? '、，,' : '';
-  const parts = clean.split(new RegExp(`([。！？!?\\n…${commaClass}]+)`));
+  const parts = safeClean.split(new RegExp(`([。！？!?\\n…${commaClass}]+)`));
   if (parts.length <= 1) {
     return [{ text: clean.replace(/\n/g, ''), start, end }];
   }
 
   const result: Array<{ text: string; start: number; end: number }> = [];
-  const fullLength = Math.max(1, clean.length);
+  const fullLength = Math.max(1, safeClean.length);
   const totalDuration = Math.max(150, end - start);
 
   let currentSubText = '';
@@ -489,7 +503,7 @@ function splitRawSegmentByPunctuation(
     // 如果当前部分是标点或者到了末尾，输出一个子句
     const punctRe = new RegExp(`[。！？!?\\n…${commaClass}]+`);
     if (punctRe.test(part) || i === parts.length - 1) {
-      const trimmed = currentSubText.trim();
+      const trimmed = currentSubText.replace(/\uE000/g, ',').trim();
       if (trimmed) {
         const charStartRatio = subStartChar / fullLength;
         const charEndRatio = Math.min(1, (subStartChar + currentSubText.length) / fullLength);
@@ -521,8 +535,9 @@ export function extractCaptionTokens(captionData: Json3CaptionData | any): Capti
   const events = normalized.events || [];
 
   for (const event of events) {
-    const eventStart = event.tStartMs ?? 0;
-    const eventDuration = event.dDurationMs ?? 2000;
+    if (!event) continue;
+    const eventStart = Number.isFinite(event.tStartMs) && event.tStartMs >= 0 ? event.tStartMs : 0;
+    const eventDuration = Number.isFinite(event.dDurationMs) && event.dDurationMs >= 0 ? event.dDurationMs : 2000;
 
     if (!event.segs || event.segs.length === 0) {
       const fallbackRaw = (event as any).utf8 || (event as any).text;
@@ -542,15 +557,18 @@ export function extractCaptionTokens(captionData: Json3CaptionData | any): Capti
 
     for (let i = 0; i < event.segs.length; i++) {
       const seg = event.segs[i];
-      const text = seg.utf8 ? decodeHtmlEntities(seg.utf8).trim() : '';
+      // normalizeCaptionResponse 已对 seg.utf8 做过单趟 HTML 实体解码，这里不再重复解码避免二重篡改
+      const text = seg?.utf8 ? String(seg.utf8).trim() : '';
       if (!text || isNoiseToken(text)) continue;
 
-      const segOffset = seg.tOffsetMs ?? 0;
+      const rawOffset = seg.tOffsetMs;
+      const segOffset = typeof rawOffset === 'number' && Number.isFinite(rawOffset) && rawOffset >= 0 ? rawOffset : 0;
       const segStart = eventStart + segOffset;
 
       let segEnd: number | undefined;
-      if (i < event.segs.length - 1 && event.segs[i + 1].tOffsetMs !== undefined) {
-        segEnd = eventStart + event.segs[i + 1].tOffsetMs!;
+      const nextOffset = i < event.segs.length - 1 ? event.segs[i + 1]?.tOffsetMs : undefined;
+      if (typeof nextOffset === 'number' && Number.isFinite(nextOffset) && nextOffset >= 0) {
+        segEnd = eventStart + nextOffset;
       } else {
         segEnd = eventStart + eventDuration;
       }
@@ -905,11 +923,14 @@ export function segmentCaptionTokens(
     //    （单字粒度 ASR：…「つけ」「た」「ん」「やけど」逐字输出，切哪一刀都在词内），不切；
     // B. 悬空格助词防断——当前组以格助词（を/が/に…）结尾时，切开会产出 SOV 悬空宾语行，不切；
     //    但下一 token 是合法新句开头（じゃあ/はい/でも…）时除外——那是说话人另起话轮。
-    const nextIsContinuation = startsWithJapaneseContinuation(nextToken.text, expStrictContinuationGuard);
-    const prevEndsUnfinished = endsWithUnfinishedForm(token.text, expStrictContinuationGuard);
+    const nextIsContinuation =
+      profile.useJapaneseGrammar && startsWithJapaneseContinuation(nextToken.text, expStrictContinuationGuard);
+    const prevEndsUnfinished =
+      profile.useJapaneseGrammar && endsWithUnfinishedForm(token.text, expStrictContinuationGuard);
     const nextIsSentenceStart = profile.useJapaneseGrammar && JA_ALLOWED_SENTENCE_STARTERS.has(nextRaw);
     const wordSplitGuard = nextIsContinuation || prevEndsUnfinished;
-    const groupEndsHanging = endsWithBareCaseParticle(token.text) && !nextIsSentenceStart;
+    const groupEndsHanging =
+      profile.useJapaneseGrammar && endsWithBareCaseParticle(token.text) && !nextIsSentenceStart;
 
     let shouldBreak = false;
 
@@ -1087,8 +1108,11 @@ export function segmentCaptionTokens(
       // 保底显示时长 400ms，避免负时长
       cur.end = Math.max(cur.start + 400, next.start);
       if (cur.end > next.start) {
-        // 极端情况（两句几乎同时开始）：压缩下一句起点
+        // 极端情况（两句几乎同时开始）：压缩下一句起点，并同步保底下一句结束时间杜绝负时长
         next.start = cur.end;
+        if (next.end < next.start + 100) {
+          next.end = next.start + 100;
+        }
       }
     }
   }

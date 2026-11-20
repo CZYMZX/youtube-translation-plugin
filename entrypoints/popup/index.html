@@ -361,7 +361,7 @@
           <label for="pause-threshold">停顿断句敏感度 (静音空隙)</label>
           <span id="pause-threshold-val" class="badge">450 ms</span>
         </div>
-        <input type="range" id="pause-threshold" min="250" max="850" step="25" value="450" class="slider-range">
+        <input type="range" id="pause-threshold" min="120" max="1200" step="10" value="450" class="slider-range">
         <div class="range-marks">
           <span>灵敏切分 (更短)</span>
           <span>适中 (推荐)</span>
@@ -390,7 +390,7 @@
           <label for="max-duration">单句最大时长</label>
           <span id="max-duration-val" class="badge">6.5 秒</span>
         </div>
-        <input type="range" id="max-duration" min="4000" max="12000" step="500" value="6500" class="slider-range">
+        <input type="range" id="max-duration" min="3000" max="12000" step="250" value="6500" class="slider-range">
         <div class="range-marks">
           <span>紧凑 (更短)</span>
           <span>适中 (推荐)</span>
@@ -515,7 +515,7 @@
           <label for="font-size">字幕字体大小</label>
           <span id="font-size-val" class="badge">20 px</span>
         </div>
-        <input type="range" id="font-size" min="14" max="36" step="1" value="20" class="slider-range">
+        <input type="range" id="font-size" min="14" max="48" step="1" value="20" class="slider-range">
       </div>
 
       <div class="form-group">
@@ -523,7 +523,7 @@
           <label for="bg-opacity">背景黑底不透明度</label>
           <span id="bg-opacity-val" class="badge">75%</span>
         </div>
-        <input type="range" id="bg-opacity" min="0" max="100" step="5" value="75" class="slider-range">
+        <input type="range" id="bg-opacity" min="0" max="100" step="1" value="75" class="slider-range">
       </div>
 
       <!-- 播放器内快捷面板高度（v0.5.5）：0 = 按内容自适应 -->
@@ -564,7 +564,7 @@
         </svg>
         高级设置
       </button>
-      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.6.0</span>
+      <span class="tip-shortcut">点击播放器右下角控制栏图标可随时展开快速设置面板 · v0.6.1</span>
     </footer>
   </div>
 

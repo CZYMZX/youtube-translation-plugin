@@ -395,15 +395,23 @@ function indexAtTimings(timings: CharTiming[], nowMs: number): number {
 }
 
 function hexToRgba(hex: string, opacity: number): string {
-  if (!hex || hex === 'transparent' || hex === '#00000000') {
+  if (!hex || hex === 'transparent' || hex.toLowerCase() === '#00000000') {
     return 'transparent';
   }
-  let c = hex.replace('#', '');
+  let c = hex.replace('#', '').trim();
   if (c.length === 3) {
     c = c.split('').map((x) => x + x).join('');
+  } else if (c.length === 8 && /^[0-9a-fA-F]{8}$/.test(c)) {
+    const aHex = parseInt(c.slice(6, 8), 16) / 255;
+    c = c.slice(0, 6);
+    const num8 = parseInt(c, 16);
+    const r = (num8 >> 16) & 255;
+    const g = (num8 >> 8) & 255;
+    const b = num8 & 255;
+    return `rgba(${r}, ${g}, ${b}, ${((opacity / 100) * aHex).toFixed(3)})`;
   }
+  if (!/^[0-9a-fA-F]{6}$/.test(c)) return `rgba(15, 23, 42, ${opacity / 100})`;
   const num = parseInt(c, 16);
-  if (isNaN(num)) return `rgba(15, 23, 42, ${opacity / 100})`;
   const r = (num >> 16) & 255;
   const g = (num >> 8) & 255;
   const b = num & 255;
@@ -523,6 +531,9 @@ export class SubtitleOverlay {
   private lastEffectiveTimeMs = 0;
   /** 译文逐字时间记忆化（键 = 窗口区间 + 译文） */
   private karaokeTransCache = new Map<string, CharTiming[]>();
+  private statusBadgeTimer: ReturnType<typeof setTimeout> | null = null;
+  private drawerScrollResetTimer: ReturnType<typeof setTimeout> | null = null;
+  private lastPlainRenderSig = '';
 
   private onSeekCallback?: (seconds: number) => void;
   private onSettingsChangeCallback?: (newSettings: Partial<ExtensionSettings>) => void;
@@ -784,10 +795,10 @@ export class SubtitleOverlay {
   }
 
   public updateSettings(newSettings: ExtensionSettings) {
-    /* v0.5.0：关掉卡拉OK时把 span 残留清干净，普通渲染路径才能拿到纯净容器 */
-    const karaokeOff = newSettings.lyricKaraoke !== true;
+    /* v0.6.1：按解耦后的 isKaraokeActive() 判定（不再把 lyricKaraoke=false 误当成连带关闭 asrWordReveal） */
     this.settings = newSettings;
-    if (karaokeOff) {
+    const karaokeActive = this.isKaraokeActive();
+    if (!karaokeActive) {
       this.teardownKaraoke();
       this.karaokeIndex = [];
       this.karaokeIndexSource = null;
@@ -796,8 +807,8 @@ export class SubtitleOverlay {
     this.applyStyles();
     this.syncQuickPanelValues();
     if (this.currentSentence) {
-      /* 卡拉OK句：按「最近一次有效时间」重画（不跳回句首），结构按新配色/字号重建 */
-      const hit = karaokeOff ? null : this.findKaraokeWindowAt(this.lastEffectiveTimeMs);
+      /* 卡拉OK / ASR 逐词句：按「最近一次有效时间」重画（不跳回句首），结构按新配色/字号重建 */
+      const hit = karaokeActive ? this.findKaraokeWindowAt(this.lastEffectiveTimeMs) : null;
       if (hit) {
         this.karaokeBuiltKey = '';
         this.renderKaraoke(hit.s, hit.w, this.lastEffectiveTimeMs);
@@ -830,8 +841,13 @@ export class SubtitleOverlay {
 
     this.statusBadgeEl.appendChild(document.createTextNode(text));
     this.statusBadgeEl.classList.add('visible');
+    if (this.statusBadgeTimer) {
+      clearTimeout(this.statusBadgeTimer);
+      this.statusBadgeTimer = null;
+    }
     if (durationMs > 0) {
-      setTimeout(() => {
+      this.statusBadgeTimer = setTimeout(() => {
+        this.statusBadgeTimer = null;
         this.statusBadgeEl?.classList.remove('visible');
       }, durationMs);
     }
@@ -862,7 +878,7 @@ export class SubtitleOverlay {
      * 结构未变时 buildKey 命中缓存，只是不重建 DOM。
      * 仅在开关打开时执行，普通字幕路径不受影响。
      */
-    if (this.settings.lyricKaraoke === true && this.lastEffectiveTimeMs > 0) {
+    if (this.isKaraokeActive() && this.lastEffectiveTimeMs > 0) {
       this.ensureKaraokeIndex();
       const hit = this.findKaraokeWindowAt(this.lastEffectiveTimeMs);
       if (hit) {
@@ -1430,8 +1446,16 @@ export class SubtitleOverlay {
 
   private renderCurrentSentence(sentence: SubtitleSentence) {
     if (!this.containerEl || !this.origEl || !this.transEl) return;
+    // 普通路径覆写 textContent 会销毁 .k-char span，必须重置构建键防止后续卡拉OK/逐词帧误复用脱离 DOM 的节点
+    const wasKaraoke = this.karaokeBuiltKey !== '';
+    this.karaokeBuiltKey = '';
 
     const { displayMode, layoutOrder } = this.settings;
+    const renderSig = `${sentence.id}|${sentence.status}|${sentence.text}|${sentence.translation || ''}|${displayMode}|${layoutOrder}`;
+    if (!wasKaraoke && renderSig === this.lastPlainRenderSig && this.containerEl.classList.contains('has-content')) {
+      return;
+    }
+    this.lastPlainRenderSig = renderSig;
 
     this.origEl.textContent = sentence.text;
 
@@ -1656,15 +1680,27 @@ export class SubtitleOverlay {
       return;
     }
 
+    const filter = this.drawerRenderedFilter;
     for (const s of this.allSentences) {
       const node = this.drawerNodes.get(s.id);
       if (!node) {
+        // 启用搜索过滤时，未命中的句子不在 drawerNodes 中属正常现象；
+        // 仅当新译文刚好命中当前过滤词、或无过滤词时缺少节点，才触发全量重建。
+        if (!filter || (s.translation || '').toLowerCase().includes(filter)) {
+          this.drawerDirty = true;
+          this.renderDrawerList();
+          return;
+        }
+        continue;
+      }
+      const signature = `${s.translation || ''}|${s.isAi ? 1 : 0}`;
+      if (this.drawerRenderedTranslations.get(s.id) === signature) continue;
+      // 已渲染节点在搜索过滤下译文变化导致不再匹配过滤词时重建
+      if (filter && !s.text.toLowerCase().includes(filter) && !(s.translation || '').toLowerCase().includes(filter)) {
         this.drawerDirty = true;
         this.renderDrawerList();
         return;
       }
-      const signature = `${s.translation || ''}|${s.isAi ? 1 : 0}`;
-      if (this.drawerRenderedTranslations.get(s.id) === signature) continue;
 
       const transEl = node.querySelector('.item-translation') as HTMLElement | null;
       if (!transEl) continue;
@@ -1771,7 +1807,9 @@ export class SubtitleOverlay {
         behavior: 'smooth'
       });
 
-      setTimeout(() => {
+      if (this.drawerScrollResetTimer) clearTimeout(this.drawerScrollResetTimer);
+      this.drawerScrollResetTimer = setTimeout(() => {
+        this.drawerScrollResetTimer = null;
         this.isProgrammaticScrolling = false;
       }, 400);
     }
@@ -2330,10 +2368,6 @@ export class SubtitleOverlay {
 
           const badge = this.shadow?.querySelector('#qp-badge-mode');
           if (badge) badge.textContent = modeText;
-
-          if (this.currentSentence) {
-            this.renderCurrentSentence(this.currentSentence);
-          }
         });
       });
     }
@@ -2502,7 +2536,17 @@ export class SubtitleOverlay {
     this.applyStyles();
     this.syncMicroPreview();
     if (this.currentSentence) {
-      this.renderCurrentSentence(this.currentSentence);
+      if (this.isKaraokeActive() && this.lastEffectiveTimeMs > 0) {
+        const hit = this.findKaraokeWindowAt(this.lastEffectiveTimeMs);
+        if (hit) {
+          this.karaokeBuiltKey = '';
+          this.renderKaraoke(hit.s, hit.w, this.lastEffectiveTimeMs);
+        } else {
+          this.renderCurrentSentence(this.currentSentence);
+        }
+      } else {
+        this.renderCurrentSentence(this.currentSentence);
+      }
     }
     if (this.onSettingsChangeCallback) {
       this.onSettingsChangeCallback(partial);
@@ -2541,9 +2585,14 @@ export class SubtitleOverlay {
       e.stopPropagation();
       if (this.currentSentence) {
         const textToCopy = `${this.currentSentence.text}\n${this.currentSentence.translation || ''}`.trim();
-        navigator.clipboard.writeText(textToCopy).then(() => {
-          this.showToast('已复制当前句子');
-        });
+        navigator.clipboard
+          .writeText(textToCopy)
+          .then(() => {
+            this.showToast('已复制当前句子');
+          })
+          .catch(() => {
+            this.showToast('复制失败，请检查剪贴板权限');
+          });
       }
     });
 
@@ -2763,18 +2812,19 @@ export class SubtitleOverlay {
   }
 
   private formatSrtTime(ms: number): string {
-    const totalSec = Math.floor(ms / 1000);
+    const safeMs = Math.max(0, Math.round(Number.isFinite(ms) ? ms : 0));
+    const totalSec = Math.floor(safeMs / 1000);
     const h = Math.floor(totalSec / 3600);
     const m = Math.floor((totalSec % 3600) / 60);
     const s = totalSec % 60;
-    const millis = ms % 1000;
+    const millis = safeMs % 1000;
     return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(
       millis
     ).padStart(3, '0')}`;
   }
 
   private escapeHtml(str: string): string {
-    return str
+    return String(str ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
@@ -2845,7 +2895,7 @@ export class SubtitleOverlay {
                   <span class="qp-ai-star" style="display:inline-flex;width:15px;height:15px;align-items:center;">${ICON_SPARKLES}</span>
                   <span id="qp-ai-btn-text">请求 AI 深度字幕 (Beta)</span>
                 </button>
-                <button class="qp-ai-clear-btn hidden" id="qp-btn-clear-ai" title="释放并删除当前视频的临时 AI 字幕" style="display:inline-flex;width:16px;height:16px;align-items:center;justify-content:center;">${ICON_CLOSE}</button>
+                <button class="qp-ai-clear-btn hidden" id="qp-btn-clear-ai" title="清空当前视频的 AI 深度精翻缓存" style="display:inline-flex;width:16px;height:16px;align-items:center;justify-content:center;">${ICON_CLOSE}</button>
               </div>
               <div class="qp-ai-progress-wrap hidden" id="qp-ai-progress-wrap">
                 <div class="qp-ai-progress-info">

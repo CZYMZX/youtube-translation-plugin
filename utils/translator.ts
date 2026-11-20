@@ -2,7 +2,9 @@ import type { AiContextSentence, ExtensionSettings, ModelOption } from '../types
 import {
   getCachedSentencesBatch,
   setCachedSentencesBatch,
-  buildSentenceCacheKey
+  buildSentenceCacheKey,
+  getMemorySentenceCache,
+  setMemorySentenceCache
 } from './db-cache';
 import { findGlossaryMatches, buildGlossaryPromptBlock } from './glossary';
 /* 只读消费：厂牌白名单 / 默认端点 / 默认模型都只有一份，在 utils/models.ts */
@@ -157,6 +159,25 @@ export function buildRetryItem(texts: string[], idx: number, window = RETRY_CONT
 }
 
 /**
+ * 严格解析模型返回条目的 id：
+ * 仅接受非负整数或纯数字字符串（如 "1"）；显式拒绝 null / "" / false / undefined
+ * （JS 中 Number(null/""/false) === 0，会静默覆写槽位 0）。
+ */
+function parseStrictSlotId(rawId: unknown): number | null {
+  if (typeof rawId === 'number') {
+    return Number.isInteger(rawId) && rawId >= 0 ? rawId : null;
+  }
+  if (typeof rawId === 'string') {
+    const trimmed = rawId.trim();
+    if (/^\d+$/.test(trimmed)) {
+      const n = Number(trimmed);
+      return Number.isSafeInteger(n) ? n : null;
+    }
+  }
+  return null;
+}
+
+/**
  * 按 id 把模型返回的条目对齐到「待译句槽位」。
  * 纪律：**只认 0..count-1 的 id**，越界 id、重复 id（后者覆盖前者之外的一律忽略）都进不了槽位；
  * 缺条目 / 译文为空 → null（= 失败），由上层决定重试还是放弃。
@@ -164,8 +185,8 @@ export function buildRetryItem(texts: string[], idx: number, window = RETRY_CONT
 export function mapRawItemsToSlots(raw: RawItem[], count: number): Array<string | null> {
   const byId = new Map<number, string>();
   for (const item of Array.isArray(raw) ? raw : []) {
-    const id = Number(item?.id);
-    if (!Number.isInteger(id) || id < 0) continue;
+    const id = parseStrictSlotId(item?.id);
+    if (id === null) continue;
     const value = typeof item?.translation === 'string' ? item.translation.trim() : '';
     if (value) byId.set(id, value);
   }
@@ -181,7 +202,7 @@ export function mapRawItemsToSlots(raw: RawItem[], count: number): Array<string 
  */
 export function parseRetrySingle(raw: RawItem[] | null): string | null {
   if (!Array.isArray(raw)) return null;
-  const hits = raw.filter((it) => it && Number(it.id) === 0);
+  const hits = raw.filter((it) => it && parseStrictSlotId(it.id) === 0);
   if (hits.length !== 1) return null;
   const value = typeof hits[0].translation === 'string' ? hits[0].translation.trim() : '';
   return value || null;
@@ -256,11 +277,25 @@ export async function retryFailedSentences(opts: RetryCallOptions): Promise<Retr
  * - s2（v0.4.2）：hash 整段静态骨架 → 公共层 / 选项层改动同样失效。
  * 骨架**不含**按批变化的术语块（只注入本批命中条目），否则同一句在不同批次会算出不同的键。
  */
-const translationCache = new Map<string, string>();
+/**
+ * 一级内存缓存统一收口到 utils/db-cache.ts 的 LRU 缓存（上限 8000 条），
+ * 避免维护第二份无上限 Map 导致长会话泄漏及「清空缓存」后仍返回旧译文。
+ */
 
 /** v0.2.9：自定义术语库 / 场景包（chrome.storage.local），10 秒 TTL 缓存 */
 let activeCustomPacks: CustomPacks = { glossaries: [], scenes: [] };
 let packsLoadedAt = 0;
+
+if (typeof chrome !== 'undefined' && chrome.storage?.onChanged) {
+  try {
+    chrome.storage.onChanged.addListener((changes, areaName) => {
+      if (areaName !== 'local') return;
+      if (changes.yt_sub_custom_glossary_packs || changes.yt_sub_custom_scene_packs) {
+        packsLoadedAt = 0;
+      }
+    });
+  } catch {}
+}
 
 async function refreshPacksIfStale(force = false): Promise<void> {
   if (!force && Date.now() - packsLoadedAt < 10000) return;
@@ -322,19 +357,19 @@ function planBatch(
   bypassCache: boolean
 ): BatchPlan {
   const {
-    scenario = 'general',
     reasoningEffort = 'low',
     service = 'google',
     modelName = ''
   } = settings;
   const glossaryTag = getGlossaryTag(settings);
+  const scenarioTag = buildScenarioTag(settings, targetLang);
 
   const results: Array<string | null> = bypassCache
     ? texts.map(() => null)
     : texts.map(
         (t) =>
-          translationCache.get(
-            getCacheKey(targetLang, t, buildScenarioTag(settings, targetLang), reasoningEffort, service, modelName, glossaryTag)
+          getMemorySentenceCache(
+            getCacheKey(targetLang, t, scenarioTag, reasoningEffort, service, modelName, glossaryTag)
           ) ?? null
       );
 
@@ -364,20 +399,20 @@ function commitBatch(
   bypassCache: boolean
 ): Array<string | null> {
   const {
-    scenario = 'general',
     reasoningEffort = 'low',
     service = 'google',
     modelName = ''
   } = settings;
   const glossaryTag = getGlossaryTag(settings);
+  const scenarioTag = buildScenarioTag(settings, targetLang);
 
   for (let i = 0; i < plan.uncachedTexts.length; i++) {
     const originalText = plan.uncachedTexts[i];
     const trans = freshTranslations[i] || null;
     plan.results[plan.uncachedIndices[i]] = trans;
     if (trans && !bypassCache) {
-      translationCache.set(
-        getCacheKey(targetLang, originalText, buildScenarioTag(settings, targetLang), reasoningEffort, service, modelName, glossaryTag),
+      setMemorySentenceCache(
+        getCacheKey(targetLang, originalText, scenarioTag, reasoningEffort, service, modelName, glossaryTag),
         trans
       );
     }
@@ -581,8 +616,16 @@ async function translateWithGoogleEndpoints(text: string, targetLang: string): P
     const response = await fetchWithTimeout(myMemoryUrl, {}, 5000);
     if (response.ok) {
       const data = await response.json();
-      if (data?.responseData?.translatedText) {
-        return data.responseData.translatedText;
+      const status = Number(data?.responseStatus);
+      const translated = typeof data?.responseData?.translatedText === 'string'
+        ? data.responseData.translatedText.trim()
+        : '';
+      if (
+        (!Number.isFinite(status) || status === 200) &&
+        translated &&
+        !/^MYMEMORY WARNING:/i.test(translated)
+      ) {
+        return translated;
       }
     }
   } catch (err) {
@@ -705,17 +748,95 @@ export interface LlmCallContext {
 /** 通道签名：返回解析后的原始条目；响应拿到但不是合法 JSON 数组 → null（= 句级失败） */
 export type LlmChannel = (items: RetryItem[], ctx: LlmCallContext) => Promise<RawItem[] | null>;
 
+/** 校验并规范化自定义 API 端点 URL（仅允许 https: 或显式本机调试 http://localhost / 127.0.0.1） */
+function validateApiBaseUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error(`无效的 API 端点地址：${rawUrl}`);
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isLocalHttp =
+    parsed.protocol === 'http:' &&
+    (host === 'localhost' || host === '127.0.0.1' || host === '[::1]');
+  if (parsed.protocol !== 'https:' && !isLocalHttp) {
+    throw new Error(`API 端点必须使用 HTTPS 协议（本地调试仅允许 localhost/127.0.0.1）：${rawUrl}`);
+  }
+  return parsed.toString().replace(/\/+$/, '');
+}
+
+/** 根据 settings 解析 OpenAI 兼容协议的实际默认端点（按厂牌优先，绝不把 Claude/Qwen/Kimi/Zhipu 错发给 OpenAI） */
+function resolveOpenAiCompatibleBaseUrl(settings: ExtensionSettings): string {
+  const custom = settings.apiBaseUrl?.trim();
+  if (custom) return validateApiBaseUrl(custom);
+  const provider = settings.providerId ? getProvider(settings.providerId) : undefined;
+  if (provider && provider.service === settings.service && provider.defaultBaseUrl) {
+    return validateApiBaseUrl(provider.defaultBaseUrl);
+  }
+  if (settings.service === 'deepseek') {
+    return 'https://api.deepseek.com/v1';
+  }
+  return 'https://api.openai.com/v1';
+}
+
+/** 括号配平提取首个合法 JSON 数组，跳过字符串字面量与转义引号，避免贪婪正则在前后带方括号注释时崩溃 */
+function extractBalancedJsonArray(text: string): RawItem[] | null {
+  for (let start = 0; start < text.length; start++) {
+    if (text[start] !== '[') continue;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let i = start; i < text.length; i++) {
+      const ch = text[i];
+      if (inString) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === '\\') {
+          escaped = true;
+        } else if (ch === '"') {
+          inString = false;
+        }
+        continue;
+      }
+      if (ch === '"') {
+        inString = true;
+      } else if (ch === '[') {
+        depth++;
+      } else if (ch === ']') {
+        depth--;
+        if (depth === 0) {
+          const candidate = text.slice(start, i + 1);
+          try {
+            const parsed = JSON.parse(candidate);
+            if (Array.isArray(parsed)) return parsed as RawItem[];
+          } catch {
+            // 继续尝试下一个 '['
+          }
+          break;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 /** 从模型输出里抠出 JSON 数组；抠不出 → null（交给局部重试，不整批重发） */
 function parseModelJsonArray(rawContent: string): RawItem[] | null {
   if (!rawContent || !rawContent.trim()) return null;
-  const cleaned = rawContent.replace(/```(?:json)?/gi, '').replace(/```/g, '').trim();
+  const cleaned = rawContent
+    .replace(/<think>[\s\S]*?<\/think>/gi, '')
+    .replace(/```(?:json)?/gi, '')
+    .replace(/```/g, '')
+    .trim();
+  if (!cleaned) return null;
   try {
-    const match = cleaned.match(/\[[\s\S]*\]/);
-    const parsed = match ? JSON.parse(match[0]) : JSON.parse(cleaned);
-    return Array.isArray(parsed) ? (parsed as RawItem[]) : null;
+    const direct = JSON.parse(cleaned);
+    if (Array.isArray(direct)) return direct as RawItem[];
   } catch {
-    return null;
+    // 非纯 JSON 数组，回落括号配平提取
   }
+  return extractBalancedJsonArray(cleaned);
 }
 
 /** 把「待译句 + 上下文」拼成 payload 条目：首轮无上下文，重试才带 context_before / context_after */
@@ -738,20 +859,12 @@ function composeLlmSystemPrompt(ctx: LlmCallContext): string {
  * OpenAI / DeepSeek 等兼容接口：一次往返
  */
 async function callOpenAiRaw(items: RetryItem[], ctx: LlmCallContext): Promise<RawItem[] | null> {
-  const { apiKey, apiBaseUrl, service, modelName, reasoningEffort = 'low' } = ctx.settings;
+  const { apiKey, service, modelName, reasoningEffort = 'low' } = ctx.settings;
   if (!apiKey) {
     throw new Error('未配置 API Key，请在插件设置中填入');
   }
 
-  let baseUrl = apiBaseUrl?.trim();
-  if (!baseUrl) {
-    if (service === 'deepseek') {
-      baseUrl = 'https://api.deepseek.com/v1';
-    } else {
-      baseUrl = 'https://api.openai.com/v1';
-    }
-  }
-  baseUrl = baseUrl.replace(/\/+$/, '');
+  const baseUrl = resolveOpenAiCompatibleBaseUrl(ctx.settings);
   const endpoint = baseUrl.endsWith('/chat/completions')
     ? baseUrl
     : `${baseUrl}/chat/completions`;
@@ -767,20 +880,21 @@ async function callOpenAiRaw(items: RetryItem[], ctx: LlmCallContext): Promise<R
     ? `${contextBlock}\n\n待翻译内容：\n${JSON.stringify(payloadItems)}`
     : JSON.stringify(payloadItems);
 
+  const isOpenAiReasoningModel = /^(?:o1|o3|o4)(?:[-.]|$)/i.test(model);
   const requestBody: any = {
     model,
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: userContent }
-    ],
-    temperature: 0.3
+    ]
   };
-
-  // 若模型是支持 reasoning_effort 的专用推理模型 (如 o1, o3-mini)
-  if (model.includes('o1') || model.includes('o3') || model.includes('reasoner')) {
+  if (isOpenAiReasoningModel) {
+    // OpenAI o1/o3/o4 推理模型不接受非默认 temperature，仅传 reasoning_effort
     if (reasoningEffort === 'high' || reasoningEffort === 'low') {
       requestBody.reasoning_effort = reasoningEffort;
     }
+  } else {
+    requestBody.temperature = 0.3;
   }
 
   let response: Response;
@@ -876,21 +990,40 @@ export async function translateWithLlmChannel(
     });
     console.warn('[Translator] 模型响应无法解析为 JSON 数组，转入失败句逐句重试');
   } else {
-    const slots = mapRawItemsToSlots(raw, uncachedTexts.length);
-    // 条数校验：有上文参考时模型更容易「顺手把上下文也翻了」，
-    // 结果就是条目数/槽位对不上 —— 缺槽位一律走既有逐句重试，不猜、不补位。
-    const filled = slots.filter((t) => !!t).length;
-    if (filled < uncachedTexts.length) {
+    // 若带了上文参考且模型多吐了包含越界 id 的条目（典型特征：把 contextBefore 也顺延编号译出），
+    // 绝不盲目截取 0..count-1（会导致整批向前错位），直接判整批偏移进入单句重试。
+    const hasOutOfRangeId =
+      !!options?.contextBefore?.length &&
+      raw.length > uncachedTexts.length &&
+      raw.some((item) => {
+        const id = parseStrictSlotId(item?.id);
+        return id !== null && id >= uncachedTexts.length;
+      });
+    if (hasOutOfRangeId) {
+      uncachedTexts.forEach((_, i) => {
+        errors[i] = '疑似上文参考被误译导致编号偏移';
+      });
       console.warn(
-        `[Translator] 本批 ${uncachedTexts.length} 句只拿到 ${filled} 条可用译文` +
-          (options?.contextBefore?.length ? '（疑似上文参考被误译或条目缺失）' : '（条目缺失）') +
-          /* 降级链里的这一级不做逐句重试：日志别写成「转入逐句重试」，否则排障时会被误导 */
+        `[Translator] 本批 ${uncachedTexts.length} 句返回 ${raw.length} 条且含越界 id（疑似上文参考被顺延译出）` +
           (options?.noSentenceRetry ? '，降级链内不重试（失败即进下一级）' : '，转入逐句重试')
       );
-    }
-    for (let i = 0; i < uncachedTexts.length; i++) {
-      fresh[i] = slots[i];
-      if (!slots[i]) errors[i] = '返回条目缺失或译文为空';
+    } else {
+      const slots = mapRawItemsToSlots(raw, uncachedTexts.length);
+      // 条数校验：有上文参考时模型更容易「顺手把上下文也翻了」，
+      // 结果就是条目数/槽位对不上 —— 缺槽位一律走既有逐句重试，不猜、不补位。
+      const filled = slots.filter((t) => !!t).length;
+      if (filled < uncachedTexts.length) {
+        console.warn(
+          `[Translator] 本批 ${uncachedTexts.length} 句只拿到 ${filled} 条可用译文` +
+            (options?.contextBefore?.length ? '（疑似上文参考被误译或条目缺失）' : '（条目缺失）') +
+            /* 降级链里的这一级不做逐句重试：日志别写成「转入逐句重试」，否则排障时会被误导 */
+            (options?.noSentenceRetry ? '，降级链内不重试（失败即进下一级）' : '，转入逐句重试')
+        );
+      }
+      for (let i = 0; i < uncachedTexts.length; i++) {
+        fresh[i] = slots[i];
+        if (!slots[i]) errors[i] = '返回条目缺失或译文为空';
+      }
     }
   }
 
@@ -946,13 +1079,17 @@ async function translateWithOpenAICompatible(
  * Gemini API：一次往返
  */
 async function callGeminiRaw(items: RetryItem[], ctx: LlmCallContext): Promise<RawItem[] | null> {
-  const { apiKey, modelName } = ctx.settings;
+  const apiKey = ctx.settings.apiKey?.trim() || '';
+  const { modelName } = ctx.settings;
   if (!apiKey) {
     throw new Error('未配置 Gemini API Key，请在插件设置中填入');
   }
 
   const model = modelName?.trim() || 'gemini-3.8-flash';
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  if (!/^[A-Za-z0-9._:-]{1,120}$/.test(model)) {
+    throw new Error(`非法的 Gemini 模型标识：${model}`);
+  }
+  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
 
   const payloadItems = buildPayloadItems(items);
   const systemPrompt = composeLlmSystemPrompt(ctx);
@@ -977,7 +1114,10 @@ ${JSON.stringify(payloadItems)}`;
         endpoint,
         {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey
+          },
           body: JSON.stringify({
             contents: [{ parts: [{ text: fullPrompt }] }],
             generationConfig: {
@@ -1153,6 +1293,8 @@ interface FallbackChainOutcome {
   error: any;
   /** 实际尝试的级数（不含主通道那次） */
   attempts: number;
+  /** 本次降级结果来自 Google 免费机翻（绝不写入主付费大模型 30 天持久化缓存） */
+  fromGoogle?: boolean;
 }
 
 /**
@@ -1189,7 +1331,7 @@ async function runFallbackChain(
       const slice = await runChannel(candidate.service, texts, targetLang, candidate.settings, chainOptions);
       if (hasAnyTranslation(slice)) {
         console.log(`[YT-Sub-Translator] 降级成功：第 ${attempts} 级（${candidate.providerId}）`);
-        return { slice, error: null, attempts };
+        return { slice, error: null, attempts, fromGoogle: candidate.service === 'google' };
       }
       lastError = new Error(slice.errors.find((e) => !!e) || `${candidate.providerId} 未返回可用译文`);
     } catch (err: any) {
@@ -1205,8 +1347,21 @@ async function runFallbackChain(
     attempts++;
     console.log('[YT-Sub-Translator] 降级链用尽，最后尝试 Google 免费翻译通道...');
     try {
-      const slice = await translateWithGoogle(texts, targetLang, settings, chainOptions);
-      return { slice, error: null, attempts };
+      const googleSettings: ExtensionSettings = {
+        ...settings,
+        service: 'google',
+        providerId: 'google-free',
+        apiKey: '',
+        modelName: ''
+      };
+      const slice = await translateWithGoogle(texts, targetLang, googleSettings, {
+        ...chainOptions,
+        bypassCache: true
+      });
+      if (hasAnyTranslation(slice)) {
+        return { slice, error: null, attempts, fromGoogle: true };
+      }
+      lastError = new Error(slice.errors.find((e) => !!e) || 'Google 免费翻译未返回可用译文');
     } catch (err: any) {
       lastError = err;
     }
@@ -1302,14 +1457,19 @@ export async function translateSentenceBatchDetailed(
    * 收尾：回填成功项 + 只把成功项写进持久化缓存 + 失败项填占位符。
    * 「只写成功项」是硬约束：写空值或占位译文会让下次播放直接命中一条假译文。
    */
-  const applySlice = (slice: SliceResult, placeholderPrefix: string, retryRequests: number): TranslateBatchDetail => {
+  const applySlice = (
+    slice: SliceResult,
+    placeholderPrefix: string,
+    retryRequests: number,
+    persistToDb = true
+  ): TranslateBatchDetail => {
     const toCacheEntries: Array<{ key: string; translation: string }> = [];
     for (let i = 0; i < uncachedTexts.length; i++) {
       const globalIdx = uncachedIndices[i];
       const trans = slice.translations[i];
       if (trans) {
         finalResults[globalIdx] = trans;
-        if (!bypassCache) {
+        if (!bypassCache && persistToDb) {
           toCacheEntries.push({ key: cacheKeys[globalIdx], translation: trans });
         }
       } else {
@@ -1318,7 +1478,7 @@ export async function translateSentenceBatchDetailed(
       }
     }
 
-    if (!bypassCache && toCacheEntries.length > 0) {
+    if (!bypassCache && persistToDb && toCacheEntries.length > 0) {
       setCachedSentencesBatch(toCacheEntries).catch((e) =>
         console.warn('[Translator] 异步写入持久化缓存异常:', e)
       );
@@ -1392,9 +1552,9 @@ export async function translateSentenceBatchDetailed(
     );
 
     if (outcome.slice) {
-      // 降级结果同样只写成功的那些，避免把失败占位符当译文缓存；
-      // 缓存键仍是主路径的 cacheKeys（见 applySlice）⇒ 不产生「降级专用」的第二份缓存。
-      return applySlice(outcome.slice, '[降级失败: ', outcome.slice.retryRequests);
+      // 次级大模型降级结果写入主路径缓存（见 test-retry 9.10），
+      // 但 Google 免费机翻兜底绝不写入付费大模型 30 天持久化缓存，防止廉价机翻污染主模型缓存。
+      return applySlice(outcome.slice, '[降级失败: ', outcome.slice.retryRequests, !outcome.fromGoogle);
     }
 
     console.warn('[YT-Sub-Translator] 降级链全部失败:', outcome.error?.message || outcome.error);
@@ -1432,10 +1592,14 @@ export async function fetchAvailableModels(settings: ExtensionSettings): Promise
     throw new Error('未配置 API Key，请先在上方填入 Key');
   }
 
-  // 1. Google Gemini 官方 API
+  // 1. Google Gemini 官方 API（使用请求头传 Key，避免暴露于 URL query）
   if (service === 'gemini') {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`;
-    const res = await fetchWithTimeout(url, { method: 'GET' }, 8000);
+    const url = 'https://generativelanguage.googleapis.com/v1beta/models';
+    const res = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers: { 'x-goog-api-key': (apiKey || '').trim() } },
+      8000
+    );
     if (!res.ok) {
       const err = await res.text();
       let msg = err;
@@ -1466,15 +1630,8 @@ export async function fetchAvailableModels(settings: ExtensionSettings): Promise
     return list;
   }
 
-  // 2. OpenAI / DeepSeek / Antigravity Tools / 自定义端点
-  let baseUrl = apiBaseUrl?.trim();
-  if (!baseUrl) {
-    if (service === 'deepseek') {
-      baseUrl = 'https://api.deepseek.com/v1';
-    } else {
-      baseUrl = 'https://api.openai.com/v1';
-    }
-  }
+  // 2. OpenAI / DeepSeek / Claude / Qwen / Kimi / 智谱 / 自定义端点
+  let baseUrl = resolveOpenAiCompatibleBaseUrl(settings);
 
   // 清洗 baseUrl，去除结尾的 /chat/completions 或斜杠
   baseUrl = baseUrl.replace(/\/chat\/completions\/?$/, '').replace(/\/+$/, '');
@@ -1496,8 +1653,8 @@ export async function fetchAvailableModels(settings: ExtensionSettings): Promise
     throw new Error(`连接端点失败 (${endpoint}): ${err.message || '网络连接超时'}`);
   }
 
-  // 智能容错：如果 /models 返回 404，且原地址没带 /v1，尝试补充 /v1/models
-  if (res.status === 404 && !baseUrl.includes('/v1')) {
+  // 智能容错：如果 /models 返回 404，且原地址没带 /vN，尝试补充 /v1/models
+  if (res.status === 404 && !/\/v\d+(\/|$)/i.test(baseUrl)) {
     try {
       const retryUrl = `${baseUrl}/v1/models`;
       const retryRes = await fetchWithTimeout(

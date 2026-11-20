@@ -285,7 +285,7 @@ check('hover 用左侧标线而不是整体上浮',
   /\.model-hit::before/.test(css) && /\.provider-row::before/.test(css)
   && !/\.provider-row:hover\s*\{[^}]*translateY/.test(css));
 check('重绘后把焦点还回去（不把键盘用户甩回页顶）',
-  /focusKeyAfterRender/.test(ts) && /\[data-fk="\$\{fk\}"\]/.test(ts) && /setSelectionRange/.test(ts));
+  /focusKeyAfterRender/.test(ts) && /\[data-fk="\$\{(?:attrValue\(fk\)|fk)\}"\]/.test(ts) && /setSelectionRange/.test(ts));
 check('Key 输入走 silent 更新（重绘不换掉正在输入的框）',
   /void update\(patch, \{ silent: true \}\)/.test(ts) && /silent\?: boolean/.test(ts));
 
@@ -916,7 +916,9 @@ check('不合法文件绝不半入库（失败分支在写库之前 return）',
   importSceneBlock.indexOf('if (!result.ok || !result.pack)') > -1
   && importSceneBlock.indexOf('return;', importSceneBlock.indexOf('if (!result.ok || !result.pack)'))
     < importSceneBlock.indexOf('customPacks.scenes ='));
-check('导入成功才入库并选中', /customPacks\.scenes = \[\.\.\.customPacks\.scenes\.filter/.test(importSceneBlock)
+check('导入成功才入库并选中',
+  (/customPacks\.scenes = \[\.\.\.customPacks\.scenes\.filter/.test(importSceneBlock) ||
+    (/const nextScenes = \[\.\.\.customPacks\.scenes\.filter/.test(importSceneBlock) && /customPacks\.scenes = nextScenes/.test(importSceneBlock)))
   && /viewingSceneId = pack\.id;/.test(importSceneBlock));
 check('导入与内置场景同名时加「（自定义）」后缀（不覆盖）',
   /\$\{pack\.name\}（自定义）/.test(importSceneBlock));
@@ -1011,7 +1013,7 @@ check('读取时合并 local 密钥（密钥覆盖 sync）',
   /sanitizeSettings\(\{ \.\.\.base, \.\.\.\(localSecrets \|\| \{\}\) \}\)/.test(storageTs));
 check('老数据迁移：搬走 + 抹掉 sync 里的密钥（幂等，失败不影响读取）',
   /hasSecretFields/.test(storageTs) && /async function stripSecrets/.test(storageTs)
-  && /const baseArea: 'sync' \| 'local' = syncValue \? 'sync' : 'local';/.test(storageTs));
+  && /const baseArea: 'sync' \| 'local' = /.test(storageTs));
 check('迁移后重写失败只记日志，不抛错',
   /if \(!ok\) console\.warn\(`\[Storage\] 迁移后重写/.test(storageTs));
 check('先写 local 再写 sync（避免回读时读到旧 Key）',

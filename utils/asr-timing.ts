@@ -163,30 +163,30 @@ interface OffsetTimeline {
  * dDurationMs 只作兜底 —— s.start 落在句中时，前半行靠 dur 仍能被圈进来。
  * 多圈进来的相邻句子词由后面的半全局对齐「首尾免费跳过」处理，不计入命中。
  */
-function collectOffsetWords(
-  data: Json3CaptionData,
-  startMs: number,
-  endMs: number
-): OffsetTimeline | null {
-  const events = Array.isArray(data?.events) ? (data.events as Json3Event[]) : [];
-  if (!events.length) return null;
+const MAX_ALIGN_CELLS = 200_000;
 
-  const lo = startMs - SENTENCE_PAD_MS;
-  const hi = endMs + SENTENCE_PAD_MS;
-  const words: OffsetWord[] = [];
-  let frames = 0;
+interface PreparedOffsetEvent {
+  t: number;
+  evEnd: number;
+  words: Array<{ text: string; startMs: number }>;
+}
+
+const offsetEventCache = new WeakMap<Json3CaptionData, PreparedOffsetEvent[]>();
+const frameEventCache = new WeakMap<Json3CaptionData, Array<{ t: number; text: string }>>();
+
+function getPreparedOffsetEvents(data: Json3CaptionData): PreparedOffsetEvent[] {
+  const cached = offsetEventCache.get(data);
+  if (cached) return cached;
+
+  const events = Array.isArray(data?.events) ? (data.events as Json3Event[]) : [];
+  const list: PreparedOffsetEvent[] = [];
 
   for (const ev of events) {
-    // 窗口定义 event（无 segs / dDurationMs 覆盖全片）在此被跳过
+    // 窗口定义 event（无 segs / dDurationMs 覆盖全片）与滚动换行 event 在此被跳过
     if (!Array.isArray(ev?.segs) || ev.segs.length === 0) continue;
     if (ev.aAppend === 1) continue;
 
-    const raw = ev.segs.map((s) => s.utf8 ?? '').join('');
-    if (!stripRuby(stripInvisible(raw)).trim()) continue; // 纯 "\n" / 全零宽 / 空白行
-
-    const t = Number.isFinite(ev.tStartMs) ? ev.tStartMs : 0;
-
-    // 至少有一个 seg 带正数 tOffsetMs，否则这条 event 不贡献真实时间
+    // 至少有一个 seg 带正数 tOffsetMs，否则这条 event 不贡献真实时间（先判偏移，避免白做字符串拼接与正则）
     let maxOff = 0;
     for (const seg of ev.segs) {
       const off = seg?.tOffsetMs;
@@ -196,24 +196,88 @@ function collectOffsetWords(
     }
     if (maxOff <= 0) continue;
 
+    const raw = ev.segs.map((s) => s.utf8 ?? '').join('');
+    if (!stripRuby(stripInvisible(raw)).trim()) continue;
+
+    const t = Number.isFinite(ev.tStartMs) ? ev.tStartMs : 0;
     const dur = Number.isFinite(ev.dDurationMs) ? Math.max(0, ev.dDurationMs) : 0;
     const evEnd = t + Math.max(maxOff, dur);
-    if (evEnd < lo || t > hi) continue; // 与句子区间无交集
 
-    const evId = frames++;
+    const words: Array<{ text: string; startMs: number }> = [];
     for (const seg of ev.segs) {
       const w = removeInvisible(seg.utf8 ?? '');
-      if (!w.trim() || /^[\r\n]+$/.test(w)) continue; // 纯换行 / 空白 seg 不是词
+      if (!w.trim() || /^[\r\n]+$/.test(w)) continue;
       const off =
         typeof seg.tOffsetMs === 'number' && Number.isFinite(seg.tOffsetMs) && seg.tOffsetMs >= 0
           ? seg.tOffsetMs
-          : 0; // 每行首词可缺省 tOffsetMs，隐含 0
-      words.push({ text: w, startMs: t + off, evId });
+          : 0;
+      words.push({ text: w, startMs: t + off });
+    }
+    if (words.length > 0) {
+      list.push({ t, evEnd, words });
+    }
+  }
+
+  list.sort((a, b) => a.t - b.t);
+  if (data && typeof data === 'object') {
+    offsetEventCache.set(data, list);
+  }
+  return list;
+}
+
+function getPreparedFrameEvents(data: Json3CaptionData): Array<{ t: number; text: string }> {
+  const cached = frameEventCache.get(data);
+  if (cached) return cached;
+
+  const events = Array.isArray(data?.events) ? (data.events as Json3Event[]) : [];
+  const byT = new Map<number, string>();
+  for (const ev of events) {
+    if (!Array.isArray(ev?.segs) || ev.segs.length === 0) continue;
+    if (ev.aAppend === 1) continue;
+    const raw = ev.segs.map((s) => s.utf8 || '').join('');
+    const frameText = stripRuby(stripInvisible(raw));
+    if (!frameText) continue;
+    const t = Number.isFinite(ev.tStartMs) ? ev.tStartMs : 0;
+    const prev = byT.get(t);
+    // 同毫秒多条 event 保留更长的正文帧，避免被空/换行帧挤掉
+    if (!prev || frameText.length > prev.length) {
+      byT.set(t, frameText);
+    }
+  }
+
+  const list = Array.from(byT.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([t, text]) => ({ t, text }));
+  if (data && typeof data === 'object') {
+    frameEventCache.set(data, list);
+  }
+  return list;
+}
+
+function collectOffsetWords(
+  data: Json3CaptionData,
+  startMs: number,
+  endMs: number
+): OffsetTimeline | null {
+  const prepared = getPreparedOffsetEvents(data);
+  if (!prepared.length) return null;
+
+  const lo = startMs - SENTENCE_PAD_MS;
+  const hi = endMs + SENTENCE_PAD_MS;
+  const words: OffsetWord[] = [];
+  let frames = 0;
+
+  for (const ev of prepared) {
+    if (ev.t > hi) break; // prepared 按 t 升序，超出右边界直接中止
+    if (ev.evEnd < lo) continue;
+
+    const evId = frames++;
+    for (const w of ev.words) {
+      words.push({ text: w.text, startMs: w.startMs, evId });
     }
   }
 
   if (!words.length || frames === 0) return null;
-  // 跨 event 按绝对时间升序（排序只在**词之间**进行；词内字符由后面的词级落点阶段共享同一时间）
   words.sort((a, b) => a.startMs - b.startMs);
   return { words, frames };
 }
@@ -290,15 +354,16 @@ function fillEstimatedStarts(
     const next = b < n ? starts[b] : null; // 后一个真实字（b<n 时必然是真实字）
 
     if (prev === null) {
-      // 句首一段：落在 [句子起点, 第一个真实字] 之间
+      // 句首一段：落在 [min(句子起点, 第一个真实字), 第一个真实字] 之间，绝不大于 hi
       const hi = next as number;
-      const gap = hi - sentenceStartMs;
+      const lo = Math.min(sentenceStartMs, hi);
+      const gap = hi - lo;
       for (let j = k; j < b; j++) {
         const r = j - k + 1;
         starts[j] =
           gap > count
-            ? sentenceStartMs + Math.floor((gap * r) / (count + 1))
-            : Math.max(sentenceStartMs, hi - 1 - (count - r)); // 兜底：1ms 步进，且不越过 hi
+            ? lo + Math.floor((gap * r) / (count + 1))
+            : Math.min(hi, Math.max(lo, hi - 1 - (count - r)));
       }
     } else if (next === null) {
       // 句尾一段：紧跟最后一个真实字
@@ -358,6 +423,7 @@ function buildOffsetVerdict(
   }
   const m = J.length;
   if (m === 0) return null;
+  if (m * n > MAX_ALIGN_CELLS) return null; // 异常超长片段放弃 DP 对齐，回落估算避免主线程卡死
 
   const W = n + 1;
   const dp = new Float64Array((m + 1) * W);
@@ -393,14 +459,31 @@ function buildOffsetVerdict(
   let j = n;
   while (j > 0 && i > 0) {
     const d = dir[at(i, j)];
-    if (d === 1) { mapJ[j - 1] = i - 1; i--; j--; }
-    else if (d === 2) { i--; }
-    else { j--; }
+    if (d === 1) {
+      if (eqChar(J[i - 1].ch, chars[j - 1])) {
+        mapJ[j - 1] = i - 1;
+      }
+      i--;
+      j--;
+    } else if (d === 2) {
+      i--;
+    } else {
+      j--;
+    }
   }
 
   let realCount = 0;
   for (let k = 0; k < n; k++) if (mapJ[k] >= 0) realCount++;
   if (realCount === 0) return null; // 一个官方词都没对上 → 回落 inferred / estimated，不冒充 offset
+
+  const matchedWordStarts = new Set<number>();
+  for (let k = 0; k < n; k++) {
+    if (mapJ[k] >= 0) matchedWordStarts.add(timeline.words[J[mapJ[k]].wordId].startMs);
+  }
+  // 准入门槛：仅碰巧撞上单个字/空格（覆盖率低且不足两个时间锚点）时不冒充官方词级时间
+  if (matchedWordStarts.size < MIN_DISTINCT_ANCHORS && realCount / n < 0.5) {
+    return null;
+  }
 
   // 每个官方词的时间窗
   const win = buildWordWindows(timeline, endMs);
@@ -495,30 +578,31 @@ export function inferAsrCharTimes(
   };
   if (!text || !Array.isArray(data?.events)) return empty;
 
-  // 1. 取该句时间范围内的帧，按时间升序（同一 tStartMs 只留一条，避免重复）
-  const inRange: Json3Event[] = [];
-  const seenT = new Set<number>();
-  for (const ev of data.events) {
-    if (!Array.isArray(ev?.segs) || ev.segs.length === 0) continue;
-    const t = ev.tStartMs ?? 0;
-    if (t < startMs - FRAME_PAD_MS || t > endMs + FRAME_PAD_MS) continue;
-    if (seenT.has(t)) continue;
-    seenT.add(t);
-    inRange.push(ev);
+  // 1. 从预索引中二分定位该句时间范围内的帧（跳过 aAppend 换行帧，避免同毫秒丢正文）
+  const prepared = getPreparedFrameEvents(data);
+  if (prepared.length === 0) return empty;
+  const lo = startMs - FRAME_PAD_MS;
+  const hi = endMs + FRAME_PAD_MS;
+  let left = 0;
+  let right = prepared.length;
+  while (left < right) {
+    const mid = (left + right) >> 1;
+    if (prepared[mid].t < lo) left = mid + 1;
+    else right = mid;
+  }
+  const inRange: Array<{ t: number; text: string }> = [];
+  for (let idx = left; idx < prepared.length; idx++) {
+    if (prepared[idx].t > hi) break;
+    inRange.push(prepared[idx]);
   }
   if (inRange.length === 0) return empty;
-  inRange.sort((a, b) => (a.tStartMs ?? 0) - (b.tStartMs ?? 0));
 
   // 2. 逐帧比对：该帧文本若是「最终文本」的前缀，则它覆盖到的位置都记上首次时间
   const firstSeen: (number | null)[] = new Array(nChars).fill(null);
   let touched = 0;
   for (const ev of inRange) {
-    const raw = (ev.segs || []).map((s) => s.utf8 || '').join('');
-    // 与渲染同一口径：先剥零宽，再剥 ruby，否则前缀比对必然失败
-    const frameText = stripRuby(stripInvisible(raw));
-    if (!frameText) continue;
-    // 只认「前缀」关系：ASR 会在句尾追加，不会改写句中（码点口径逐字比对）
-    const frameChars = Array.from(frameText);
+    // 只认「前缀」关系：ASR 会在句尾追加，不会改写句中（码点口径、大小写不敏感逐字比对）
+    const frameChars = Array.from(ev.text);
     if (frameChars.length > nChars) continue;
     let isPrefix = true;
     for (let i = 0; i < frameChars.length; i++) {
@@ -527,7 +611,7 @@ export function inferAsrCharTimes(
     if (!isPrefix) continue;
     for (let i = 0; i < frameChars.length && i < firstSeen.length; i++) {
       if (firstSeen[i] === null) {
-        firstSeen[i] = ev.tStartMs ?? startMs;
+        firstSeen[i] = ev.t;
         touched++;
       }
     }
@@ -575,6 +659,12 @@ export function buildAsrCharTimings(
 ): AsrTimingVerdict {
   const chars = Array.from(text); // 码点口径
   const n = chars.length;
+  // 入口时间规范化：防 NaN / 负跨度向下游传播
+  const safeStartMs = Number.isFinite(startMs) ? Math.max(0, startMs) : 0;
+  const safeEndMs = Number.isFinite(endMs) ? Math.max(safeStartMs + 1, endMs) : safeStartMs + 1;
+  startMs = safeStartMs;
+  endMs = safeEndMs;
+
   if (n === 0) {
     return {
       timings: [],
@@ -645,12 +735,21 @@ export function buildAsrCharTimings(
     }
   }
 
-  // 收口：严格递增，且不越过 endMs
+  // 收口：先夹入 [startMs, endMs]，再双向单调收口，绝不产出倒序时间轴
+  const effectiveEnd = Math.max(endMs, startMs + n);
+  for (let i = 0; i < n; i++) {
+    if (starts[i] < startMs) starts[i] = startMs;
+    if (starts[i] > effectiveEnd - (n - i)) starts[i] = effectiveEnd - (n - i);
+  }
   for (let i = 1; i < n; i++) {
     if (starts[i] <= starts[i - 1]) starts[i] = starts[i - 1] + 1;
   }
-  for (let i = 0; i < n; i++) {
-    if (starts[i] > endMs) starts[i] = Math.max(startMs, endMs - (n - i));
+  // 反向压缩：若末端越过 effectiveEnd，整体向前压紧并保持严格递增
+  if (n > 0 && starts[n - 1] > effectiveEnd - 1) {
+    starts[n - 1] = effectiveEnd - 1;
+    for (let i = n - 2; i >= 0; i--) {
+      if (starts[i] >= starts[i + 1]) starts[i] = starts[i + 1] - 1;
+    }
   }
 
   const timings: CharTiming[] = [];

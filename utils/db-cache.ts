@@ -28,11 +28,28 @@ let dbPromise: Promise<IDBDatabase | null> | null = null;
 let pruneScheduled = false;
 
 function memorySet(key: string, value: string) {
-  if (!memorySentenceCache.has(key) && memorySentenceCache.size >= MEMORY_CACHE_LIMIT) {
+  // 真 LRU：已存在时先删后插刷新热序
+  if (memorySentenceCache.has(key)) {
+    memorySentenceCache.delete(key);
+  } else if (memorySentenceCache.size >= MEMORY_CACHE_LIMIT) {
     const oldest = memorySentenceCache.keys().next().value;
     if (oldest) memorySentenceCache.delete(oldest);
   }
   memorySentenceCache.set(key, value);
+}
+
+/** 供 translator.ts 共用的一级内存缓存读写（避免重复无上限 Map） */
+export function getMemorySentenceCache(key: string): string | undefined {
+  const hit = memorySentenceCache.get(key);
+  if (hit !== undefined) {
+    memorySentenceCache.delete(key);
+    memorySentenceCache.set(key, hit);
+  }
+  return hit;
+}
+
+export function setMemorySentenceCache(key: string, value: string): void {
+  memorySet(key, value);
 }
 
 function getDB(): Promise<IDBDatabase | null> {
@@ -61,20 +78,33 @@ function getDB(): Promise<IDBDatabase | null> {
           }
         };
         req.onsuccess = () => {
-          schedulePrune(req.result);
-          resolve(req.result);
+          const db = req.result;
+          db.onversionchange = () => {
+            try {
+              db.close();
+            } catch {}
+            dbPromise = null;
+          };
+          db.onclose = () => {
+            dbPromise = null;
+          };
+          schedulePrune(db);
+          resolve(db);
         };
         req.onerror = () => {
           console.warn('[DBCache] IndexedDB open error, fallback to memory cache');
+          dbPromise = null;
           resolve(null);
         };
-        // 其他标签页仍持有旧版本连接时，不让调用方无限等待
+        // 其他标签页仍持有旧版本连接时，不让调用方无限等待，并允许后续重连
         req.onblocked = () => {
           console.warn('[DBCache] IndexedDB upgrade blocked by another tab, fallback to memory cache');
+          dbPromise = null;
           resolve(null);
         };
       } catch (err) {
         console.warn('[DBCache] IndexedDB not available, fallback to memory:', err);
+        dbPromise = null;
         resolve(null);
       }
     });
@@ -139,8 +169,9 @@ export async function getCachedSentencesBatch(keys: string[]): Promise<Map<strin
   const missingKeys: string[] = [];
 
   for (const k of keys) {
-    if (memorySentenceCache.has(k)) {
-      result.set(k, memorySentenceCache.get(k)!);
+    const hit = getMemorySentenceCache(k);
+    if (hit !== undefined) {
+      result.set(k, hit);
     } else {
       missingKeys.push(k);
     }
@@ -158,8 +189,16 @@ export async function getCachedSentencesBatch(keys: string[]): Promise<Map<strin
     for (let offset = 0; offset < missingKeys.length; offset += CHUNK_SIZE) {
       const chunk = missingKeys.slice(offset, offset + CHUNK_SIZE);
       await new Promise<void>((resolve) => {
+        let finished = false;
+        const done = () => {
+          if (finished) return;
+          finished = true;
+          resolve();
+        };
         try {
           const tx = db.transaction(STORE_SENTENCES, 'readonly');
+          tx.onerror = done;
+          tx.onabort = done;
           const store = tx.objectStore(STORE_SENTENCES);
           let remaining = chunk.length;
 
@@ -171,15 +210,15 @@ export async function getCachedSentencesBatch(keys: string[]): Promise<Map<strin
                 result.set(k, req.result.translation);
               }
               remaining--;
-              if (remaining === 0) resolve();
+              if (remaining === 0) done();
             };
             req.onerror = () => {
               remaining--;
-              if (remaining === 0) resolve();
+              if (remaining === 0) done();
             };
           }
         } catch (e) {
-          resolve();
+          done();
         }
       });
     }
@@ -191,7 +230,7 @@ export async function getCachedSentencesBatch(keys: string[]): Promise<Map<strin
 }
 
 /**
- * 批量写入句子缓存（同步写入内存与 IndexedDB）
+ * 批量写入句子缓存（同步写入内存与 IndexedDB，并等待事务落盘）
  */
 export async function setCachedSentencesBatch(
   entries: Array<{ key: string; translation: string }>
@@ -205,39 +244,53 @@ export async function setCachedSentencesBatch(
   try {
     const db = await getDB();
     if (!db) return;
-    const tx = db.transaction(STORE_SENTENCES, 'readwrite');
-    const store = tx.objectStore(STORE_SENTENCES);
-    const now = Date.now();
-    for (const { key, translation } of entries) {
-      store.put({ key, translation, updatedAt: now });
-    }
+    await new Promise<void>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_SENTENCES, 'readwrite');
+        tx.oncomplete = () => resolve();
+        tx.onerror = () => {
+          console.warn('[DBCache] setCachedSentencesBatch tx error:', tx.error);
+          resolve();
+        };
+        tx.onabort = () => {
+          console.warn('[DBCache] setCachedSentencesBatch tx abort:', tx.error);
+          resolve();
+        };
+        const store = tx.objectStore(STORE_SENTENCES);
+        const now = Date.now();
+        for (const { key, translation } of entries) {
+          store.put({ key, translation, updatedAt: now });
+        }
+      } catch (e) {
+        console.warn('[DBCache] setCachedSentencesBatch error:', e);
+        resolve();
+      }
+    });
   } catch (e) {
     console.warn('[DBCache] setCachedSentencesBatch error:', e);
   }
 }
 
 /**
- * 清空句子翻译缓存（高级设置页使用）。
- * 直接删除整个 IndexedDB，避免逐条遍历；页面上下文独立，不会影响内容脚本已有句柄。
+ * 清空句子翻译缓存（同步清理内存一级缓存与 IndexedDB 对象仓库，避免 deleteDatabase 被持久连接阻塞）
  */
 export async function clearSentenceCache(): Promise<boolean> {
+  memorySentenceCache.clear();
   try {
-    const existing = await new Promise<IDBDatabase | null>((resolve) => {
-      const req = indexedDB.open(DB_NAME);
-      req.onsuccess = () => resolve(req.result);
-      req.onerror = () => resolve(null);
+    const db = await getDB();
+    if (!db) return true;
+    const cleared = await new Promise<boolean>((resolve) => {
+      try {
+        const tx = db.transaction(STORE_SENTENCES, 'readwrite');
+        tx.objectStore(STORE_SENTENCES).clear();
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
     });
-    if (!existing) {
-      return true;
-    }
-    existing.close();
-    await new Promise<void>((resolve) => {
-      const req = indexedDB.deleteDatabase(DB_NAME);
-      req.onsuccess = () => resolve();
-      req.onerror = () => resolve();
-      req.onblocked = () => resolve();
-    });
-    return true;
+    return cleared;
   } catch {
     return false;
   }

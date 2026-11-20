@@ -4,7 +4,7 @@ export default defineConfig({
   manifest: {
     name: 'YouTube 自动字幕断句翻译器 (YT Subtitle Segmenter & Translator)',
     description: '针对 YouTube 自动语音识别字幕（ASR）提供智能停顿断句、语义标点重构、双语对齐展示与多源实时翻译（Google / DeepSeek / Gemini / OpenAI）。',
-    version: '0.6.0',
+    version: '0.6.1',
     // unlimitedStorage：用户上传的字幕字体（单个可达 5MB）存 chrome.storage.local，
     // 不加这条会被 ~10MB 的默认配额挡住，写入直接抛 QUOTA_BYTES 错误。
     permissions: ['storage', 'unlimitedStorage'],

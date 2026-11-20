@@ -385,17 +385,20 @@ export function findGlossaryMatches(texts: string[], limit = 40, source: Glossar
     }
   }
 
-  // 逐句判断「这一句有没有普通术语」，作为门控词的语境证据来源。
-  // 刻意排除 needsContext 词：它们自己都还等着被判语境，不能反过来给别人作证。
-  const plainEntries = source.filter((e) => !e.needsContext && e.ja.trim());
-  const hasPlainTerm = texts.map((text) => plainEntries.some((e) => containsTerm(text, e.ja.trim())));
+  if (matched.length === 0) return [];
 
-  const contextual = matched.filter((entry) => {
-    if (!entry.needsContext) return true;
-    const key = entry.ja.trim();
-    // 必须与「≥1 条普通术语」出现在同一句，而不是同批任意一句
-    return texts.some((text, i) => hasPlainTerm[i] && containsTerm(text, key));
-  });
+  // 仅当本批命中了 needsContext 门控词时，才计算逐句「是否含普通术语」（且仅需用已命中的普通词）
+  let contextual = matched;
+  if (matched.some((e) => e.needsContext)) {
+    const matchedPlain = matched.filter((e) => !e.needsContext && e.ja.trim());
+    const hasPlainTerm = texts.map((text) => matchedPlain.some((e) => containsTerm(text, e.ja.trim())));
+    contextual = matched.filter((entry) => {
+      if (!entry.needsContext) return true;
+      const key = entry.ja.trim();
+      // 必须与「≥1 条普通术语」出现在同一句，而不是同批任意一句
+      return texts.some((text, i) => hasPlainTerm[i] && containsTerm(text, key));
+    });
+  }
 
   contextual.sort((a, b) => b.ja.length - a.ja.length);
   return contextual.slice(0, Math.max(0, limit));
@@ -406,13 +409,31 @@ function isKanjiChar(ch: string): boolean {
   return /[\u3400-\u4dbf\u4e00-\u9fff]/.test(ch);
 }
 
+function isAsciiWordChar(ch: string): boolean {
+  return /[A-Za-z0-9]/.test(ch);
+}
+
 /**
  * 术语命中判断。
- * - 多字术语：子串命中即可（长词优先由排序保证）；
+ * - 纯 ASCII 字母/数字短术语（如 ARK / TNT / 64.）：左右邻接不得为 ASCII 字母或数字，
+ *   避免在 DARK / MARKET / 364.5 等无关英文词或数字中误命中；
+ * - 多字非纯 ASCII 术语：子串命中即可（长词优先由排序保证）；
  * - 单字术语（土/石/砂/氷/弓/矢/盾/毒）：仅当左右邻接都不是汉字时才算命中，
  *   避免「土曜日」「宝石」「砂漠」这类日常词被误判成方块名。
  */
 function containsTerm(haystack: string, key: string): boolean {
+  if (/^[A-Za-z0-9._-]+$/.test(key)) {
+    let index = haystack.indexOf(key);
+    while (index !== -1) {
+      const prev = index > 0 ? haystack[index - 1] : '';
+      const next = index + key.length < haystack.length ? haystack[index + key.length] : '';
+      if (!isAsciiWordChar(prev) && !isAsciiWordChar(next)) {
+        return true;
+      }
+      index = haystack.indexOf(key, index + 1);
+    }
+    return false;
+  }
   if (key.length >= 2) {
     return haystack.includes(key);
   }
@@ -434,8 +455,10 @@ function containsTerm(haystack: string, key: string): boolean {
 export function buildGlossaryPromptBlock(entries: GlossaryEntry[]): string {
   if (entries.length === 0) return '';
   const lines = entries.map((e) => {
-    const cat = GLOSSARY_CATEGORY_LABELS[e.category];
-    return `- ${e.ja} → ${e.zh}（${cat}）`;
+    const cat = GLOSSARY_CATEGORY_LABELS[e.category] || '用语';
+    const ja = String(e.ja || '').replace(/[\r\n]+/g, ' ').trim();
+    const zh = String(e.zh || '').replace(/[\r\n]+/g, ' ').trim();
+    return `- ${ja} → ${zh}（${cat}）`;
   });
   return `\n【术语库·必须严格采用以下译名，专有名词不得音译或加注原文】\n${lines.join('\n')}`;
 }

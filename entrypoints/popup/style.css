@@ -37,6 +37,7 @@
   /* ── 文字层级 ── */
   --text-main: #fafafa;
   --text-body: #d4d4d8;
+  --text-sub: #a1a1aa;
   --text-muted: #a1a1aa;
   --text-dim: #71717a;
 
@@ -833,6 +834,12 @@ label {
 .color-preset-dot:hover {
   transform: scale(1.18);
   border-color: #ffffff;
+}
+
+.color-preset-dot.active {
+  border-color: #ffffff;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.45);
+  transform: scale(1.12);
 }
 
 .checkerboard-dot {

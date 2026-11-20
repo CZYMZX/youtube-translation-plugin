@@ -214,13 +214,24 @@ export function planResume(
     return { reusable: false, reason: 'meta_mismatch', restored: 0, pending: current.length, sentences: base };
   }
 
+  const isValidCachedAi = (s: AiTrackSentence | null | undefined): boolean => {
+    if (!s || typeof s.translation !== 'string') return false;
+    const trimmed = s.translation.trim();
+    if (!trimmed) return false;
+    if (s.status === 'error') return false;
+    if (s.isAi === false) return false;
+    if (/^\[(翻译失败|AI精翻|降级失败|[A-Z]+ 失败)/.test(trimmed)) return false;
+    return true;
+  };
+
   const byId = new Map<number, AiTrackSentence>();
   const byText = new Map<string, AiTrackSentence>();
   for (const s of cached.sentences) {
     if (!s) continue;
     if (typeof s.id === 'number') byId.set(s.id, s);
+    // byText 仅收录带有效 AI 译文的条目，防止重复短句首条未翻遮蔽后条已翻
     const key = normalizeForHash(s.text);
-    if (key && !byText.has(key)) byText.set(key, s);
+    if (key && isValidCachedAi(s) && !byText.has(key)) byText.set(key, s);
   }
 
   let restored = 0;
@@ -229,12 +240,13 @@ export function planResume(
     const wantText = normalizeForHash(want.text);
     const sameId = byId.get(want.id);
     // **原文不完全一致就不复用**：只按 id 灌回会把上一版断句的译文贴到新句子上。
-    // 同 id 且原文一致优先，其次按原文在全表里找唯一命中（应对外部多删/多插一句）。
-    const hit = sameId && normalizeForHash(sameId.text) === wantText ? sameId : byText.get(wantText) || null;
-    if (!hit) continue;
-    const translation = typeof hit.translation === 'string' ? hit.translation : '';
-    if (!translation.trim()) continue;
-    base[i].translation = translation;
+    // 同 id 且原文一致且有效优先，其次按原文在全表里找有效命中（应对外部多删/多插一句）。
+    const hit =
+      sameId && normalizeForHash(sameId.text) === wantText && isValidCachedAi(sameId)
+        ? sameId
+        : byText.get(wantText) || null;
+    if (!hit || !isValidCachedAi(hit)) continue;
+    base[i].translation = hit.translation as string;
     base[i].status = 'done';
     base[i].isAi = true;
     restored++;
@@ -249,9 +261,7 @@ export function planResume(
   if (restored === 0) {
     return { reusable: false, reason: 'no_text_match', restored: 0, pending: current.length, sentences: resetAll(current) };
   }
-  const cachedDone = cached.sentences.filter(
-    (s) => typeof s?.translation === 'string' && s.translation.trim()
-  ).length;
+  const cachedDone = cached.sentences.filter((s) => isValidCachedAi(s)).length;
   const denominator = Math.max(1, Math.min(base.length, cachedDone));
   if (restored / denominator < AI_TRACK_ALIGN_MIN_RATIO) {
     return { reusable: false, reason: 'low_overlap', restored: 0, pending: current.length, sentences: resetAll(current) };
@@ -314,23 +324,30 @@ export function buildResumeBatches(
   return batches;
 }
 
-/** 把运行中的句子数组压成落盘形态并统计进度 */
+/** 把运行中的句子数组压成落盘形态并统计进度（仅持久化真正的 AI 精翻译文，避免机翻/报错占位伪装完成） */
 export function buildAiTrackRecord(
   meta: AiTrackMeta & { service?: string; modelName?: string },
   sentences: SubtitleSentence[],
   now = Date.now(),
   createdAt?: number
 ): AiTrackRecord {
-  const rows: AiTrackSentence[] = (Array.isArray(sentences) ? sentences : []).map((s) => ({
-    id: s.id,
-    start: s.start,
-    end: s.end,
-    text: s.text,
-    translation: s.translation,
-    status: s.status,
-    isAi: s.isAi
-  }));
-  const done = rows.filter((s) => typeof s.translation === 'string' && s.translation.trim()).length;
+  const rows: AiTrackSentence[] = (Array.isArray(sentences) ? sentences : []).map((s) => {
+    const isRealAiDone =
+      s.isAi === true &&
+      s.status === 'done' &&
+      typeof s.translation === 'string' &&
+      !!s.translation.trim();
+    return {
+      id: s.id,
+      start: s.start,
+      end: s.end,
+      text: s.text,
+      translation: isRealAiDone ? s.translation : undefined,
+      status: isRealAiDone ? 'done' : 'idle',
+      isAi: isRealAiDone
+    };
+  });
+  const done = rows.filter((s) => s.isAi === true && typeof s.translation === 'string' && !!s.translation.trim()).length;
   return {
     key: buildAiTrackKey(meta),
     videoId: String(meta.videoId ?? ''),
@@ -374,10 +391,21 @@ export function isAiTrackExpired(updatedAt: number, ttlHours: number, now = Date
 
 /* ══════════════════════════ 持久化（静默降级） ══════════════════════════ */
 
-/** 内存镜像：库打不开时的唯一载体，同时也是读缓存 */
+/** 内存镜像：库打不开时的唯一载体，同时也是读缓存（带 LRU 容量上限防长会话膨胀） */
 const memoryTracks = new Map<string, AiTrackRecord>();
+const MEMORY_TRACKS_LIMIT = 120;
 let dbPromise: Promise<IDBDatabase | null> | null = null;
 let degradedWarned = false;
+
+function memoryTrackSet(key: string, record: AiTrackRecord) {
+  if (memoryTracks.has(key)) {
+    memoryTracks.delete(key);
+  } else if (memoryTracks.size >= MEMORY_TRACKS_LIMIT) {
+    const oldest = memoryTracks.keys().next().value;
+    if (oldest) memoryTracks.delete(oldest);
+  }
+  memoryTracks.set(key, record);
+}
 
 function warnDegraded(reason: string, detail?: unknown) {
   if (degradedWarned) return;
@@ -407,18 +435,33 @@ function getDB(): Promise<IDBDatabase | null> {
             }
           }
         };
-        req.onsuccess = () => resolve(req.result);
+        req.onsuccess = () => {
+          const db = req.result;
+          db.onversionchange = () => {
+            try {
+              db.close();
+            } catch {}
+            dbPromise = null;
+          };
+          db.onclose = () => {
+            dbPromise = null;
+          };
+          resolve(db);
+        };
         req.onerror = () => {
           warnDegraded('open error', req.error);
+          dbPromise = null;
           resolve(null);
         };
-        // 其他标签页仍持有旧连接时不让调用方无限等待
+        // 其他标签页仍持有旧连接时不让调用方无限等待，并允许后续重连
         req.onblocked = () => {
           warnDegraded('open blocked');
+          dbPromise = null;
           resolve(null);
         };
       } catch (err) {
         warnDegraded('open throw', err);
+        dbPromise = null;
         resolve(null);
       }
     });
@@ -426,25 +469,37 @@ function getDB(): Promise<IDBDatabase | null> {
   return dbPromise;
 }
 
-function storeOf(db: IDBDatabase, mode: IDBTransactionMode): IDBObjectStore {
-  return db.transaction(STORE_TRACKS, mode).objectStore(STORE_TRACKS);
-}
-
 export async function loadAiTrack(meta: AiTrackMeta): Promise<AiTrackRecord | null> {
   const key = buildAiTrackKey(meta);
   if (!key || key.startsWith('::')) return null;
   const mem = memoryTracks.get(key);
-  if (mem) return mem;
+  if (mem) {
+    memoryTrackSet(key, mem);
+    return mem;
+  }
 
   const db = await getDB();
   if (!db) return null;
   try {
     const record = await new Promise<AiTrackRecord | null>((resolve) => {
-      const req = storeOf(db, 'readonly').get(key);
-      req.onsuccess = () => resolve((req.result as AiTrackRecord) || null);
-      req.onerror = () => resolve(null);
+      let settled = false;
+      const done = (val: AiTrackRecord | null) => {
+        if (settled) return;
+        settled = true;
+        resolve(val);
+      };
+      try {
+        const tx = db.transaction(STORE_TRACKS, 'readonly');
+        tx.onerror = () => done(null);
+        tx.onabort = () => done(null);
+        const req = tx.objectStore(STORE_TRACKS).get(key);
+        req.onsuccess = () => done((req.result as AiTrackRecord) || null);
+        req.onerror = () => done(null);
+      } catch {
+        done(null);
+      }
     });
-    if (record) memoryTracks.set(key, record);
+    if (record) memoryTrackSet(key, record);
     return record;
   } catch {
     return null;
@@ -457,7 +512,7 @@ export async function loadAiTrack(meta: AiTrackMeta): Promise<AiTrackRecord | nu
  */
 export async function saveAiTrack(record: AiTrackRecord): Promise<boolean> {
   if (!record || !record.key) return false;
-  memoryTracks.set(record.key, record);
+  memoryTrackSet(record.key, record);
 
   const db = await getDB();
   if (!db) return false;
@@ -571,12 +626,19 @@ export async function pruneAiTracks(ttlHours: number, now = Date.now()): Promise
       let n = 0;
       const tx = db.transaction(STORE_TRACKS, 'readwrite');
       const index = tx.objectStore(STORE_TRACKS).index(INDEX_UPDATED_AT);
-      const req = index.openCursor(IDBKeyRange.upperBound(cutoff));
+      const range =
+        typeof IDBKeyRange.bound === 'function'
+          ? IDBKeyRange.bound(1, cutoff, false, true)
+          : IDBKeyRange.upperBound(cutoff);
+      const req = index.openCursor(range);
       req.onsuccess = () => {
         const cursor = req.result;
         if (!cursor) return;
-        cursor.delete();
-        n++;
+        const row = cursor.value as AiTrackRecord | undefined;
+        if (row && isAiTrackExpired(row.updatedAt, ttl, now)) {
+          cursor.delete();
+          n++;
+        }
         cursor.continue();
       };
       req.onerror = () => resolve(n);

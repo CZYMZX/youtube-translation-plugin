@@ -428,6 +428,41 @@ export function isCustomFontRegistered(id: string): boolean {
   return registeredFontIds.has(id);
 }
 
+/** 校验字体二进制文件头魔数（TTF / OTF / WOFF / WOFF2 / TrueType Collection），防止伪装扩展名写入存储 */
+export function hasValidFontMagic(buf: ArrayBuffer): boolean {
+  if (!buf || buf.byteLength < 4) return false;
+  const b = new Uint8Array(buf, 0, 4);
+  // TrueType: 00 01 00 00 或 'true' (74 72 75 65) 或 'typ1'
+  const isTtf =
+    (b[0] === 0x00 && b[1] === 0x01 && b[2] === 0x00 && b[3] === 0x00) ||
+    (b[0] === 0x74 && b[1] === 0x72 && b[2] === 0x75 && b[3] === 0x65) ||
+    (b[0] === 0x74 && b[1] === 0x79 && b[2] === 0x70 && b[3] === 0x31);
+  // OpenType: 'OTTO' (4F 54 54 4F) / TrueType Collection: 'ttcf' (74 74 63 66)
+  const isOtfOrTtc =
+    (b[0] === 0x4f && b[1] === 0x54 && b[2] === 0x54 && b[3] === 0x4f) ||
+    (b[0] === 0x74 && b[1] === 0x74 && b[2] === 0x63 && b[3] === 0x66);
+  // WOFF: 'wOFF' (77 4F 46 46) / WOFF2: 'wOF2' (77 4F 46 32)
+  const isWoff =
+    b[0] === 0x77 && b[1] === 0x4f && b[2] === 0x46 && (b[3] === 0x46 || b[3] === 0x32);
+  return isTtf || isOtfOrTtc || isWoff;
+}
+
+/** 删除自定义字体后释放 document.fonts 中的 FontFace 与本地注册记录 */
+export function unregisterCustomFont(id: string): void {
+  registeredFontIds.delete(id);
+  pendingRegistrations.delete(id);
+  if (typeof document === 'undefined' || !document.fonts) return;
+  const targetFamily = customFontFamily(id);
+  try {
+    for (const face of Array.from(document.fonts)) {
+      const normalized = face.family.replace(/^['"]|['"]$/g, '');
+      if (normalized === targetFamily) {
+        document.fonts.delete(face);
+      }
+    }
+  } catch {}
+}
+
 /** data URL → ArrayBuffer（用 atob 手解，避免在 YouTube 页面里被 CSP 的 connect-src 拦住） */
 export function dataUrlToArrayBuffer(dataUrl: string): ArrayBuffer {
   const comma = dataUrl.indexOf(',');

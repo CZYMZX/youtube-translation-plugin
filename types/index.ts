@@ -581,4 +581,14 @@ export type ExtensionMessage =
   | { type: 'GET_SETTINGS' }
   | { type: 'SAVE_SETTINGS'; payload: Partial<ExtensionSettings> }
   | { type: 'CHECK_GOOGLE_TRANSLATE_CONNECTION' }
-  | { type: 'SETTINGS_UPDATED'; settings: ExtensionSettings };
+  | { type: 'SETTINGS_UPDATED'; settings: ExtensionSettings }
+  | { type: 'CLEAR_SENTENCE_CACHE' }
+  | {
+      type: 'AI_TRACK_LOAD';
+      payload: { videoId: string; targetLang: string; scenario: string };
+    }
+  | { type: 'AI_TRACK_SAVE'; payload: { record: unknown } }
+  | { type: 'AI_TRACK_CLEAR'; payload: { videoId: string } }
+  | { type: 'AI_TRACK_CLEAR_ALL' }
+  | { type: 'AI_TRACK_STATS' }
+  | { type: 'AI_TRACK_PRUNE'; payload: { ttlHours: number } };

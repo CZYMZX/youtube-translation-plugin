@@ -569,26 +569,33 @@ function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+/** 清洗用于拼入 System Prompt 的单行字段（去除换行与控制字符，防止第三方词包注入多行指令） */
+function asSingleLine(value: unknown, maxLen: number): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\r\n\u0000-\u001f]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, maxLen);
+}
+
 function makeId(prefix: string, name: string): string {
   const slug = name
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]+/g, '-')
     .replace(/^-+|-+$/g, '')
     .slice(0, 24) || 'pack';
-  return `${prefix}-${slug}-${Date.now().toString(36)}`;
+  const rand = Math.random().toString(36).slice(2, 6);
+  return `${prefix}-${slug}-${Date.now().toString(36)}-${rand}`;
 }
 
 /**
  * 校验并规范化「术语库上传包」
- * 格式：{ version, name, description?, entries: [{ ja, zh, en?, category?, source?, sourceType? }] }
+ * 格式：{ version, name, description?, entries: [{ ja, zh, en?, category?, source?, sourceType?, needsContext? }] }
  */
 export function validateGlossaryPack(raw: unknown): PackValidationResult<GlossaryPack> {
   const errors: string[] = [];
-  if (!raw || typeof raw !== 'object') {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, errors: ['文件内容不是 JSON 对象'] };
   }
   const obj = raw as Record<string, unknown>;
-  const name = asString(obj.name);
+  const name = asSingleLine(obj.name, 80);
   if (!name) errors.push('缺少字段 name（术语库名称）');
   if (name.length > 40) errors.push('name 超过 40 字');
 
@@ -604,13 +611,14 @@ export function validateGlossaryPack(raw: unknown): PackValidationResult<Glossar
   if (Array.isArray(entriesRaw)) {
     entriesRaw.slice(0, 2000).forEach((item, i) => {
       const row = i + 1;
-      if (!item || typeof item !== 'object') {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
         errors.push(`第 ${row} 条不是对象`);
         return;
       }
       const e = item as Record<string, unknown>;
-      const ja = asString(e.ja);
-      const zh = asString(e.zh);
+      // 清洗换行与控制字符，防恶意第三方词包通过 ja/zh 向 System Prompt 注入覆盖指令
+      const ja = asSingleLine(e.ja, 120);
+      const zh = asSingleLine(e.zh, 240);
       if (!ja) errors.push(`第 ${row} 条缺少 ja（日文原词）`);
       if (!zh) errors.push(`第 ${row} 条缺少 zh（中文译名）`);
       if (ja.length > 60) errors.push(`第 ${row} 条 ja 超过 60 字`);
@@ -622,15 +630,19 @@ export function validateGlossaryPack(raw: unknown): PackValidationResult<Glossar
       const sourceType = SOURCE_TYPES.has(String(e.sourceType))
         ? (e.sourceType as 'official' | 'wiki' | 'community')
         : 'community';
-      entries.push({
+      const entry: GlossaryEntry = {
         id: `custom-${row}`,
         ja,
         zh,
-        en: asString(e.en) || undefined,
+        en: asSingleLine(e.en, 120) || undefined,
         category,
-        source: asString(e.source) || '用户上传',
+        source: asSingleLine(e.source, 120) || '用户上传',
         sourceType
-      });
+      };
+      if (typeof e.needsContext === 'boolean') {
+        entry.needsContext = e.needsContext;
+      }
+      entries.push(entry);
     });
   }
 
@@ -641,7 +653,7 @@ export function validateGlossaryPack(raw: unknown): PackValidationResult<Glossar
     pack: {
       id: makeId('custom-glossary', name),
       name,
-      description: asString(obj.description) || `用户上传 · ${entries.length} 条`,
+      description: asSingleLine(obj.description, 200) || `用户上传 · ${entries.length} 条`,
       builtIn: false,
       entries
     }
@@ -654,11 +666,11 @@ export function validateGlossaryPack(raw: unknown): PackValidationResult<Glossar
  */
 export function validateScenePack(raw: unknown): PackValidationResult<ScenePack> {
   const errors: string[] = [];
-  if (!raw || typeof raw !== 'object') {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
     return { ok: false, errors: ['文件内容不是 JSON 对象'] };
   }
   const obj = raw as Record<string, unknown>;
-  const name = asString(obj.name);
+  const name = asSingleLine(obj.name, 80);
   const prompt = asString(obj.prompt);
   if (!name) errors.push('缺少字段 name（场景名称）');
   if (name.length > 40) errors.push('name 超过 40 字');
@@ -676,8 +688,8 @@ export function validateScenePack(raw: unknown): PackValidationResult<ScenePack>
     pack: {
       id: makeId('custom-scene', name),
       name,
-      description: asString(obj.description) || '用户上传场景',
-      hint: asString(obj.hint),
+      description: asSingleLine(obj.description, 200) || '用户上传场景',
+      hint: asSingleLine(obj.hint, 200),
       builtIn: false,
       prompt
     }
@@ -712,13 +724,18 @@ export function hashPrompt(prompt: string): string {
   return hash.toString(36);
 }
 
-/** 汇总启用包内的全部条目（用于匹配） */
+/** 汇总启用包内的全部条目（按 ja 去重，自定义包后置自动覆盖同名内置词条） */
 export function collectGlossaryEntries(enabledPackIds: string[], custom: CustomPacks): GlossaryEntry[] {
   const packs = getAllGlossaryPacks(custom);
   const enabled = enabledPackIds.length > 0 ? enabledPackIds : DEFAULT_GLOSSARY_PACKS;
-  const entries: GlossaryEntry[] = [];
+  const byJa = new Map<string, GlossaryEntry>();
   for (const pack of packs) {
-    if (enabled.includes(pack.id)) entries.push(...pack.entries);
+    if (!enabled.includes(pack.id)) continue;
+    for (const entry of pack.entries) {
+      const key = entry.ja.trim();
+      if (!key) continue;
+      byJa.set(key, entry);
+    }
   }
-  return entries;
+  return Array.from(byJa.values());
 }

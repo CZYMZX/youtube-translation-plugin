@@ -12,8 +12,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1')), '..');
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const all = process.argv.includes('--all');
 
 function git(cmd) {
@@ -66,6 +67,6 @@ console.log('  · docs/LIBRARY-BASELINE.json  ← 最后一步，改完再跑 np
 console.log('');
 if (all) {
   console.log('── 4. 全量提交历史（最近 30 条） ──');
-  console.log(git('log -30 --oneline'));
+  console.log(git('git log -30 --oneline'));
   console.log('');
 }

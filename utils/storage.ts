@@ -65,13 +65,30 @@ function clampNumber(value: unknown, min: number, max: number, fallback: number)
   return Math.min(max, Math.max(min, Math.round(num)));
 }
 
-function sanitizeColor(value: unknown, fallback: string): string {
+function sanitizeColor(value: unknown, fallback: string, allowTransparent = false): string {
   if (typeof value !== 'string') return fallback;
-  // `#00000000` 是「完全透明无底色」这个合法预设（bgColor 的棋盘格色块），
+  // `#00000000` 是「完全透明无底色」这个合法预设（仅 bgColor 棋盘格色块允许），
   // 8 位 hex 仅此一例：渲染侧 hexToRgba 对它特判返回 'transparent'。
-  // 历史上这里的正则只放行 6 位，导致点透明后立刻被洗回默认色 —— 表现为「点了没反应」。
-  if (value.toLowerCase() === '#00000000') return '#00000000';
+  if (allowTransparent && value.toLowerCase() === '#00000000') return '#00000000';
   return /^#[0-9a-fA-F]{6}$/.test(value) ? value : fallback;
+}
+
+function sanitizeOptionalHexColor(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return /^#[0-9a-fA-F]{6}$/.test(trimmed) ? trimmed : '';
+}
+
+/**
+ * 剥离大体积自定义字体包（base64 dataUrl，最高 ~27MB），用于跨进程 IPC 消息透传，
+ * 避免每次翻译或设置广播都序列化几十 MB 字体数据。
+ */
+export function stripCustomFonts(settings: ExtensionSettings): ExtensionSettings {
+  if (!settings || !settings.customFonts || settings.customFonts.length === 0) {
+    return settings;
+  }
+  const { customFonts: _omit, ...rest } = settings;
+  return rest as ExtensionSettings;
 }
 
 /**
@@ -228,6 +245,9 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   merged.pauseThreshold = clampNumber(merged.pauseThreshold, 120, 3000, 450);
   merged.maxWordsPerSentence = clampNumber(merged.maxWordsPerSentence, 4, 60, 16);
   merged.minWordsPerSentence = clampNumber(merged.minWordsPerSentence, 1, 20, 3);
+  if (merged.minWordsPerSentence > merged.maxWordsPerSentence) {
+    merged.minWordsPerSentence = merged.maxWordsPerSentence;
+  }
   merged.maxDurationMs = clampNumber(merged.maxDurationMs, 1500, 20000, 6500);
   if (!VALID_SEGMENTATION_LANGS.includes(merged.segmentationLanguage as any)) {
     merged.segmentationLanguage = 'auto';
@@ -254,13 +274,18 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
   /* 自定义字体包：逐条清洗（缺 dataUrl / 非法 base64 / 超单文件上限的条目单独丢弃） */
   merged.customFonts = sanitizeFontPacks(merged.customFonts);
 
-  merged.bgColor = sanitizeColor(merged.bgColor, DEFAULT_SETTINGS.bgColor);
-  merged.origColor = sanitizeColor(merged.origColor, DEFAULT_SETTINGS.origColor);
-  merged.transColor = sanitizeColor(merged.transColor, DEFAULT_SETTINGS.transColor);
+  merged.bgColor = sanitizeColor(merged.bgColor, DEFAULT_SETTINGS.bgColor, true);
+  merged.origColor = sanitizeColor(merged.origColor, DEFAULT_SETTINGS.origColor, false);
+  merged.transColor = sanitizeColor(merged.transColor, DEFAULT_SETTINGS.transColor, false);
   merged.aiIconColor = sanitizeColor(
     merged.aiIconColor || DEFAULT_SETTINGS.aiIconColor,
-    DEFAULT_SETTINGS.aiIconColor || '#fbbf24'
+    DEFAULT_SETTINGS.aiIconColor || '#fbbf24',
+    false
   );
+  merged.wordHighlightColor = sanitizeOptionalHexColor(merged.wordHighlightColor);
+  merged.wordHighlightTransColor = sanitizeOptionalHexColor(merged.wordHighlightTransColor);
+  merged.lyricKaraoke = merged.lyricKaraoke !== false;
+  merged.asrWordReveal = merged.asrWordReveal !== false;
 
   merged.targetLang = typeof merged.targetLang === 'string' && merged.targetLang.trim()
     ? merged.targetLang.trim()
@@ -361,9 +386,10 @@ export function sanitizeSettings(raw: Partial<ExtensionSettings> | undefined): E
     else delete merged.providerBaseUrls[currentProvider.id];
   }
 
-  /* 4. 老字段只作迁移输入：清掉，保证「数据只有一份」 */
+  /* 4. 老字段与内部时间戳只作迁移/比对输入：清掉，保证输出结构纯净 */
   delete merged.serviceKeys;
   delete merged.baseUrls;
+  delete (merged as unknown as Record<string, unknown>)._updatedAt;
 
   return merged;
 }
@@ -523,8 +549,12 @@ export async function getStoredSettings(): Promise<ExtensionSettings> {
     loadCustomFonts()
   ]);
 
-  const base = (syncValue || localValue) as Partial<ExtensionSettings> | null;
-  const baseArea: 'sync' | 'local' = syncValue ? 'sync' : 'local';
+  const syncTs = typeof syncValue?._updatedAt === 'number' ? syncValue._updatedAt : 0;
+  const localTs = typeof localValue?._updatedAt === 'number' ? localValue._updatedAt : 0;
+  // 若 sync 曾经写入失败而降级落入 local，local 的 _updatedAt 更新，优先采信较新的一份
+  const useLocal = !syncValue || (!!localValue && localTs > syncTs);
+  const base = (useLocal ? localValue : syncValue) as Partial<ExtensionSettings> | null;
+  const baseArea: 'sync' | 'local' = useLocal ? 'local' : 'sync';
 
   /* 字体包**只**来自 local：sync 那一份即便历史残留了也不采信（单键 8KB 塞不下字体） */
   const fonts = localFonts;
@@ -536,8 +566,14 @@ export async function getStoredSettings(): Promise<ExtensionSettings> {
   /* 迁移：老数据 Key 还写在 sync/settings 里 → 搬到 local，并把那份里的 Key 抹掉 */
   if (hasSecretFields(base as Record<string, unknown>)) {
     const migrated = extractSecrets(base);
-    /* local 已有值优先：升级之后 local 才是唯一真相，sync 里的只是历史残留 */
-    const merged: SecretState = { ...migrated, ...(localSecrets || {}) };
+    /* local 已有值优先，但不同厂牌的 Key 按键合并而非整包覆盖 */
+    const merged: SecretState = {
+      apiKey: localSecrets?.apiKey !== undefined ? localSecrets.apiKey : migrated.apiKey,
+      providerKeys: {
+        ...(migrated.providerKeys || {}),
+        ...(localSecrets?.providerKeys || {})
+      }
+    };
     await writeSecrets(merged);
     await stripSecrets(baseArea, base as Record<string, unknown>);
     return sanitizeSettings({ ...base, ...merged, customFonts: fonts });
@@ -577,7 +613,7 @@ export function saveStoredSettings(
 
       /* sync 里必须**不含** Key：显式删掉三个敏感字段，再写。
          同理**不含** customFonts：sync 单键 8KB，一个字体就爆；只保留 fontFamily 这个 id。 */
-      const plain: Record<string, unknown> = { ...updated };
+      const plain: Record<string, unknown> = { ...updated, _updatedAt: Date.now() };
       for (const field of SECRET_FIELDS) delete plain[field];
       delete plain.customFonts;
 

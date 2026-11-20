@@ -582,6 +582,13 @@ export function dedupeLyricEvents(data: Json3CaptionData): LyricDedupeResult {
     if (cur.endMs > maxEnd) cur.endMs = Math.max(cur.startMs + 1, maxEnd);
   }
 
+  // 去重叠后同步回写每行首段 endMs，避免 line.endMs 仍保留未裁剪前的长尾
+  for (const l of lines) {
+    if (l.displays.length > 0) {
+      l.endMs = l.displays[0].endMs;
+    }
+  }
+
   return {
     lines,
     stats: {
@@ -1019,18 +1026,40 @@ function coloredCharsOfEvent(ev: Json3Event, pens?: Json3Pen[]): ColoredChar[] {
   return kept.filter((_, i) => !dropCp.has(i));
 }
 
-/** 把一行的所有 event 收成按时间升序、同刻去重的帧列表。 */
-function readColorFrames(data: Json3CaptionData, key: string): ColorFrame[] {
+const colorEventsByKeyCache = new WeakMap<Json3CaptionData, Map<string, Array<{ ev: Json3Event; text: string }>>>();
+
+function getColorEventsIndex(data: Json3CaptionData): Map<string, Array<{ ev: Json3Event; text: string }>> {
+  const cached = colorEventsByKeyCache.get(data);
+  if (cached) return cached;
+
+  const index = new Map<string, Array<{ ev: Json3Event; text: string }>>();
   const events = Array.isArray(data?.events) ? data.events : [];
+  for (const ev of events) {
+    const text = stripRuby(stripInvisible(eventRawText(ev)));
+    const key = lyricKeyOf(text);
+    if (!key) continue;
+    let bucket = index.get(key);
+    if (!bucket) {
+      bucket = [];
+      index.set(key, bucket);
+    }
+    bucket.push({ ev, text });
+  }
+  if (data && typeof data === 'object') {
+    colorEventsByKeyCache.set(data, index);
+  }
+  return index;
+}
+
+/** 把一行的所有 event 收成按时间升序、同刻去重的帧列表（使用 WeakMap 按 key 预索引，避免长歌回 O(L×E)）。 */
+function readColorFrames(data: Json3CaptionData, key: string): ColorFrame[] {
+  const bucket = getColorEventsIndex(data).get(key);
+  if (!bucket || bucket.length === 0) return [];
   const pens = Array.isArray(data?.pens) ? data.pens : undefined;
   const byTime = new Map<number, ColorFrame>();
   const order: number[] = [];
 
-  for (const ev of events) {
-    // 与 dedupeLyricEvents 同一口径的文本键，保证「属于这一行的 event」判定一致
-    const text = stripRuby(stripInvisible(eventRawText(ev)));
-    if (lyricKeyOf(text) !== key) continue;
-
+  for (const { ev, text } of bucket) {
     const chars = coloredCharsOfEvent(ev, pens);
     const colors = chars.map((c) => c.color).filter((c): c is string => !!c && c !== UNSUNG_COLOR);
     const frame: ColorFrame = {
@@ -1118,12 +1147,15 @@ export function extractLineColors(data: Json3CaptionData, line: LyricLine): Line
   const n = refChars.length;
   if (n === 0) return empty;
 
-  // ── 切轮次：已唱字数回退 = 新一轮从全白重新扫起 ──
+  // ── 切轮次：已唱字数回退，或相邻帧间隔超过 10 秒（副歌再次出现）= 新一轮 ──
+  const PASS_GAP_MS = 10000;
   const passes: ColorFrame[][] = [];
   let cur: ColorFrame[] = [];
   let runMax = 0;
+  let lastT = -1;
   for (const f of frames) {
-    if (cur.length > 0 && f.sung < runMax) {
+    const bigGap = cur.length > 0 && lastT >= 0 && f.tStartMs - lastT > PASS_GAP_MS;
+    if (cur.length > 0 && (f.sung < runMax || bigGap)) {
       passes.push(cur);
       cur = [f];
       runMax = f.sung;
@@ -1131,11 +1163,16 @@ export function extractLineColors(data: Json3CaptionData, line: LyricLine): Line
       cur.push(f);
       if (f.sung > runMax) runMax = f.sung;
     }
+    lastT = f.tStartMs;
   }
   if (cur.length > 0) passes.push(cur);
 
   const peakOf = (pass: ColorFrame[]): number => pass.reduce((a, f) => Math.max(a, f.sung), 0);
-  const peak = Math.max(...passes.map(peakOf));
+  let peak = 0;
+  for (const pass of passes) {
+    const p = peakOf(pass);
+    if (p > peak) peak = p;
+  }
   let chosen = passes[passes.length - 1];
   for (let i = passes.length - 1; i >= 0; i--) {
     if (peakOf(passes[i]) === peak) {
@@ -1265,7 +1302,8 @@ export function attachCharColors(
   if (!info.startMs.some((v) => typeof v === 'number')) return out;
 
   const spanStart = out[0].startMs;
-  const spanEnd = info.windowEndMs;
+  const clippedEnd = out[n - 1].endMs;
+  const spanEnd = Math.min(info.windowEndMs, clippedEnd > spanStart ? clippedEnd : info.windowEndMs);
   if (!(spanEnd > spanStart)) return out;
   if (Math.abs(info.windowStartMs - spanStart) > REAL_TIME_WINDOW_TOLERANCE_MS) return out;
 
