@@ -189,6 +189,10 @@ export default defineContentScript({
     let karaokeBuildCount = 0;
     /** 上一次挂给翻译队列的句子数组引用（仅歌词轨用于去重挂载，见 startPreTranslationPipeline） */
     let lastAttachedSentences: SubtitleSentence[] | null = null;
+    /** 必须在启动探测（handleVideoChange / detectCurrentVideoAndLoad）之前声明，避免 TDZ 崩溃 */
+    let isStartingAiRequest = false;
+    let manualResumePromptedKey = '';
+    let lastDomCaptionText = '';
 
     // 1. 同步实例化核心管理器
     translationQueue = new TranslationQueue(settings, {
@@ -1154,14 +1158,16 @@ export default defineContentScript({
         // 兜底机制：若未拦截到响应体，校验为 YouTube 官方 timedtext 域名且属于当前视频后再通过 Background 代理拉取
         const { url } = event.data;
         let isTrustedUrl = false;
+        let safeUrl = '';
         let urlVid = '';
         if (typeof url === 'string' && url.length > 0 && url.length <= 4096) {
           try {
-            const parsed = new URL(url);
+            const parsed = new URL(url, window.location.origin);
             isTrustedUrl =
               parsed.protocol === 'https:' &&
               /(^|\.)youtube\.com$/i.test(parsed.hostname) &&
               parsed.pathname === '/api/timedtext';
+            safeUrl = parsed.toString();
             urlVid = parsed.searchParams.get('v') || '';
           } catch {}
         }
@@ -1171,14 +1177,14 @@ export default defineContentScript({
         if (
           isTrustedUrl &&
           (currentSentences.length === 0 || captionDataIncomplete) &&
-          url !== currentLoadingTrackUrl
+          safeUrl !== currentLoadingTrackUrl
         ) {
           console.log('[YT-Sub-Translator] Direct timedtext URL intercepted from YouTube player');
-          currentLoadingTrackUrl = url;
+          currentLoadingTrackUrl = safeUrl;
           const requestSessionId = videoSessionId;
           const requestVid = currentVideoId;
           safeSendMessage<{ success?: boolean; data?: Json3CaptionData; error?: string }>(
-            { type: 'FETCH_CAPTIONS', payload: { url } },
+            { type: 'FETCH_CAPTIONS', payload: { url: safeUrl } },
             (r) => {
               if (!r.ok) {
                 if (r.reason === 'invalidated') handleContextInvalidated();
@@ -2258,9 +2264,6 @@ export default defineContentScript({
      *      只提示「已完成 N/M，点按钮继续」，不发请求；
      *   3. 其余情况（含 auto 续翻）→ 只翻缺译文的句子，并带紧邻上文两句。
      */
-    let isStartingAiRequest = false;
-    let manualResumePromptedKey = '';
-
     async function handleRequestAiSubtitles() {
       if (isFullAiRunning || isStartingAiRequest) {
         if (overlay) overlay.showToast('AI 深度精翻正在执行中，请稍候...');
@@ -2481,8 +2484,6 @@ export default defineContentScript({
     /**
      * 引擎 2：DOM 原生字幕实时捕获兜底器
      */
-    let lastDomCaptionText = '';
-
     function initDomCaptionObserver() {
       const processDomCaption = () => {
         if (!settings?.enabled) return;

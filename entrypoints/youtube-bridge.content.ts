@@ -169,6 +169,7 @@ export default defineContentScript({
      * 解决“用户未开启原生 CC 时，YouTube 播放器根本不发起 timedtext 请求、导致插件检测不到字幕”的根本痛点
      */
     function triggerSubtitle(force = false) {
+      if (isAdPlaying()) return;
       const vid = String(getPlayer()?.getVideoData?.()?.video_id || '');
 
       // 闸门 1：7 条取轨途径都拿不到 baseUrl → 点按钮不可能点出字幕来，直接放弃。
@@ -344,24 +345,27 @@ export default defineContentScript({
       }
     });
 
-    // 挂载播放器内部原生事件监听（按 player 实例去重，避免 SPA 复用 #movie_player 导致重复注册风暴）
-    const attachedPlayers = new WeakSet<object>();
+    // 挂载播放器内部原生事件监听（按 player 实例 + addEventListener 引用去重，
+    // 防止未初始化完的 #movie_player div 因继承 EventTarget.addEventListener 被误判为已绑定）
+    const attachedPlayerHandlers = new WeakMap<object, Function>();
     const attachPlayerEventListeners = () => {
       const player = getPlayer();
-      if (!player || typeof player !== 'object' || attachedPlayers.has(player)) return;
+      if (!player || typeof player !== 'object') return;
+      const isPlayerApiReady =
+        typeof player.getPlayerResponse === 'function' || typeof player.getVideoData === 'function';
+      if (!isPlayerApiReady || typeof player.addEventListener !== 'function') return;
+      if (attachedPlayerHandlers.get(player) === player.addEventListener) return;
 
       try {
-        if (typeof player.addEventListener === 'function') {
-          attachedPlayers.add(player);
-          player.addEventListener('onCaptionsTrackListChanged', () => {
-            console.log('[YT-Sub-Translator] onCaptionsTrackListChanged triggered');
-            broadcastTracks('player_captions_list_changed');
-          });
-          player.addEventListener('onCaptionsChange', () => {
-            console.log('[YT-Sub-Translator] onCaptionsChange triggered');
-            broadcastTracks('player_captions_changed');
-          });
-        }
+        attachedPlayerHandlers.set(player, player.addEventListener);
+        player.addEventListener('onCaptionsTrackListChanged', () => {
+          console.log('[YT-Sub-Translator] onCaptionsTrackListChanged triggered');
+          broadcastTracks('player_captions_list_changed');
+        });
+        player.addEventListener('onCaptionsChange', () => {
+          console.log('[YT-Sub-Translator] onCaptionsChange triggered');
+          broadcastTracks('player_captions_changed');
+        });
       } catch (e) {}
     };
 

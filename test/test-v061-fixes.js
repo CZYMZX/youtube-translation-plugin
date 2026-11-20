@@ -2,6 +2,9 @@
  * v0.6.1 全面审计修复与 v0.6.0 新特性行为回归测试
  */
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { DEFAULT_SETTINGS } from '../types/index.ts';
 import { sanitizeSettings, stripCustomFonts } from '../utils/storage.ts';
 import {
@@ -203,6 +206,19 @@ function check(name, cond, detail) {
   check('planResume 仅恢复 1 句真 AI 译文，其余 2 句留作待续翻',
     resumed.restored === 1 && resumed.pending === 2,
     `${resumed.restored}/${resumed.pending}`);
+
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const contentSrc = fs.readFileSync(path.resolve(dir, '../entrypoints/content/index.ts'), 'utf8');
+  const bridgeSrc = fs.readFileSync(path.resolve(dir, '../entrypoints/youtube-bridge.content.ts'), 'utf8');
+  const detectCallIdx = contentSrc.indexOf('detectCurrentVideoAndLoad();');
+  check('content/index.ts 中启动探测调用前已声明 lastDomCaptionText/manualResumePromptedKey/isStartingAiRequest（防 TDZ 崩溃）',
+    detectCallIdx > 0 &&
+    contentSrc.indexOf('let lastDomCaptionText') > 0 && contentSrc.indexOf('let lastDomCaptionText') < detectCallIdx &&
+    contentSrc.indexOf('let manualResumePromptedKey') > 0 && contentSrc.indexOf('let manualResumePromptedKey') < detectCallIdx &&
+    contentSrc.indexOf('let isStartingAiRequest') > 0 && contentSrc.indexOf('let isStartingAiRequest') < detectCallIdx);
+  check('youtube-bridge 确认播放器 API 就绪并按 addEventListener 引用去重、且广告期间跳过模拟点击',
+    bridgeSrc.includes('attachedPlayerHandlers.get(player) === player.addEventListener') &&
+    bridgeSrc.includes('if (isAdPlaying()) return;'));
 }
 
 console.log(`\n汇总: ${passed} 通过, ${failed} 失败`);
