@@ -8,9 +8,9 @@
 
 ---
 
-## [0.6.1] - 2026-11-20 (全面代码审计与高危缺陷修复 · 待手动测试发布)
+## [0.6.1] - 2026-11-20 (全面代码审计与高危缺陷修复)
 
-> 本版为全仓三批质量止血与安全加固版本，版本号同步点已升至 `0.6.1`（等待手动真机测试后再打正式发布 tag）。
+> 本版为全仓全面审计修复与安全加固正式发布版本；版本号同步点已升至 `0.6.1`，全量 16 个测试套件（1636 打印项）与 Edge 真机实测均已通过。
 
 ### 修复 · 存储、缓存与跨进程通信
 
@@ -29,7 +29,7 @@
 ### 修复 · 内容脚本、浮层、解析与断句
 
 - **手动续翻与逐词高亮修复**：修复 `aiResumeMode === 'manual'` 下点击「AI 深度精翻」陷入 `prompt_resume` 死循环的问题；修复浮层快捷面板改样式覆盖 `.k-char` span 不重置 `karaokeBuiltKey` 及 `updateSettings` 误拆 ASR 逐词高亮的 Bug；修正抽屉译文类名 `.item-translated` → `.item-translation` 及过滤态反复全量重建 DOM。
-- **SPA 切视频与桥接去重**：引入 `videoSessionId` 拦截过期异步字幕/缓存/DOM 回调；`youtube-bridge` 按 player 实例去重原生监听；`ControlBarButtonManager` 补全 `destroy()` 监听解绑并移除残留 `filter` 过渡；`background.ts` 改用 `URL.searchParams.delete('fmt')` 修复首参数回退 URL 破坏。
+- **SPA 切视频与桥接去重**：引入 `videoSessionId` 拦截过期异步字幕/缓存/DOM 回调，前置声明 `lastDomCaptionText` / `manualResumePromptedKey` / `isStartingAiRequest` 消除启动期 TDZ 崩溃；`youtube-bridge` 按 `addEventListener` 引用与播放器 API 就绪态去重原生监听且广告期跳过模拟点击；`ControlBarButtonManager` 补全 `destroy()` 监听解绑并移除残留 `filter` 过渡；`background.ts` 改用 `URL.searchParams.delete('fmt')` 修复首参数回退 URL 破坏。
 - **解析、断句、ASR 与歌词轨**：修复 `asr-timing` 路由 2/3 收口倒序、路由 1 假命中与长视频 O(N²)（新增 `WeakMap` 预索引与 DP 上限）；修复 `segmenter` 语种自动检测过低阈值、日语疑问排除死代码、千分位数字劈碎与去重叠负时长；修复 `caption-parser` 自闭合 `<p/>` 吞句、非首属性 `<s>` 丢偏移、`<s>` 词粘连与实体多重解码；修复 `lyric-track` 去重叠回写 `line.endMs` 与 O(L×E) 扫描。
 
 ### 修复 · Popup / Options UI 与测试脚本

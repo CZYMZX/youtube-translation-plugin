@@ -1,67 +1,67 @@
 {
   "_comment": "资料库七篇文档的基线锚点。任何一篇落后于这里的值时，`npm run doc:check` 会失败。更新资料库后同步改这里。",
-  "version": "0.6.0",
-  "tag": "v0.6.0",
-  "commit": "3d792d6",
+  "version": "0.6.1",
+  "tag": "v0.6.1",
+  "commit": "136c2d1",
   "updatedAt": "2026-11-20",
-  "printed": 1606,
-  "assertions": 1694,
+  "printed": 1636,
+  "assertions": 1724,
   "docs": [
     {
       "key": "readme",
       "id": "TyCufhJ13SR3Cug0OlmasF",
       "title": "索引 README",
       "syncedAt": "2026-11-20",
-      "syncNote": "0.6.0 基线同步：package 0.6.0、tag 范围 v0.2.3 … v0.6.0"
+      "syncNote": "0.6.1 基线同步：package 0.6.1、tag 范围 v0.2.3 … v0.6.1"
     },
     {
       "key": "task1",
       "id": "pOk3qrm3wPiktNyeZrrbNg",
       "title": "任务一 · 断句引擎",
       "syncedAt": "2026-11-20",
-      "syncNote": "0.6.0 未改断句本体；补记 v0.5.0 ASR 字符时间三级路由"
+      "syncNote": "0.6.1 修复语种自动检测双门槛、千分位数字保护、XML/VTT 解析、ASR 预索引与收口防倒序"
     },
     {
       "key": "task2",
       "id": "1ZkIMnAE0vPW7NBzkvy4At",
       "title": "任务二 · 翻译场景与提示词",
       "syncedAt": "2026-11-20",
-      "syncNote": "浮层移除场景切换入口，改为只读指示行（语言 · 场景 · 句数）"
+      "syncNote": "0.6.1 修复端点校验防跨厂牌 Key 泄漏、Gemini Header 鉴权、JSON 严格槽位对齐、Google 免费兜底缓存隔离"
     },
     {
       "key": "task3",
       "id": "fHkqs6YpEx3q0K5bgFfkZ5",
       "title": "任务三 · 术语库",
       "syncedAt": "2026-11-20",
-      "syncNote": "0.6.0 未改匹配规则、注入块与统计口径"
+      "syncNote": "0.6.1 修复词包导入防 Prompt 注入、纯 ASCII 词边界检查、保留 needsContext"
     },
     {
       "key": "task4",
       "id": "MpnoQcELE7apb0wV4RJ2VJ",
       "title": "任务四 · 界面与设置",
       "syncedAt": "2026-11-20",
-      "syncNote": "v0.6.0 字幕字体库（18 内置 + 上传 + 语言分组）、透明背景三处统一、快速面板重构、控制栏去卡片"
+      "syncNote": "0.6.1 对齐 Popup/Options 滑块与字段、强化字体上传魔数/0字节校验与落盘、修复逐词高亮与抽屉样式"
     },
     {
       "key": "task5",
       "id": "AuSu3fhoOc9J4XifcUZOAm",
       "title": "任务五 · 兼容与性能",
       "syncedAt": "2026-11-20",
-      "syncNote": "VSR 声明数仍 0/0；透明用 box-shadow/text-shadow、字体走 FontFace，均不建合成层；记录 backdrop 前缀压缩现象"
+      "syncNote": "VSR 声明数仍 0/0；打通 AI 轨跨源 IDB 代理、IPC 剥离大体积字体、修复启动期 TDZ 崩溃与切视频竞态"
     },
     {
       "key": "task6",
       "id": "nFzRljojPWSxIVObyyzrwQ",
       "title": "任务六 · 质量保障与发布",
       "syncedAt": "2026-11-20",
-      "syncNote": "口径更正：15 个测试文件 / 1606 打印项（✓ 1620）/ 12 个 tag；产物 0.6.0"
+      "syncNote": "新增 test-v061-fixes.js 30 项回归：16 个测试文件 / 1636 打印项 / tag v0.6.1；产物 0.6.1"
     },
     {
       "key": "liveTest",
       "id": "YlocANpCcu051UFossyCuM",
       "title": "直播与 ASR · 功能测试（0.5.0）",
       "syncedAt": "2026-11-20",
-      "syncNote": "基线刷新到 v0.6.0；直播 CC 增量翻译与 ASR 回退能力仍未实现"
+      "syncNote": "基线刷新到 v0.6.1；已实机验证 Vivi 直播回放 zHUn5w4qrDc（1401 tokens / 1042 句）"
     }
   ]
 }
